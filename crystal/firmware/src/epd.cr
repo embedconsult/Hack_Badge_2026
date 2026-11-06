@@ -969,7 +969,12 @@ module EPD
   # default the full planes are uploaded (66 ms) and only DRFW is windowed;
   # the waveform time still shrinks with the DRFW rows.
   WIN_FULL_UPLOAD = true
-  WIN_MODE = 3 # default window mode (rows only, see refresh_window2)
+  # Default window mode (see refresh_window2): 4 = full upload, DUW full,
+  # DRFW full width x the box rows. Measured (window test v5): the panel then
+  # scans from row 0 to the box's last row (~1.72 ms per row and pull), and
+  # it is the only mode that drew correctly on both COGs. Modes 0/1/3 write
+  # through a DUW window, which lands at the wrong x / on the wrong COG.
+  WIN_MODE = 4
   # Right COG's DRFW x counted from the other end (test hypothesis, v4).
   @@mirror_right = false
 

@@ -479,6 +479,12 @@ SPEED_TEST  = false # boot-time 1-pull vs 3-pull fast refresh comparison
 GAME_PULLS  = 1    # waveform pulls per fast refresh in the game modes
 CLEAN_EVERY = 30   # game frames between clean (shaking, 3-pull) refreshes
 GAME_LUT    = EPD::LUT_NOSHAKE_BW
+# LUT for windowed / live frames (Sketch ink, game frames and their cleans).
+# HALF60 inks white -> solid black in one pull and leaves red alone (tables
+# 2/3 ground), but erases black -> white weakly (ghosted text after a 3-pull
+# white base, window test v5). If dead Life cells / the snake's tail stay
+# grey, try EPD::LUT_NOSHAKE_BW here.
+WIN_LUT     = EPD::LUT_HALF60
 LUT_TIMING  = false # boot: time one pull of each fast LUT kind, show results on the panel
 LUT_PROBE   = false # boot-time experiment: which (red, bw) pairs select which table
 
@@ -793,10 +799,10 @@ def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : 
   else
     EPD.raw = true
     if Menu.want_clean?
-      sketch_clean(EPD::LUT_NOSHAKE_KEEPRED) # same kind as live ink: no COG restart
+      sketch_clean(WIN_LUT) # same kind as live ink (red tables ground): no COG restart
     else
       EPD.fast_pulls = 1
-      EPD.refresh(true, EPD::LUT_NOSHAKE_KEEPRED)
+      EPD.refresh(true, WIN_LUT)
     end
     EPD.raw = false
   end
@@ -1036,8 +1042,8 @@ def colour_refresh : Bool
   ok
 end
 
-SK_WINDOWED   = false # Sketch ink updates refresh only the changed box (DUW+DRFW)
-GAME_WINDOWED = false # same for Life / Snake frames
+SK_WINDOWED   = true # Sketch ink: refresh only the changed rows (EPD::WIN_MODE)
+GAME_WINDOWED = true # same for Life / Snake frames
 
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
@@ -1188,10 +1194,10 @@ def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Ni
   Shared.led_mode = LED_CYAN
   if Menu.want_clean?
     EPD.raw = true
-    sketch_clean(GAME_LUT) # same kind as live ink: no COG restart
+    sketch_clean(WIN_LUT) # same kind as live ink: no COG restart
     EPD.raw = false
   else
-    fast_bw(1, GAME_LUT)
+    fast_bw(1, WIN_LUT)
   end
 end
 
@@ -1373,7 +1379,7 @@ fun crystal_app_main : Void
           b = SkState.box
           t = millis
           Shared.led_mode = LED_CYAN
-          kind = SkState.colour? ? EPD::LUT_NOSHAKE_KEEPRED : GAME_LUT
+          kind = WIN_LUT # HALF60 keeps red too
           EPD.fast_pulls = 1
           if SK_WINDOWED
             EPD.refresh_window(b[2], b[3], b[0], b[1], kind)
@@ -1406,7 +1412,7 @@ fun crystal_app_main : Void
           draw_mode_label(Menu.mode, lw, EPD.upload_ms, EPD.panel_ms, last_total)
           EPD.fast_pulls = 3 # same LUT kind as normal frames (no COG restart), more pulls
           EPD.raw = true
-          EPD.refresh(true, GAME_LUT)
+          EPD.refresh(true, WIN_LUT)
           EPD.raw = false
           SkState.mark_shown
         else
@@ -1417,10 +1423,10 @@ fun crystal_app_main : Void
             EPD.fast_pulls = GAME_PULLS
             if GAME_WINDOWED
               # One box per COG half keeps each window small.
-              EPD.refresh_window2(b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], GAME_LUT)
+              EPD.refresh_window2(b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], WIN_LUT)
             else
               EPD.raw = true
-              EPD.refresh(true, GAME_LUT)
+              EPD.refresh(true, WIN_LUT)
               EPD.raw = false
             end
             log2("game: changed rows / panel ms", b[1] &- b[0] &+ 1, EPD.panel_ms)
