@@ -51,7 +51,13 @@ while true; do
     tail -2 "$REQ/result"
     sleep 2
   fi
-  # Restart the bridge if it died or the badge re-enumerated.
+  # Restart the bridge if it died, or if it lost the USB port when the badge
+  # reset and re-enumerated (the server keeps a dead handle and logs
+  # "Device not configured" on every connection instead of exiting).
+  if [ -n "$server_pid" ] && grep -q "Device not configured" "$REQ/server.log" 2>/dev/null; then
+    echo "badge port went away; restarting bridge"
+    stop_server
+  fi
   if [ -z "$server_pid" ] || ! kill -0 "$server_pid" 2>/dev/null; then
     server_pid=""
     sleep 1
