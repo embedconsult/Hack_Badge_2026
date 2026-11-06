@@ -105,3 +105,22 @@ Notes:
 - Task stacks must be 8 KB (main and knob task): at 4 KB / 3.5 KB adding the RMT calls overflowed
   silently and took down the USB-Serial/JTAG console and esptool's auto-reset.
 - Opening the console through the RFC2217 bridge resets the chip.
+
+## Panel speed (driver B), measured 2026-11-06 (branch panel-speed, DIAG A runs, DIAG B shows last run)
+Busy ms per pull:
+- BASE LUT: 672 rows 1159, 336 rows 579, 80 rows 141, 8 rows 54 (DUW+DRFW window). For 80+ rows that is about 1.72 ms per refreshed gate row.
+- 80-row window: N4 254, N10 467, N20 842, HALF60 184, FULL60 193.
+  - N series = 0x44 ink / 0xAA paper, 4 groups of (N,1,1)x1 in EVERY table, the rest 1/1/1.
+  - Each +1 of N costs +36.7 ms (8 frames, so about 4.6 ms per frame at 80 rows).
+- Full-screen 60-unit table (F60): 1159. With 0x03 00 11 / 0x03 00 12 after strobe 1: 1160 / 1160, so no frame-rate effect.
+- A 0 repeat or 0 ph2 count in a group hangs BUSY for over 180 s. Never use zero counts.
+Why one pull looked fixed at ~1.1 s: a group lasts only as long as its shortest table, VCOM included (driver reference p.23 erratum 4).
+- The epd97 driver-B table has VCOM (and the finished tables) at 1/1/1 x1 in every group, so all 10 groups run at the minimum length.
+- That is why the 0xB0 table edits never changed the time.
+- It is also why BASE is weak: each "45/1 x3" drive group really delivers about one VDH frame per half.
+Fast ink:
+- HALF60 = 0x44 ink / 0xAA paper in all 10 groups, 1/1/1 x1 in every table: `EPD.custom(0x44, 0xAA, 0, 9, 1, 1, 1, 1)` + `LUT_CUSTOM`.
+- It costs the same as one BASE pull and turns white solid black in ONE pull (BASE: grey after 1 pull, needs 3).
+- FULL60 (0x55, no ground rests) also turns black, but in one run it came out red-brown (red pigment dragged up). Prefer the chopped 0x44.
+- Black-to-white erase with HALF60 was not measured.
+- Right-COG windows (x >= 480) did not land in these tests: band blocks were cut at x = 480 and the right-column text never appeared. Fix the window mapping before relying on narrow windows.

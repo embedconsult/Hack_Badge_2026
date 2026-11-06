@@ -394,7 +394,7 @@ CLEAN_EVERY = 30   # game frames between clean (shaking, 3-pull) refreshes
 GAME_LUT    = EPD::LUT_NOSHAKE_BW
 LUT_TIMING  = false # boot: time one pull of each fast LUT kind, show results on the panel
 LUT_PROBE   = false # boot-time experiment: which (red, bw) pairs select which table
-PANEL_SPEED = true  # boot: run panel_speed (DIAG A runs it too)
+PANEL_SPEED = false # boot: run panel_speed (DIAG A runs it, DIAG B shows the last run)
 
 # Bring-up test for the knob WS2812s: left red, right blue for 10 s, then
 # off, with blocking transmits and a log line around every call. On success
