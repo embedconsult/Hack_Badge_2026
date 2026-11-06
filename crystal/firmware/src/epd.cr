@@ -977,7 +977,7 @@ module EPD
   # Mode 4 showed a copy of the top rows inside the refreshed band (label
   # duplicated next to the snake, v6). Mode 5 is the candidate fix; DIAG B
   # (window test v6) compares the two. Set back to 4 if 5 misbehaves.
-  WIN_MODE = 4
+  WIN_MODE = 5
   # Right COG's DRFW x counted from the other end (test hypothesis, v4).
   @@mirror_right = false
 

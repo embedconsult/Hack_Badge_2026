@@ -917,31 +917,30 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration v5 (DIAG, User B). HALF60 LUT, 1 pull. From a white
-# screen, each step adds a marker and refreshes only through a window:
-#   V1 left    x200 y200  mode 3: rows only (DUW+DRFW full width, box rows,
-#                         rows uploaded) - both COGs refresh those rows
-#   V2 right   x650 y400  mode 3
-#   V3 across  x420 y300  mode 3
-#   V4 right   x700 y120  mode 4: full upload, DUW full, DRFW full width x
-#                         box rows (does the scan then start at row 0?)
-#   V5 left    x200 y480  mode 3, 3 pulls (drive comparison)
-# Holds 12 s (photo), then the reference with each step's panel ms.
-# Expected times at ~1.72 ms per scanned row: mode 3 ~ (rows) x 1.72,
-# mode 4 ~ (last row + 1) x 1.72 if the scan starts at row 0.
+# Window calibration v6 (DIAG, User B): does a window refresh show a copy
+# of the top rows (v6 game label duplicate)? HALF60, 1 pull. From a white
+# screen with a "TOP ROWS" label at rows 8..43 (refreshed normally), each
+# step adds a marker and refreshes only its rows:
+#   W1 right x650 y400  mode 4 (DUW full, DRFW rows)
+#   W2 left  x200 y300  mode 5 (upload, then DUW + DRFW rows)
+#   W3 right x650 y520  mode 5
+#   W4 left  x200 y160  mode 4
+# Holds 12 s (photo: any extra "TOP ROWS" copies, and which markers drew),
+# then the reference with each step's panel ms.
 def wt_pos(i : Int32, x : Bool) : Int32
   if x
-    i == 0 ? 200 : (i == 1 ? 650 : (i == 2 ? 420 : (i == 3 ? 700 : 200)))
+    (i & 1) == 0 ? 650 : 200
   else
-    i == 0 ? 200 : (i == 1 ? 400 : (i == 2 ? 300 : (i == 3 ? 120 : 480)))
+    i == 0 ? 400 : (i == 1 ? 300 : (i == 2 ? 520 : 160))
   end
 end
 
-WT_STEPS = 5
+WT_STEPS = 4
 
 def window_test : Nil
-  log("wtest v5: white base", 0)
+  log("wtest v6: white base + top label", 0)
   EPD.fill(EPD::WHITE)
+  draw_text(8, 8, "TOP ROWS 0-43", EPD::BLACK, 4)
   fast_bw(3, EPD::LUT_HALF60)
   times = Shared.times_buf
   i = 0
@@ -951,8 +950,8 @@ def window_test : Nil
     window_marker(x, y)
     c0 = x.unsafe_shr(3)
     c1 = (x &+ 119).unsafe_shr(3)
-    EPD.fast_pulls = i == 4 ? 3 : 1
-    mode = i == 3 ? 4 : 3
+    EPD.fast_pulls = 1
+    mode = (i == 1 || i == 2) ? 5 : 4
     log2("wtest: step / mode", i &+ 1, mode)
     EPD.refresh_window2(y, y &+ 79, c0, c1, y, y &+ 79, c0, c1, EPD::LUT_HALF60, mode)
     times[i] = EPD.panel_ms
@@ -964,7 +963,7 @@ def window_test : Nil
   buf = Shared.label_buf
   i = 0
   while i < WT_STEPS
-    buf[0] = 0x56_u8 # V
+    buf[0] = 0x57_u8 # W
     buf[1] = (0x31 &+ i).to_u8!
     buf[2] = 0x20_u8
     n = 3 &+ put_decimal(buf + 3_i64, times[i])
@@ -973,7 +972,7 @@ def window_test : Nil
     draw_bytes(wt_pos(i, true), wt_pos(i, false) &+ 84, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 620, "REF v5: HALF60. ROWS-ONLY WINDOWS. V4 DUW FULL. V5 3 PULLS", EPD::BLACK, 2)
+  draw_text(40, 620, "REF v6: W1,W4 MODE 4   W2,W3 MODE 5", EPD::BLACK, 2)
   fast_bw(3, EPD::LUT_HALF60)
 end
 
@@ -1490,7 +1489,9 @@ fun crystal_app_main : Void
     elsif Menu.tick(now, inp)
       t = millis
       lw = last_wait
-      last_wait = millis &- last_input
+      # Sketch frames follow input; Life/Snake frames follow their own timer,
+      # so for them "wait" is tick -> refresh start, not time since input.
+      last_wait = scr == SCR_SKETCH ? millis &- last_input : millis &- now
       if scr == SCR_SKETCH
         if SkState.colour?
           sketch_frame(false, lw, EPD.upload_ms, EPD.panel_ms, last_total)
