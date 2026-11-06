@@ -173,6 +173,24 @@ module Shared
   # Right-knob LED: 0 = live hue from the knob, else a fixed status colour
   # (LED_YELLOW / LED_GREEN / LED_CYAN), as upstream Sketch does.
   @@led_mode = 0
+  @@target = 0         # screen the user has asked for (knob task, on Menu edges)
+  @@rendering = false  # main task is drawing a screen (LED indicator pulses)
+
+  def self.target : Int32
+    @@target
+  end
+
+  def self.target=(v : Int32) : Nil
+    @@target = v
+  end
+
+  def self.rendering? : Bool
+    @@rendering
+  end
+
+  def self.rendering=(v : Bool) : Nil
+    @@rendering = v
+  end
   @@label_bytes = 0
 
   def self.label_bytes : Int32
@@ -244,6 +262,29 @@ def read_buttons : UInt32
   b
 end
 
+# Per-screen indicator colour (full scale; shown at 1/8 on the LEDs):
+# NAMETAG red, PORTRAIT magenta, SKETCH yellow, LIFE green, SNAKE cyan,
+# DIAG white.
+def mode_rgb(m : Int32, rgb : UInt8*) : Nil
+  r = 255; g = 0; b = 0
+  if m == 1
+    r = 255; g = 0; b = 160
+  elsif m == 2
+    r = 255; g = 170; b = 0
+  elsif m == 3
+    r = 0; g = 255; b = 0
+  elsif m == 4
+    r = 0; g = 190; b = 255
+  elsif m == 5
+    r = 200; g = 200; b = 200
+  end
+  rgb[0] = r.to_u8!
+  rgb[1] = g.to_u8!
+  rgb[2] = b.to_u8!
+end
+
+MENU_DEBOUNCE_MS = 150
+
 # mV in [lo, hi] -> hue 0..1535
 def mv_to_hue(mv : Int32, lo : Int32, hi : Int32) : Int32
   mv = lo if mv < lo
@@ -281,8 +322,10 @@ fun crystal_knob_task(arg : Void*) : Void
   bar_ok = Pixel.open(BAR_GPIO, pointerof(bar_ch), pointerof(bar_enc))
   bar_buf = EPD.dma_alloc(24)
   bar_cols = EPD.dma_alloc(32).as(UInt32*)
-  bar_lit = true # unknown state at boot: blank it once
   bar_scr = -1
+  bar_key = -1   # last indicator frame sent (target * 2 + pulse phase)
+  prev_btns = 0_u32
+  last_menu = 0
   log("knob: loop starting", 0)
   on = false
   raw_l = 0
@@ -313,12 +356,37 @@ fun crystal_knob_task(arg : Void*) : Void
     mv_r = knob_mv(cal_r, raw_r)
     hue_l = mv_to_hue(mv_l, LEFT_MV_LO, LEFT_MV_HI)
     hue_r = mv_to_hue(mv_r, RIGHT_MV_LO, RIGHT_MV_HI)
-    # LED bar: Sketch's animation (upstream led_frame) in Sketch, else off.
+    btns = read_buttons
+    now_ms = millis
+    # Menu edges move the target screen right away (the main task may be
+    # busy rendering); it renders Shared.target when it gets to it.
+    if now_ms &- last_menu >= MENU_DEBOUNCE_MS
+      plus_edge = (btns & Games::BTN_PLUS) != 0_u32 && (prev_btns & Games::BTN_PLUS) == 0_u32
+      minus_edge = (btns & Games::BTN_MINUS) != 0_u32 && (prev_btns & Games::BTN_MINUS) == 0_u32
+      if plus_edge || minus_edge
+        tg = Shared.target
+        tg = plus_edge ? (tg &+ 1 == SCR_COUNT ? 0 : tg &+ 1) : (tg == 0 ? SCR_COUNT &- 1 : tg &- 1)
+        Shared.target = tg
+        last_menu = now_ms
+      end
+    end
+    prev_btns = btns
+
+    # Indicator: pulses while the panel works on the target screen; steady
+    # once done. In Sketch, once its frame is up, Sketch.led_frame takes over.
+    tgt = Shared.target
+    working = Shared.rendering? || Shared.screen != tgt || EPD.busy?
+    pulse_dim = working && (now_ms.unsafe_div(250) & 1) == 1
+    sketch_anim = Shared.screen == SCR_SKETCH && tgt == SCR_SKETCH && !Shared.rendering?
+    mode_rgb(tgt, rgb)
+    shift = pulse_dim ? BAR_SHIFT &+ 2 : BAR_SHIFT
+    ind_r = rgb[0].unsafe_shr(shift)
+    ind_g = rgb[1].unsafe_shr(shift)
+    ind_b = rgb[2].unsafe_shr(shift)
     if bar_ok
-      scr_now = Shared.screen
-      if scr_now == SCR_SKETCH
-        Sketch.led_invalidate if bar_scr != SCR_SKETCH
-        if Sketch.led_frame(millis, EPD.busy?, bar_cols)
+      if sketch_anim
+        Sketch.led_invalidate unless bar_scr == SCR_SKETCH
+        if Sketch.led_frame(now_ms, EPD.busy?, bar_cols)
           Pixel.wait(bar_ch)
           i = 0
           while i < 8
@@ -332,21 +400,35 @@ fun crystal_knob_task(arg : Void*) : Void
             log("led: bar rmt_transmit failed, bar disabled", 0)
             bar_ok = false
           end
-          bar_lit = true
         end
-      elsif bar_lit
-        Pixel.wait(bar_ch)
-        i = 0
-        while i < 24
-          bar_buf[i] = 0_u8
-          i = i &+ 1
+        bar_scr = SCR_SKETCH
+        bar_key = -1
+      else
+        key = tgt &* 2 &+ (pulse_dim ? 1 : 0)
+        if key != bar_key
+          Pixel.wait(bar_ch)
+          i = 0
+          while i < 8
+            if i == tgt
+              bar_buf[i &* 3] = ind_g
+              bar_buf[i &* 3 &+ 1] = ind_r
+              bar_buf[i &* 3 &+ 2] = ind_b
+            else
+              bar_buf[i &* 3] = 1_u8 # other LEDs dim
+              bar_buf[i &* 3 &+ 1] = 1_u8
+              bar_buf[i &* 3 &+ 2] = 1_u8
+            end
+            i = i &+ 1
+          end
+          if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
+            log("led: bar rmt_transmit failed, bar disabled", 0)
+            bar_ok = false
+          end
+          bar_key = key
         end
-        bar_ok = false if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
-        bar_lit = false
+        bar_scr = -1
       end
-      bar_scr = scr_now
     end
-    btns = read_buttons
     Shared.set_knobs(mv_l, mv_r, btns)
     # Wake the main loop on a button change or knob motion past the deadband.
     dl = mv_l &- woke_l
@@ -367,7 +449,8 @@ fun crystal_knob_task(arg : Void*) : Void
         Pixel.hue(hue_l, LED_LEVEL, rgb)
         err = Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
       end
-      lm = Shared.led_mode
+      # Sketch's status colours only once its frame is up; else the mode colour.
+      lm = sketch_anim ? Shared.led_mode : 0
       if lm == LED_YELLOW
         rgb[0] = 48_u8; rgb[1] = 40_u8; rgb[2] = 0_u8
       elsif lm == LED_GREEN
@@ -375,7 +458,9 @@ fun crystal_knob_task(arg : Void*) : Void
       elsif lm == LED_CYAN
         rgb[0] = 0_u8; rgb[1] = 40_u8; rgb[2] = 48_u8
       else
-        Pixel.hue(hue_r, LED_LEVEL, rgb)
+        rgb[0] = ind_r # same colour (and pulse) as the bar's mode indicator
+        rgb[1] = ind_g
+        rgb[2] = ind_b
       end
       e2 = Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
       err = e2 if err == 0
@@ -897,7 +982,7 @@ def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: WINDOW TEST v5 (~30 S)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 420, "WINDOW TEST: PHOTO AT THE 12 S HOLD,", EPD::BLACK, 3)
   draw_text(40, 460, "THEN THE REFERENCE WITH TIMES", EPD::BLACK, 3)
@@ -1034,10 +1119,12 @@ end
 
 # Slow full-colour refresh that a Menu press can abort.
 def colour_refresh : Bool
+  Shared.rendering = true
   EPD.abortable = true
   ok = EPD.refresh(false)
   aborted = EPD.aborted?
   EPD.abortable = false
+  Shared.rendering = false
   log2("main: colour refresh ok / aborted", ok ? 1 : 0, aborted ? 1 : 0)
   ok
 end
@@ -1262,7 +1349,10 @@ fun crystal_app_main : Void
   EPD.keep_awake = true
   Menu.init(Menu::NAMETAG)
   scr = Store.screen
+  Shared.target = scr
+  Shared.rendering = true
   enter_screen(scr, true)
+  Shared.rendering = false
 
   prev = 0_u32
   frames = 0
@@ -1295,6 +1385,7 @@ fun crystal_app_main : Void
       held = held & (Games::BTN_B ^ 0xFFFFFFFF_u32)
       held = held | Games::BTN_B if inject
     end
+    held = held & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) # Menu: knob task
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
     prev = held
     dl = Shared.mv_l &- pl
@@ -1305,14 +1396,17 @@ fun crystal_app_main : Void
       pr = Shared.mv_r
     end
 
-    plus = Games.pressed?(inp, Games::BTN_PLUS)
-    minus = Games.pressed?(inp, Games::BTN_MINUS)
-    if plus || minus
-      scr = plus ? (scr &+ 1 == SCR_COUNT ? 0 : scr &+ 1) : (scr == 0 ? SCR_COUNT &- 1 : scr &- 1)
+    # The knob task turns Menu presses into Shared.target at once (and the
+    # LEDs show it); render whatever the target is now, so several presses
+    # during one render only draw the last screen.
+    if Shared.target != scr
+      scr = Shared.target
       Store.screen = scr
       frames = 0
       t = millis
+      Shared.rendering = true
       enter_screen(scr, false)
+      Shared.rendering = false
       last_total = millis &- t
       log2("main: screen / entry ms", scr, last_total)
     elsif scr == SCR_NAMETAG || scr == SCR_PORTRAIT
