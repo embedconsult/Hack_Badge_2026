@@ -1121,7 +1121,7 @@ def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_version(EPD::WIDTH &- 12, 12)
-  draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
+  draw_text(40, 200, "A: LUT TIMING  HOLD A: CLEAN (SLOW)", EPD::BLACK, 4)
   draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 370, "LED: STEADY = READY, PULSING = BUSY", EPD::BLACK, 3)
@@ -1747,7 +1747,15 @@ fun crystal_app_main : Void
         colour_due = millis &+ AUTO_COLOUR_MS
       end
     elsif scr == SCR_DIAG
-      if Games.pressed?(inp, Games::BTN_A)
+      if a_hold
+        # Clean the panel: a full OTP (slow) refresh of a white screen with
+        # an all-zero red plane, which also removes stray red pigment that
+        # the fast tables cannot.
+        log("diag: hold A, slow white clean", 0)
+        EPD.fill(EPD::WHITE)
+        colour_refresh
+        show_diag
+      elsif Games.pressed?(inp, Games::BTN_A)
         lut_timing
       elsif Games.pressed?(inp, Games::BTN_B)
         window_test

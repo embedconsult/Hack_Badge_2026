@@ -179,6 +179,10 @@ module EPD
   # keeps its RAM between refreshes: NEEDS A HARDWARE CHECK; set false if
   # red ghosts appear after fast frames.
   SKIP_ZERO_RED = false
+  # Experiment (red-copy corruption): PDi's RAM_RW 3B 00 14 with bit-reversed
+  # bytes, as PDi's GU_large / Wide_Large drivers and supercon26-badge-os use
+  # for this CoG, instead of the OTP's 00 00 10 with MSB-first bytes.
+  PDI_RAM_ORDER = false
 
   # Change the fast LUT kind by rewriting 0xB0 inside an open session instead
   # of a ~5 s COG restart. epd97.cpp notes that a rewrite inside a session
@@ -192,6 +196,7 @@ module EPD
   @@dma0 = uninitialized UInt8*
   @@dma1 = uninitialized UInt8*
   @@small = uninitialized UInt8*
+  @@rev = Pointer(UInt8).null # bit-reversal table (PDI_RAM_ORDER)
   @@otp = uninitialized UInt8*
   @@lut = uninitialized UInt8*
   @@t0 = uninitialized LibIDF::SpiTransaction
@@ -565,7 +570,14 @@ module EPD
     r = 0
     while r < n
       c = 0
-      if o.null?
+      if o.null? && PDI_RAM_ORDER
+        rv = rev_table
+        while c < HALF_BYTES
+          dst[k] = rv[src[c].to_i32!]
+          k = k &+ 1
+          c = c &+ 1
+        end
+      elsif o.null?
         while c < HALF_BYTES
           dst[k] = src[c]
           k = k &+ 1
@@ -573,7 +585,8 @@ module EPD
         end
       else
         while c < HALF_BYTES
-          dst[k] = src[c] | o[c]
+          v = src[c] | o[c]
+          dst[k] = PDI_RAM_ORDER ? rev_table[v.to_i32!] : v
           k = k &+ 1
           c = c &+ 1
         end
@@ -581,6 +594,32 @@ module EPD
       end
       src = src + ROW_BYTES.to_i64!
       r = r &+ 1
+    end
+  end
+
+  def self.rev_table : UInt8*
+    if @@rev.null?
+      t = dma_alloc(256)
+      b = 0
+      while b < 256
+        v = b.to_u8!
+        v = (v & 0xF0_u8).unsafe_shr(4) | (v & 0x0F_u8).unsafe_shl(4)
+        v = (v & 0xCC_u8).unsafe_shr(2) | (v & 0x33_u8).unsafe_shl(2)
+        v = (v & 0xAA_u8).unsafe_shr(1) | (v & 0x55_u8).unsafe_shl(1)
+        t[b] = v
+        b = b &+ 1
+      end
+      @@rev = t
+    end
+    @@rev
+  end
+
+  # RAM_RW before a full-plane upload.
+  def self.ram_rw_full(t : Int32) : Nil
+    if PDI_RAM_ORDER
+      cmd(t, 0x12_u8, 3, 0x3B_u8, 0x00_u8, 0x14_u8)
+    else
+      send_otp_to(t, 0x12_u8, 0x13, 3)
     end
   end
 
@@ -1256,9 +1295,9 @@ module EPD
       end
       cmd(t, 0x91_u8, 1, 0x12_u8) if @@send91
       if wmode == 2 || wmode == 4 || wmode == 5
-        send_otp_to(t, 0x12_u8, 0x13, 3)
+        ram_rw_full(t)
         send_plane(t, 0x10_u8, @@black, Pointer(UInt8).null)
-        send_otp_to(t, 0x12_u8, 0x13, 3)
+        ram_rw_full(t)
         send_plane(t, 0x11_u8, @@red, Pointer(UInt8).null)
         @@red_zero = false
         if wmode == 5
@@ -1338,10 +1377,10 @@ module EPD
     send_otp_to(RIGHT, 0x90_u8, 0x0C, 4)
     t = LEFT
     while t <= RIGHT
-      send_otp_to(t, 0x12_u8, 0x13, 3) # RAM_RW
+      ram_rw_full(t) # RAM_RW
       send_plane(t, 0x10_u8, @@black, fast_ink_red ? @@red : Pointer(UInt8).null)
       unless SKIP_ZERO_RED && !draw_red && @@red_zero
-        send_otp_to(t, 0x12_u8, 0x13, 3)
+        ram_rw_full(t)
         send_plane(t, 0x11_u8, draw_red ? @@red : Pointer(UInt8).null, Pointer(UInt8).null)
       end
       t = t &+ 1
