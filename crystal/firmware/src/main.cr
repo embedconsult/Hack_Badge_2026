@@ -1016,8 +1016,8 @@ end
 
 # "A: COLOR" hint, bottom-left of the B/W previews (x2 on a white box).
 def draw_colour_hint : Nil
-  EPD.fill_rect(4, EPD::HEIGHT &- 26, 8 &* 12 &+ 8, 7 &* 2 &+ 8, EPD::WHITE)
-  draw_text(8, EPD::HEIGHT &- 22, "A: COLOR", EPD::BLACK, 2)
+  EPD.fill_rect(4, EPD::HEIGHT &- 26, 20 &* 12 &+ 8, 7 &* 2 &+ 8, EPD::WHITE)
+  draw_text(8, EPD::HEIGHT &- 22, "A: COLOR (AUTO 30 S)", EPD::BLACK, 2)
 end
 
 # DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
@@ -1084,6 +1084,7 @@ SCR_SNAKE    = 4
 SCR_DIAG     = 5
 SCR_COUNT    = 6
 HOLD_MS      = 1000 # Sketch: hold User B this long for the colour refresh
+AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT: colour refresh after this long idle
 
 module Store
   @@ok = false
@@ -1473,6 +1474,8 @@ fun crystal_app_main : Void
   last_input = millis
   pl = Shared.mv_l
   pr = Shared.mv_r
+  colour_shown = false # NAMETAG/PORTRAIT: its colour image is on the panel
+  colour_due = millis &+ AUTO_COLOUR_MS
   b_down = 0      # Sketch: when User B went down (0 = up)
   b_fired = false # Sketch: the hold already triggered the colour refresh
   while true
@@ -1519,16 +1522,25 @@ fun crystal_app_main : Void
       Shared.rendering = true
       enter_screen(scr, false)
       Shared.rendering = false
+      colour_shown = false # any other screen's refresh replaced the colour image
+      colour_due = millis &+ AUTO_COLOUR_MS
       last_total = millis &- t
       log2("main: screen / entry ms", scr, last_total)
     elsif scr == SCR_NAMETAG || scr == SCR_PORTRAIT
-      if Games.pressed?(inp, Games::BTN_A)
+      # Colour on User A, or automatically after AUTO_COLOUR_MS without a
+      # button press (any press restarts the wait). Not again while this
+      # screen's colour image is still on the panel.
+      colour_due = now &+ AUTO_COLOUR_MS if raw_held != 0_u32
+      auto = !colour_shown && now &- colour_due >= 0
+      if Games.pressed?(inp, Games::BTN_A) || auto
+        log("main: colour refresh (1 = auto)", auto ? 1 : 0)
         if scr == SCR_NAMETAG
           draw_nametag_planes
         else
           draw_portrait_planes
         end
-        colour_refresh
+        colour_shown = colour_refresh
+        colour_due = millis &+ AUTO_COLOUR_MS
       end
     elsif scr == SCR_DIAG
       if Games.pressed?(inp, Games::BTN_A)
