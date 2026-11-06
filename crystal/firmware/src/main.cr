@@ -50,6 +50,10 @@ lib LibIDF
   fun cr_hello_png : UInt8*
   fun cr_hello_png_size : Int32
   fun cr_font5x7 : UInt8*
+  fun cr_atomic_or(p : UInt32*, v : UInt32) : UInt32
+  fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
+  fun cr_notify_main : Void
+  fun cr_wait_notify(ms : UInt32) : UInt32
   fun cr_portrait_png : UInt8*
   fun cr_portrait_png_size : Int32
   fun cr_sketch_png : UInt8*
@@ -108,7 +112,8 @@ RIGHT_MV_HI = 2703
 LED_LEFT    =   42 # SAO1 GPIO2: WS2812 on the left knob
 LED_RIGHT   =    6 # SAO2 GPIO2: WS2812 on the right knob
 LED_LEVEL   =   64 # brightness, 0..255
-LOOP_MS     =   50 # 20 Hz
+LOOP_MS     =   15 # knob/button sampling period
+KNOB_WAKE_MV =  15 # knob change that wakes the main task
 LED_YELLOW  =    1
 LED_GREEN   =    2
 LED_CYAN    =    3
@@ -139,17 +144,26 @@ module Shared
     @@mv_l = l
     @@mv_r = r
     @@held = held
-    @@latched = @@latched | held
+    LibIDF.cr_atomic_or(pointerof(@@latched), held)
   end
 
-  # Buttons held now or at any poll since the last call.
+  # Buttons held now or at any poll since the last call (atomic swap, so a
+  # press latched by the knob task between read and clear is not lost).
   def self.take_buttons : UInt32
-    b = @@latched | @@held
-    @@latched = 0_u32
-    b
+    LibIDF.cr_atomic_xchg(pointerof(@@latched), 0_u32) | @@held
+  end
+
+  def self.disable_leds : Nil
+    @@leds_ready = false
   end
 
   @@label = Pointer(UInt8).null
+  @@times = Pointer(Int32).null
+
+  def self.times_buf : Int32*
+    @@times = EPD.dma_alloc(32).as(Int32*) if @@times.null?
+    @@times
+  end
 
   def self.label_buf : UInt8*
     @@label = EPD.dma_alloc(32) if @@label.null?
@@ -247,10 +261,12 @@ fun crystal_knob_task(arg : Void*) : Void
 
   unit_cfg = LibIDF::AdcOneshotUnitInitCfg.new
   unit_cfg.unit_id = ADC_UNIT_1
-  adc = uninitialized Void*
-  LibIDF.adc_oneshot_new_unit(pointerof(unit_cfg), pointerof(adc))
-  cal_l = knob_channel(adc, KNOB_LEFT_CH)
-  cal_r = knob_channel(adc, KNOB_RIGHT_CH)
+  adc = Pointer(Void).null
+  adc_err = LibIDF.adc_oneshot_new_unit(pointerof(unit_cfg), pointerof(adc))
+  adc_ok = adc_err == 0
+  log("knob: adc_oneshot_new_unit err (knobs read 0 if nonzero)", adc_err) unless adc_ok
+  cal_l = adc_ok ? knob_channel(adc, KNOB_LEFT_CH) : Pointer(Void).null
+  cal_r = adc_ok ? knob_channel(adc, KNOB_RIGHT_CH) : Pointer(Void).null
 
   EPD.in_pin(BTN_A_GPIO)
   EPD.in_pin(BTN_B_GPIO)
@@ -271,6 +287,9 @@ fun crystal_knob_task(arg : Void*) : Void
   on = false
   raw_l = 0
   raw_r = 0
+  woke_l = 0     # knob mV at the last wake-up of the main task
+  woke_r = 0
+  woke_btns = 0_u32
   now = millis
   last_log = now
   last_blink = now
@@ -279,7 +298,7 @@ fun crystal_knob_task(arg : Void*) : Void
     sum_l = 0
     sum_r = 0
     k = 0
-    while k < Sketch::ADC_SAMPLES
+    while adc_ok && k < Sketch::ADC_SAMPLES
       LibIDF.adc_oneshot_read(adc, KNOB_LEFT_CH, pointerof(raw_l))
       LibIDF.adc_oneshot_read(adc, KNOB_RIGHT_CH, pointerof(raw_r))
       sum_l = sum_l &+ raw_l
@@ -309,7 +328,10 @@ fun crystal_knob_task(arg : Void*) : Void
             bar_buf[i &* 3 &+ 2] = (c & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8!                # B
             i = i &+ 1
           end
-          Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24)
+          if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
+            log("led: bar rmt_transmit failed, bar disabled", 0)
+            bar_ok = false
+          end
           bar_lit = true
         end
       elsif bar_lit
@@ -319,32 +341,47 @@ fun crystal_knob_task(arg : Void*) : Void
           bar_buf[i] = 0_u8
           i = i &+ 1
         end
-        Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24)
+        bar_ok = false if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
         bar_lit = false
       end
       bar_scr = scr_now
     end
     btns = read_buttons
     Shared.set_knobs(mv_l, mv_r, btns)
+    # Wake the main loop on a button change or knob motion past the deadband.
+    dl = mv_l &- woke_l
+    dr = mv_r &- woke_r
+    if btns != woke_btns || dl > KNOB_WAKE_MV || dl < 0 &- KNOB_WAKE_MV || dr > KNOB_WAKE_MV || dr < 0 &- KNOB_WAKE_MV
+      woke_l = mv_l
+      woke_r = mv_r
+      woke_btns = btns
+      LibIDF.cr_notify_main
+    end
     # A Menu press aborts a slow (colour) refresh in progress.
     if (btns & (Games::BTN_PLUS | Games::BTN_MINUS)) != 0_u32 && EPD.abortable?
       EPD.request_abort
     end
     if Shared.leds_ready?
+      err = 0
       unless Shared.ch_l.null?
         Pixel.hue(hue_l, LED_LEVEL, rgb)
-        Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
+        err = Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
       end
       lm = Shared.led_mode
       if lm == LED_YELLOW
-        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, 48_u8, 40_u8, 0_u8)
+        rgb[0] = 48_u8; rgb[1] = 40_u8; rgb[2] = 0_u8
       elsif lm == LED_GREEN
-        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, 0_u8, 48_u8, 0_u8)
+        rgb[0] = 0_u8; rgb[1] = 48_u8; rgb[2] = 0_u8
       elsif lm == LED_CYAN
-        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, 0_u8, 40_u8, 48_u8)
+        rgb[0] = 0_u8; rgb[1] = 40_u8; rgb[2] = 48_u8
       else
         Pixel.hue(hue_r, LED_LEVEL, rgb)
-        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
+      end
+      e2 = Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
+      err = e2 if err == 0
+      if err != 0
+        log("led: knob pixel rmt_transmit failed, knob LEDs disabled", err)
+        Shared.disable_leds
       end
     end
 
@@ -718,7 +755,7 @@ SK_H  = Sketch::Y_MAX - Sketch::Y_MIN + 13
 # Upstream's cleaning flash, limited to the screen area so the red frame is
 # never driven: area black, area white, then the frame (3 pulls). Raw planes
 # with the keep-red LUT: red pixels select ground-only tables.
-def sketch_clean : Nil
+def sketch_clean(kind : Int32) : Nil
   save = SketchFx.save_buf
   i = 0
   while i < EPD::PLANE
@@ -727,16 +764,16 @@ def sketch_clean : Nil
   end
   EPD.fast_pulls = 1
   EPD.fill_rect(SK_X0, SK_Y0, SK_W, SK_H, EPD::BLACK)
-  EPD.refresh(true, EPD::LUT_KEEPRED)
+  EPD.refresh(true, kind)
   EPD.fill_rect(SK_X0, SK_Y0, SK_W, SK_H, EPD::WHITE)
-  EPD.refresh(true, EPD::LUT_KEEPRED)
+  EPD.refresh(true, kind)
   i = 0
   while i < EPD::PLANE
     EPD.black[i] = save[i]
     i = i &+ 1
   end
   EPD.fast_pulls = 3
-  EPD.refresh(true, EPD::LUT_KEEPRED)
+  EPD.refresh(true, kind)
 end
 
 # One Sketch frame. entry = first frame after switching to Sketch: the red
@@ -756,7 +793,7 @@ def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : 
   else
     EPD.raw = true
     if Menu.want_clean?
-      sketch_clean
+      sketch_clean(EPD::LUT_NOSHAKE_KEEPRED) # same kind as live ink: no COG restart
     else
       EPD.fast_pulls = 1
       EPD.refresh(true, EPD::LUT_NOSHAKE_KEEPRED)
@@ -799,7 +836,7 @@ end
 def lut_timing : Nil
   EPD.keep_awake = true
   EPD.fast_pulls = 1
-  times = EPD.dma_alloc(32).as(Int32*)
+  times = Shared.times_buf
   k = 0
   while k < 6
     draw_pattern((k & 1) == 0 ? 1 : 4, false)
@@ -958,8 +995,9 @@ module SkState
     @@box
   end
 
-  # Remember the planes as shown (after any full Sketch refresh).
+  # Remember the planes as shown (after any full refresh).
   def self.mark_shown : Nil
+    pen_seen(Sketch.x, Sketch.y)
     sh = shown
     bk = EPD.black
     i = 0
@@ -970,38 +1008,82 @@ module SkState
   end
 
   # Bounding box (rows, byte columns) of black-plane bytes that differ from
-  # what is shown; copies them into `shown`. False if nothing changed.
-  def self.diff : Bool
-    sh = shown
-    bk = EPD.black
+  # what is shown, within rows y0..y1 and 32-bit words w0..w1 of each row;
+  # copies the changed words into `shown`. False if nothing changed.
+  def self.diff_words(y0 : Int32, y1 : Int32, w0 : Int32, w1 : Int32) : Bool
+    sh = shown.as(UInt32*)
+    bk = EPD.black.as(UInt32*)
+    wpr = EPD::ROW_BYTES.unsafe_div(4) # 30 words per row
     r0 = EPD::HEIGHT
     r1 = -1
-    c0 = EPD::ROW_BYTES
+    c0 = wpr
     c1 = -1
-    row = 0
-    i = 0
-    while row < EPD::HEIGHT
-      col = 0
-      while col < EPD::ROW_BYTES
-        v = bk[i]
-        if v != sh[i]
-          sh[i] = v
+    row = y0
+    while row <= y1
+      i = row &* wpr
+      w = w0
+      while w <= w1
+        v = bk[i &+ w]
+        if v != sh[i &+ w]
+          sh[i &+ w] = v
           r0 = row if row < r0
           r1 = row
-          c0 = col if col < c0
-          c1 = col if col > c1
+          c0 = w if w < c0
+          c1 = w if w > c1
         end
-        col = col &+ 1
-        i = i &+ 1
+        w = w &+ 1
       end
       row = row &+ 1
     end
     b = box
     b[0] = r0
     b[1] = r1
-    b[2] = c0
-    b[3] = c1
+    b[2] = c0 &* 4
+    b[3] = c1 &* 4 &+ 3
     r1 >= 0
+  end
+
+  def self.diff : Bool
+    diff_words(0, EPD::HEIGHT &- 1, 0, EPD::ROW_BYTES.unsafe_div(4) &- 1)
+  end
+
+  # Pen position the planes were last brought up to date with.
+  @@px = -1
+  @@py = -1
+
+  def self.pen_seen(x : Int32, y : Int32) : Nil
+    @@px = x
+    @@py = y
+  end
+
+  def self.px : Int32
+    @@px
+  end
+
+  def self.py : Int32
+    @@py
+  end
+
+  # Sketch.render limited to rows y0..y1 and bytes c0..c1: canvas ink ORed
+  # into black, red cleared under it (same per-byte rule as Sketch.render).
+  def self.render_box(y0 : Int32, y1 : Int32, c0 : Int32, c1 : Int32) : Nil
+    cv = Sketch.canvas
+    bk = EPD.black
+    rd = EPD.red
+    row = y0
+    while row <= y1
+      i = row &* EPD::ROW_BYTES &+ c0
+      e = row &* EPD::ROW_BYTES &+ c1
+      while i <= e
+        v = cv[i]
+        if v != 0_u8
+          bk[i] = bk[i] | v
+          rd[i] = rd[i] & (v ^ 0xFF_u8)
+        end
+        i = i &+ 1
+      end
+      row = row &+ 1
+    end
   end
 
   def self.colour? : Bool
@@ -1019,13 +1101,12 @@ def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Ni
     sketch_background
     red_to_checker
   end
-  Menu.render(EPD.black, EPD.red)
-  red_to_checker # render may touch red; keep the red plane empty
+  Menu.render(EPD.black, EPD.red) # only clears red under ink; red plane stays empty
   draw_sketch_label(wait, up, panel, total)
   Shared.led_mode = LED_CYAN
   if Menu.want_clean?
     EPD.raw = true
-    sketch_clean
+    sketch_clean(GAME_LUT) # same kind as live ink: no COG restart
     EPD.raw = false
   else
     fast_bw(1, GAME_LUT)
@@ -1178,10 +1259,36 @@ fun crystal_app_main : Void
         SkState.mark_shown
         last_total = millis &- t
       else
-        # Live ink: render, diff against what is shown, refresh that box now.
-        Menu.render(EPD.black, EPD.red)
-        red_to_checker unless SkState.colour?
-        if SkState.diff
+        # Live ink: only where the pen moved since the planes were last
+        # updated. Ink lies on the path from the old to the new pen position,
+        # inside their bounding box grown by the brush (LINE_W / 2) + 1.
+        nx = Sketch.x
+        ny = Sketch.y
+        ox = SkState.px
+        oy = SkState.py
+        moved = nx != ox || ny != oy
+        if moved && ox < 0
+          SkState.pen_seen(nx, ny)
+          moved = false
+        end
+        pad = Sketch::HALF &+ 1
+        bx0 = (nx < ox ? nx : ox) &- pad
+        bx1 = (nx < ox ? ox : nx) &+ pad
+        by0 = (ny < oy ? ny : oy) &- pad
+        by1 = (ny < oy ? oy : ny) &+ pad
+        bx0 = 0 if bx0 < 0
+        by0 = 0 if by0 < 0
+        bx1 = EPD::WIDTH &- 1 if bx1 > EPD::WIDTH &- 1
+        by1 = EPD::HEIGHT &- 1 if by1 > EPD::HEIGHT &- 1
+        changed = false
+        if moved
+          SkState.pen_seen(nx, ny)
+          w0 = bx0.unsafe_shr(5)
+          w1 = bx1.unsafe_shr(5)
+          SkState.render_box(by0, by1, w0 &* 4, w1 &* 4 &+ 3)
+          changed = SkState.diff_words(by0, by1, w0, w1)
+        end
+        if changed
           b = SkState.box
           t = millis
           Shared.led_mode = LED_CYAN
@@ -1216,8 +1323,10 @@ fun crystal_app_main : Void
         if clean
           # Clean frame: new label, full 3-pull refresh with the shaking LUT.
           draw_mode_label(Menu.mode, lw, EPD.upload_ms, EPD.panel_ms, last_total)
-          EPD.fast_pulls = 3
-          EPD.refresh(true, EPD::LUT_BASE)
+          EPD.fast_pulls = 3 # same LUT kind as normal frames (no COG restart), more pulls
+          EPD.raw = true
+          EPD.refresh(true, GAME_LUT)
+          EPD.raw = false
           SkState.mark_shown
         else
           # Keep the shown label; refresh only the changed box.
@@ -1244,6 +1353,6 @@ fun crystal_app_main : Void
     else
       Shared.led_mode = 0
     end
-    delay_ms(20)
+    LibIDF.cr_wait_notify(20_u32) # woken early by the knob task on input
   end
 end

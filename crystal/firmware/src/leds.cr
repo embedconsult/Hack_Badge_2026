@@ -77,7 +77,8 @@ module Pixel
   end
 
   # Sends one GRB pixel from buf (3 bytes, DMA not required).
-  def self.show(chan : Void*, enc : Void*, buf : UInt8*, r : UInt8, g : UInt8, b : UInt8) : Nil
+  # Returns the rmt_transmit error (0 = ok).
+  def self.show(chan : Void*, enc : Void*, buf : UInt8*, r : UInt8, g : UInt8, b : UInt8) : Int32
     LibIDF.rmt_tx_wait_all_done(chan, 50) # previous frame done; buf free again
     buf[0] = g
     buf[1] = r
@@ -89,7 +90,7 @@ module Pixel
 
   # Sends n bytes (GRB per pixel) from buf, non-blocking (buf must stay
   # untouched until the next call, which waits for the previous frame).
-  def self.show_bytes(chan : Void*, enc : Void*, buf : UInt8*, n : Int32) : Nil
+  def self.show_bytes(chan : Void*, enc : Void*, buf : UInt8*, n : Int32) : Int32
     tcfg = LibIDF::RmtTransmitConfig.new
     tcfg.flags = 2_u32
     LibIDF.rmt_transmit(chan, enc, buf.as(Void*), n.to_u32!, pointerof(tcfg))

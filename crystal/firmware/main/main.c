@@ -75,8 +75,18 @@ int32_t cr_etch_png_size(void) { return (int32_t)(etch_png_end - etch_png_start)
 // 5x7 font, ASCII 0x20..0x7E, 5 column bytes per glyph (LSB = top row).
 const uint8_t *cr_font5x7(void) { return &k_font5x7[0][0]; }
 
+// Atomic helpers for state shared between the knob task and the main task.
+uint32_t cr_atomic_or(uint32_t *p, uint32_t v) { return __atomic_fetch_or(p, v, __ATOMIC_SEQ_CST); }
+uint32_t cr_atomic_xchg(uint32_t *p, uint32_t v) { return __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST); }
+
+// Knob task -> main task wake-up (xTaskNotifyGive / ulTaskNotifyTake are macros).
+static TaskHandle_t s_main_task;
+void cr_notify_main(void) { if (s_main_task) xTaskNotifyGive(s_main_task); }
+uint32_t cr_wait_notify(uint32_t ms) { return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms)); }
+
 void app_main(void)
 {
+    s_main_task = xTaskGetCurrentTaskHandle();
     // Give the Mac's RFC2217 bridge time to come back after a flash/reset,
     // so the start-up log is not lost.
     vTaskDelay(pdMS_TO_TICKS(4000));

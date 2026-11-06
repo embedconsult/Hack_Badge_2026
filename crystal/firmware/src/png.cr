@@ -398,6 +398,11 @@ module PNG
     bpp = 1 if bpp < 1
     if row_bytes &+ 1 > @@line_cap
       # Rows of large images can exceed internal RAM comfortably; use any 8-bit heap.
+      # Grow: free the old pair first (they were allocated together).
+      unless @@line_cap == 0
+        LibIDF.heap_caps_free(@@line_a.as(Void*))
+        LibIDF.heap_caps_free(@@line_b.as(Void*))
+      end
       @@line_a = LibIDF.heap_caps_malloc((row_bytes &+ 1).to_u32!, 0x4_u32).as(UInt8*)
       @@line_b = LibIDF.heap_caps_malloc((row_bytes &+ 1).to_u32!, 0x4_u32).as(UInt8*)
       if @@line_a.null? || @@line_b.null?

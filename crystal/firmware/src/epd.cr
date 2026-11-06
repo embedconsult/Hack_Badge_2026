@@ -80,6 +80,7 @@ lib LibIDF
   fun gpio_set_pull_mode(gpio_num : Int32, mode : Int32) : Int32
   fun esp_rom_gpio_connect_out_signal(gpio_num : UInt32, signal_idx : UInt32, out_inv : Bool, oen_inv : Bool) : Void
   fun heap_caps_malloc(size : UInt32, caps : UInt32) : Void*
+  fun heap_caps_free(p : Void*) : Void
   fun esp_timer_get_time : Int64
   fun esp_rom_delay_us(us : UInt32) : Void
 
