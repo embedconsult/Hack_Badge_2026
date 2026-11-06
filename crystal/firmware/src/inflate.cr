@@ -28,6 +28,7 @@ module Inflate
   E_STORED     =  6 # stored block length mismatch
   E_BLOCK      =  7 # invalid block type / counts / lengths
   E_ADLER      =  8 # adler-32 mismatch
+  E_EXTRA      =  9 # data after the image in the zlib stream
 
   @@ready = false
   @@err = 0
@@ -39,6 +40,15 @@ module Inflate
   @@dcount = uninitialized UInt16*
   @@dsym = uninitialized UInt16*
   @@offs = uninitialized UInt16*
+  # Fixed-block codes, built once in setup; @@lc.. point at the codes in use.
+  @@flcount = uninitialized UInt16*
+  @@flsym = uninitialized UInt16*
+  @@fdcount = uninitialized UInt16*
+  @@fdsym = uninitialized UInt16*
+  @@lc = uninitialized UInt16*
+  @@ls = uninitialized UInt16*
+  @@dc = uninitialized UInt16*
+  @@ds = uninitialized UInt16*
   @@len_base = uninitialized UInt16*
   @@len_extra = uninitialized UInt8*
   @@dist_base = uninitialized UInt16*
@@ -81,7 +91,16 @@ module Inflate
     @@dist_base = alloc(30 * 2).as(UInt16*)
     @@dist_extra = alloc(30)
     @@clen_order = alloc(19)
-    return false if @@window.null? || @@lengths.null? || @@lsym.null? || @@clen_order.null?
+    @@flcount = alloc((MAXBITS + 1) * 2).as(UInt16*)
+    @@flsym = alloc(FIXLCODE * 2).as(UInt16*)
+    @@fdcount = alloc((MAXBITS + 1) * 2).as(UInt16*)
+    @@fdsym = alloc(MAXDCODE * 2).as(UInt16*)
+    # Every allocation is checked (they are made once and never freed).
+    return false if @@window.null? || @@lengths.null? || @@lcount.null? || @@lsym.null? ||
+                    @@dcount.null? || @@dsym.null? || @@offs.null? || @@len_base.null? ||
+                    @@len_extra.null? || @@dist_base.null? || @@dist_extra.null? ||
+                    @@clen_order.null? || @@flcount.null? || @@flsym.null? ||
+                    @@fdcount.null? || @@fdsym.null?
 
     # Length codes 257..285: extra = 0 for the first 8, then (i-4)/4; 258 last.
     b = 3
@@ -115,6 +134,20 @@ module Inflate
       @@clen_order[4 &+ j] = v.to_u8!
       j = j &+ 1
     end
+    # Fixed Huffman codes (RFC 1951 3.2.6), built once.
+    l = @@lengths
+    i = 0
+    while i < FIXLCODE
+      l[i] = (i < 144 ? 8 : (i < 256 ? 9 : (i < 280 ? 7 : 8))).to_u8!
+      i = i &+ 1
+    end
+    build(@@flcount, @@flsym, l, FIXLCODE)
+    i = 0
+    while i < MAXDCODE
+      l[i] = 5_u8
+      i = i &+ 1
+    end
+    build(@@fdcount, @@fdsym, l, MAXDCODE)
     @@ready = true
     true
   end
@@ -171,7 +204,9 @@ module Inflate
   end
 
   # Canonical Huffman code from lengths[0, n] (puff representation).
-  def self.build(count : UInt16*, sym : UInt16*, lengths : UInt8*, n : Int32) : Nil
+  # Returns 0 for a complete code, > 0 for an incomplete one (the caller
+  # decides whether that is allowed), -1 (and fails) if over-subscribed.
+  def self.build(count : UInt16*, sym : UInt16*, lengths : UInt8*, n : Int32) : Int32
     i = 0
     while i <= MAXBITS
       count[i] = 0_u16
@@ -183,14 +218,14 @@ module Inflate
       count[l] = count[l] &+ 1_u16
       s = s &+ 1
     end
-    return if count[0].to_i32! == n
+    return 0 if count[0].to_i32! == n # no codes
     left = 1
     len = 1
     while len <= MAXBITS
       left = left.unsafe_shl(1) &- count[len].to_i32!
       if left < 0
         fail(E_HUFF)
-        return
+        return -1
       end
       len = len &+ 1
     end
@@ -210,6 +245,7 @@ module Inflate
       end
       s = s &+ 1
     end
+    left
   end
 
   def self.decode(count : UInt16*, sym : UInt16*) : Int32
@@ -253,7 +289,7 @@ module Inflate
       return
     end
     len = @@len_base[sym].to_i32! &+ bits(@@len_extra[sym].to_i32!)
-    dsym = decode(@@dcount, @@dsym)
+    dsym = decode(@@dc, @@ds)
     if dsym >= 30
       fail(E_SYMBOL)
       return
@@ -268,19 +304,10 @@ module Inflate
   end
 
   def self.fixed_tables : Nil
-    l = @@lengths
-    i = 0
-    while i < FIXLCODE
-      l[i] = (i < 144 ? 8 : (i < 256 ? 9 : (i < 280 ? 7 : 8))).to_u8!
-      i = i &+ 1
-    end
-    build(@@lcount, @@lsym, l, FIXLCODE)
-    i = 0
-    while i < MAXDCODE
-      l[i] = 5_u8
-      i = i &+ 1
-    end
-    build(@@dcount, @@dsym, l, MAXDCODE)
+    @@lc = @@flcount
+    @@ls = @@flsym
+    @@dc = @@fdcount
+    @@ds = @@fdsym
   end
 
   def self.dynamic_tables : Nil
@@ -297,11 +324,15 @@ module Inflate
       l[@@clen_order[i].to_i32!] = i < ncode ? bits(3).to_u8! : 0_u8
       i = i &+ 1
     end
-    build(@@lcount, @@lsym, l, 19)
+    if build(@@lcount, @@lsym, l, 19) != 0 # code-length code must be complete
+      fail(E_HUFF)
+      return
+    end
     index = 0
     total = nlen &+ ndist
     while index < total && @@err == 0
       sym = decode(@@lcount, @@lsym)
+      return if @@err != 0
       if sym < 16
         l[index] = sym.to_u8!
         index = index &+ 1
@@ -335,8 +366,21 @@ module Inflate
       fail(E_BLOCK)
       return
     end
-    build(@@dcount, @@dsym, l + nlen.to_i64!, ndist)
-    build(@@lcount, @@lsym, l, nlen)
+    # Incomplete codes are only allowed when they hold a single code (puff).
+    left = build(@@dcount, @@dsym, l + nlen.to_i64!, ndist)
+    if left < 0 || (left > 0 && ndist &- @@dcount[0].to_i32! != 1)
+      fail(E_HUFF)
+      return
+    end
+    left = build(@@lcount, @@lsym, l, nlen)
+    if left < 0 || (left > 0 && nlen &- @@lcount[0].to_i32! != 1)
+      fail(E_HUFF)
+      return
+    end
+    @@lc = @@lcount
+    @@ls = @@lsym
+    @@dc = @@dcount
+    @@ds = @@dsym
   end
 
   def self.block_header : Nil
@@ -394,7 +438,7 @@ module Inflate
       end
       st = @@state
       if st == ST_HUFF
-        sym = decode(@@lcount, @@lsym)
+        sym = decode(@@lc, @@ls)
         if sym < 256
           dst[n] = put(sym.to_u8!)
           n = n &+ 1
@@ -422,5 +466,17 @@ module Inflate
       end
     end
     n
+  end
+
+  # After the last row: decode on to the end of the stream (the final
+  # end-of-block and the Adler-32 check). Any further output is an error.
+  def self.finish_stream : Bool
+    scratch = 0_u8
+    while @@err == 0 && @@state != ST_DONE
+      if read(pointerof(scratch), 1) != 0
+        fail(E_EXTRA)
+      end
+    end
+    @@err == 0
   end
 end

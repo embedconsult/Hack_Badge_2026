@@ -81,17 +81,48 @@ module PNG
     x[p] == a && x[p &+ 1] == b && x[p &+ 2] == c && x[p &+ 3] == d
   end
 
+  @@crc_table = Pointer(UInt32).null
+
+  # CRC-32 lookup table (reflected 0xEDB88320), computed once.
+  def self.crc_table : UInt32*
+    if @@crc_table.null?
+      t = LibIDF.heap_caps_malloc(1024_u32, 0x804_u32).as(UInt32*)
+      return t if t.null?
+      n = 0
+      while n < 256
+        c = n.to_u32!
+        k = 0
+        while k < 8
+          c = (c & 1_u32) != 0_u32 ? c.unsafe_shr(1) ^ 0xedb88320_u32 : c.unsafe_shr(1)
+          k = k &+ 1
+        end
+        t[n] = c
+        n = n &+ 1
+      end
+      @@crc_table = t
+    end
+    @@crc_table
+  end
+
   def self.crc32(p : Int32, n : Int32) : UInt32
     crc = 0xffffffff_u32
+    t = crc_table
     i = 0
-    while i < n
-      crc = crc ^ @@data[p &+ i].to_u32!
-      k = 0
-      while k < 8
-        crc = (crc & 1_u32) != 0_u32 ? crc.unsafe_shr(1) ^ 0xedb88320_u32 : crc.unsafe_shr(1)
-        k = k &+ 1
+    if t.null? # no memory for the table: bitwise
+      while i < n
+        crc = crc ^ @@data[p &+ i].to_u32!
+        k = 0
+        while k < 8
+          crc = (crc & 1_u32) != 0_u32 ? crc.unsafe_shr(1) ^ 0xedb88320_u32 : crc.unsafe_shr(1)
+          k = k &+ 1
+        end
+        i = i &+ 1
       end
-      i = i &+ 1
+    else
+      while i < n
+        crc = t[((crc ^ @@data[p &+ i].to_u32!) & 0xFF_u32).to_i32!] ^ crc.unsafe_shr(8)
+        i = i &+ 1
+      end
     end
     crc ^ 0xffffffff_u32
   end
@@ -346,6 +377,8 @@ module PNG
           return false
         end
         if @@ctype == COLOR_PALETTE
+          # Indices >= n (out of the palette's range; invalid PNG) keep the
+          # WHITE set above, so they can never read past the 256-entry table.
           i = 0
           while i < n
             p = body &+ i &* 3
@@ -406,6 +439,11 @@ module PNG
       @@line_a = LibIDF.heap_caps_malloc((row_bytes &+ 1).to_u32!, 0x4_u32).as(UInt8*)
       @@line_b = LibIDF.heap_caps_malloc((row_bytes &+ 1).to_u32!, 0x4_u32).as(UInt8*)
       if @@line_a.null? || @@line_b.null?
+        # Free whichever half succeeded, so a retry starts clean.
+        LibIDF.heap_caps_free(@@line_a.as(Void*)) unless @@line_a.null?
+        LibIDF.heap_caps_free(@@line_b.as(Void*)) unless @@line_b.null?
+        @@line_a = Pointer(UInt8).null
+        @@line_b = Pointer(UInt8).null
         @@line_cap = 0
         fail(E_MEMORY)
         return false
@@ -430,6 +468,13 @@ module PNG
       return false
     end
 
+    # Entirely off-screen (also keeps 0 - x below from overflowing for
+    # Int32::MIN): nothing to draw, but the image is still decoded/checked.
+    visible = x > 0 &- @@width && x < FB_WIDTH && y > 0 &- @@height && y < FB_HEIGHT
+    unless visible
+      x = 0
+      y = 0
+    end
     x_start = x < 0 ? 0 &- x : 0
     x_end = FB_WIDTH &- x
     x_end = @@width if x_end > @@width
@@ -437,20 +482,27 @@ module PNG
     row = 0
     while row < @@height
       sy = y &+ row
-      break if sy >= FB_HEIGHT
+      break if visible && sy >= FB_HEIGHT
       if Inflate.read(cur, row_bytes &+ 1) != row_bytes &+ 1
         fail(Inflate.err != 0 ? 100 &+ Inflate.err : (@@err != 0 ? @@err : E_TRUNCATED))
         return false
       end
       unfilter(cur[0], cur + 1_i64, prev + 1_i64, row_bytes, bpp)
       return false if @@err != 0
-      if sy >= 0 && x_start < x_end
+      if visible && sy >= 0 && x_start < x_end
         render_row(cur + 1_i64, x_start, x_end, sy &* FB_WIDTH &+ x, black, red)
       end
       t = prev
       prev = cur
       cur = t
       row = row &+ 1
+    end
+    # Every row decoded: finish the zlib stream so its Adler-32 is checked.
+    # (Rows cut off at the bottom of the screen are not decoded, so then the
+    # checksum can't be verified.)
+    if row == @@height && !Inflate.finish_stream
+      fail(100 &+ Inflate.err)
+      return false
     end
     true
   end
