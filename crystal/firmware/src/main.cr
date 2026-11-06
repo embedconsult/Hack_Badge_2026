@@ -894,10 +894,10 @@ def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : 
   else
     EPD.raw = true
     if Menu.want_clean?
-      sketch_clean(WIN_LUT) # same kind as live ink (red tables ground): no COG restart
+      sketch_clean(red_ink_kind) # red tables ground: the red frame is never driven
     else
       EPD.fast_pulls = 1
-      EPD.refresh(true, WIN_LUT)
+      EPD.refresh(true, red_ink_kind)
     end
     EPD.raw = false
   end
@@ -1084,7 +1084,21 @@ SCR_SNAKE    = 4
 SCR_DIAG     = 5
 SCR_COUNT    = 6
 HOLD_MS      = 1000 # Sketch: hold User B this long for the colour refresh
-AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT: colour refresh after this long idle
+AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this long idle
+
+# Fast LUT for frames over Sketch's red frame: red tables must be ground so
+# the red is never driven. HALF60 already is; otherwise the no-shake keep-red.
+def red_ink_kind : Int32
+  WIN_LUT == EPD::LUT_HALF60 ? EPD::LUT_HALF60 : EPD::LUT_NOSHAKE_KEEPRED
+end
+
+SK_HINT_Y = Sketch::Y_MAX - 22
+
+# "B: COLOR (AUTO 30 S)" at the bottom of Sketch's white area (B/W mode).
+def draw_sketch_hint(on : Bool) : Nil
+  EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 2, 20 &* 12 &+ 8, 7 &* 2 &+ 6, EPD::WHITE)
+  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y, "B: COLOR (AUTO 30 S)", EPD::BLACK, 2) if on
+end
 
 module Store
   @@ok = false
@@ -1197,6 +1211,24 @@ GAME_WINDOWED = true # same for Life / Snake frames
 
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
+  @@red_frame = false # the red frame is still on the panel (survives re-entry)
+  @@hint = false      # the "B: COLOR" hint is in the planes
+
+  def self.red_frame? : Bool
+    @@red_frame
+  end
+
+  def self.red_frame=(v : Bool) : Nil
+    @@red_frame = v
+  end
+
+  def self.hint? : Bool
+    @@hint
+  end
+
+  def self.hint=(v : Bool) : Nil
+    @@hint = v
+  end
   @@shown = Pointer(UInt8).null # black plane as last sent to the panel
   @@box = Pointer(Int32).null   # r0, r1, c0, c1 of the last diff
   @@last_lat = 0                # input -> ink on panel, last incremental frame
@@ -1385,13 +1417,17 @@ end
 def sketch_colour : Nil
   sketch_background
   Sketch.render(EPD.black, EPD.red)
-  SkState.colour = colour_refresh
+  ok = colour_refresh
+  SkState.colour = ok
+  SkState.red_frame = ok # stays on the panel until another screen replaces it
+  SkState.hint = false
   SkState.mark_shown
 end
 
 # Shows a screen on entry: always a fast black/white frame.
 def enter_screen(scr : Int32, boot : Bool) : Nil
   Shared.screen = scr
+  SkState.red_frame = false unless scr == SCR_SKETCH # another screen replaces it
   # Every preview uses WIN_LUT (HALF60), the kind game frames and Sketch ink
   # use too, so the COG session stays latched across screen switches (no ~5 s
   # restart on the first frame). Static screens get 2 pulls (HALF60 erases
@@ -1420,6 +1456,39 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   else
     Menu.enter(menu_mode_for(scr))
     SkState.colour = false
+    if scr == SCR_SKETCH && SkState.red_frame?
+      # The red frame from an earlier colour render is still on the panel:
+      # keep it. Flash the drawing area black (clears the old drawing's
+      # ghosts), then the frame + blank canvas, all with red tables ground.
+      t_dec = millis
+      sketch_background
+      SkState.entry_decode = millis &- t_dec
+      Menu.render(EPD.black, EPD.red)
+      draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
+      EPD.raw = true
+      save = SketchFx.save_buf
+      i = 0
+      while i < EPD::PLANE
+        save[i] = EPD.black[i]
+        i = i &+ 1
+      end
+      EPD.fill_rect(SK_X0, SK_Y0, SK_W, SK_H, EPD::BLACK)
+      EPD.fast_pulls = 1
+      EPD.refresh(true, red_ink_kind)
+      i = 0
+      while i < EPD::PLANE
+        EPD.black[i] = save[i]
+        i = i &+ 1
+      end
+      EPD.fast_pulls = 2
+      EPD.refresh(true, red_ink_kind)
+      EPD.raw = false
+      SkState.colour = true
+      SkState.hint = false
+      SkState.mark_shown
+      SkState.set_entry(EPD.upload_ms, EPD.panel_ms, EPD.restart_ms)
+      return
+    end
     if scr == SCR_SKETCH
       t_dec = millis
       sketch_background
@@ -1427,6 +1496,8 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
       Menu.render(EPD.black, EPD.red)
       red_to_black
       draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
+      draw_sketch_hint(true)
+      SkState.hint = true
       pulls = 2 # one clean entry frame: the second pull clears the old screen's ghosts
     else
       Menu.render(EPD.black, EPD.red)
@@ -1548,6 +1619,12 @@ fun crystal_app_main : Void
       elsif Games.pressed?(inp, Games::BTN_B)
         window_test
       end
+    elsif scr == SCR_SKETCH && !SkState.colour? && now &- (colour_due &- last_input > AUTO_COLOUR_MS ? colour_due : last_input &+ AUTO_COLOUR_MS) >= 0
+      # 30 s without knob movement or a button: the red frame in colour,
+      # with the drawing, once. Hold B does the same at once; Menu aborts.
+      log("sketch: auto colour refresh", 0)
+      sketch_colour
+      colour_due = millis &+ AUTO_COLOUR_MS
     elsif scr == SCR_SKETCH
       ticked = Menu.tick(now, inp)
       if ticked && (Menu.needs_background? || Sketch.want_clean?)
@@ -1586,6 +1663,10 @@ fun crystal_app_main : Void
         bx1 = EPD::WIDTH &- 1 if bx1 > EPD::WIDTH &- 1
         by1 = EPD::HEIGHT &- 1 if by1 > EPD::HEIGHT &- 1
         changed = false
+        if moved && SkState.hint?
+          draw_sketch_hint(false) # drawing started: the full refresh below removes it
+          SkState.hint = false
+        end
         if moved
           SkState.pen_seen(nx, ny)
           w0 = bx0.unsafe_shr(5)
@@ -1597,7 +1678,7 @@ fun crystal_app_main : Void
           b = SkState.box
           t = millis
           Shared.led_mode = LED_CYAN
-          kind = WIN_LUT # HALF60 keeps red too
+          kind = SkState.colour? ? red_ink_kind : WIN_LUT
           EPD.fast_pulls = 1
           if SK_WINDOWED
             EPD.refresh_window(b[2], b[3], b[0], b[1], kind)
