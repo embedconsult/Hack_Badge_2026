@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
+#include "font5x7.h"  // from 2026-Billboard_Badge/firmware/esp32s3-itc97
 
 // Tick rate exported for Crystal (configTICK_RATE_HZ is a macro).
 const uint32_t crystal_tick_rate_hz = configTICK_RATE_HZ;
@@ -52,6 +53,9 @@ extern const uint8_t hello_png_start[] asm("_binary_hello_i_am_blank_png_start")
 extern const uint8_t hello_png_end[] asm("_binary_hello_i_am_blank_png_end");
 const uint8_t *cr_hello_png(void) { return hello_png_start; }
 int32_t cr_hello_png_size(void) { return (int32_t)(hello_png_end - hello_png_start); }
+
+// 5x7 font, ASCII 0x20..0x7E, 5 column bytes per glyph (LSB = top row).
+const uint8_t *cr_font5x7(void) { return &k_font5x7[0][0]; }
 
 void app_main(void)
 {

@@ -49,6 +49,7 @@ lib LibIDF
   # main/main.c: embedded images
   fun cr_hello_png : UInt8*
   fun cr_hello_png_size : Int32
+  fun cr_font5x7 : UInt8*
 end
 
 require "./epd"
@@ -149,6 +150,50 @@ def draw_pattern(frame : Int32, red : Bool) : Nil
   EPD.fill_rect(280 &+ frame &* 80, 280, 160, 112, EPD::BLACK)
 end
 
+# Text in the 5x7 font (6x8 cell), each font pixel a scale x scale block.
+def text_width(s : String, scale : Int32) : Int32
+  n = s.bytesize
+  n == 0 ? 0 : (n &* 6 &- 1) &* scale
+end
+
+def draw_text(x : Int32, y : Int32, s : String, color : Int32, scale : Int32) : Nil
+  font = LibIDF.cr_font5x7
+  p = s.to_unsafe
+  i = 0
+  while i < s.bytesize
+    ch = p[i].to_i32!
+    ch = 0x3F if ch < 0x20 || ch > 0x7E
+    g = font + ((ch &- 0x20) &* 5).to_i64!
+    col = 0
+    while col < 5
+      bits = g[col]
+      row = 0
+      while row < 7
+        if (bits.unsafe_shr(row) & 1_u8) != 0_u8
+          EPD.fill_rect(x &+ col &* scale, y &+ row &* scale, scale, scale, color)
+        end
+        row = row &+ 1
+      end
+      col = col &+ 1
+    end
+    x = x &+ 6 &* scale
+    i = i &+ 1
+  end
+end
+
+# The white name band of hello_i_am_blank.png is rows 221..557.
+BAND_TOP    = 221
+BAND_BOTTOM = 558
+NAME_SCALE  =  18
+
+def draw_name(first : String, last : String) : Nil
+  line_h = 7 &* NAME_SCALE
+  gap = 2 &* NAME_SCALE
+  top = BAND_TOP &+ (BAND_BOTTOM &- BAND_TOP &- (2 &* line_h &+ gap)).unsafe_div(2)
+  draw_text((EPD::WIDTH &- text_width(first, NAME_SCALE)).unsafe_div(2), top, first, EPD::BLACK, NAME_SCALE)
+  draw_text((EPD::WIDTH &- text_width(last, NAME_SCALE)).unsafe_div(2), top &+ line_h &+ gap, last, EPD::BLACK, NAME_SCALE)
+end
+
 SPI_HZ = 20_000_000
 
 fun crystal_app_main : Void
@@ -171,6 +216,9 @@ fun crystal_app_main : Void
     log("main: png error code", PNG.err)
     draw_pattern(0, true)
   end
+  t = millis
+  draw_name("Jason", "Kridner")
+  log("main: name draw ms", millis &- t)
   EPD.refresh(false)
   log("main: image on the panel at ms since boot", millis)
 end
