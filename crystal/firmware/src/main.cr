@@ -676,14 +676,28 @@ def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : 
   draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 3)
 end
 
+# DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
+def show_diag : Nil
+  EPD.fill(EPD::WHITE)
+  draw_text(40, 40, "DIAG", EPD::BLACK, 10)
+  draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: TABLE PROBE (~2 MIN)", EPD::BLACK, 4)
+  draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
+  draw_text(40, 420, "PROBE QUADRANTS (RED,BW):", EPD::BLACK, 3)
+  draw_text(40, 460, "TL 1,1  TR 1,0  BL 0,1  BR 0,0", EPD::BLACK, 3)
+  draw_text(40, 500, "ORDER: TABLE 0,1,2,3, WHITE BETWEEN", EPD::BLACK, 3)
+  EPD.fast_pulls = 3
+  EPD.refresh(true, EPD::LUT_BASE)
+end
+
 # One 1-pull refresh with each fast LUT kind on alternating frames; the panel
 # busy times are then drawn on the panel and logged.
 def lut_timing : Nil
   EPD.keep_awake = true
   EPD.fast_pulls = 1
-  times = EPD.dma_alloc(16).as(Int32*)
+  times = EPD.dma_alloc(32).as(Int32*)
   k = 0
-  while k < 4
+  while k < 6
     draw_pattern((k & 1) == 0 ? 1 : 4, false)
     EPD.refresh(true, k)
     times[k] = EPD.panel_ms
@@ -694,11 +708,11 @@ def lut_timing : Nil
   draw_text(40, 40, "1-PULL PANEL MS BY LUT", EPD::BLACK, 5)
   buf = Shared.label_buf
   k = 0
-  while k < 4
-    name = k == 0 ? "BASE" : (k == 1 ? "NOSHAKE" : (k == 2 ? "UPSTREAM BW" : "NOSHAKE+BW"))
-    draw_text(40, 140 &+ k &* 90, name, EPD::BLACK, 5)
+  while k < 6
+    name = k == 0 ? "BASE" : (k == 1 ? "NOSHAKE" : (k == 2 ? "UPSTREAM BW" : (k == 3 ? "NOSHAKE+BW" : (k == 4 ? "KEEPRED" : "NOSHAKE KEEPRED"))))
+    draw_text(40, 130 &+ k &* 80, name, EPD::BLACK, 4)
     n = put_decimal(buf, times[k])
-    draw_bytes(600, 140 &+ k &* 90, buf, n, EPD::BLACK, 5)
+    draw_bytes(720, 130 &+ k &* 80, buf, n, EPD::BLACK, 4)
     k = k &+ 1
   end
   EPD.fast_pulls = 3
@@ -734,6 +748,7 @@ fun crystal_app_main : Void
   pl = Shared.mv_l
   pr = Shared.mv_r
   portrait = false
+  diag = false
   while true
     held = Shared.take_buttons
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
@@ -750,7 +765,27 @@ fun crystal_app_main : Void
     # handled here so games/menu.cr needs no change.
     plus = Games.pressed?(inp, Games::BTN_PLUS)
     minus = Games.pressed?(inp, Games::BTN_MINUS)
-    if portrait
+    if diag
+      if plus || minus
+        diag = false
+        Menu.enter(plus ? Menu::NAMETAG : Menu::SNAKE)
+        last_mode = -1
+        changed = true
+      else
+        if Games.pressed?(inp, Games::BTN_A)
+          lut_timing
+        elsif Games.pressed?(inp, Games::BTN_B)
+          lut_probe
+          show_diag
+        end
+        changed = false
+      end
+    elsif (plus && Menu.mode == Menu::SNAKE) || (minus && Menu.mode == Menu::NAMETAG && !portrait)
+      diag = true
+      log("menu: mode DIAG", 0)
+      show_diag
+      changed = false
+    elsif portrait
       if plus || minus
         portrait = false
         Menu.enter(plus ? Menu::SKETCH : Menu::NAMETAG)
