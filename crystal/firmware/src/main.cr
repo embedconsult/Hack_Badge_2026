@@ -52,6 +52,8 @@ lib LibIDF
   fun cr_font5x7 : UInt8*
   fun cr_portrait_png : UInt8*
   fun cr_portrait_png_size : Int32
+  fun cr_sketch_png : UInt8*
+  fun cr_sketch_png_size : Int32
 end
 
 require "./epd"
@@ -97,7 +99,7 @@ def knob_mv(cal : Void*, raw : Int32) : Int32
 end
 
 # Knob ranges measured on the badge (calibrated mV).
-LEFT_MV_LO  =  769
+LEFT_MV_LO  =  694
 LEFT_MV_HI  = 2963
 RIGHT_MV_LO =   70
 RIGHT_MV_HI = 2703
@@ -105,6 +107,9 @@ LED_LEFT    =   42 # SAO1 GPIO2: WS2812 on the left knob
 LED_RIGHT   =    6 # SAO2 GPIO2: WS2812 on the right knob
 LED_LEVEL   =   64 # brightness, 0..255
 LOOP_MS     =   50 # 20 Hz
+LED_YELLOW  =    1
+LED_GREEN   =    2
+LED_CYAN    =    3
 
 # State shared between the main task and the knob task (word-sized fields).
 module Shared
@@ -145,6 +150,18 @@ module Shared
   def self.label_buf : UInt8*
     @@label = EPD.dma_alloc(32) if @@label.null?
     @@label
+  end
+
+  # Right-knob LED: 0 = live hue from the knob, else a fixed status colour
+  # (LED_YELLOW / LED_GREEN / LED_CYAN), as upstream Sketch does.
+  @@led_mode = 0
+
+  def self.led_mode : Int32
+    @@led_mode
+  end
+
+  def self.led_mode=(m : Int32) : Nil
+    @@led_mode = m
   end
 
   def self.leds_ready? : Bool
@@ -243,8 +260,17 @@ fun crystal_knob_task(arg : Void*) : Void
         Pixel.hue(hue_l, LED_LEVEL, rgb)
         Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
       end
-      Pixel.hue(hue_r, LED_LEVEL, rgb)
-      Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
+      lm = Shared.led_mode
+      if lm == LED_YELLOW
+        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, 48_u8, 40_u8, 0_u8)
+      elsif lm == LED_GREEN
+        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, 0_u8, 48_u8, 0_u8)
+      elsif lm == LED_CYAN
+        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, 0_u8, 40_u8, 48_u8)
+      else
+        Pixel.hue(hue_r, LED_LEVEL, rgb)
+        Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
+      end
     end
 
     now = millis
@@ -341,7 +367,7 @@ SPEED_TEST  = false # boot-time 1-pull vs 3-pull fast refresh comparison
 GAME_PULLS  = 1    # waveform pulls per fast refresh in the game modes
 CLEAN_EVERY = 30   # game frames between clean (shaking, 3-pull) refreshes
 GAME_LUT    = EPD::LUT_NOSHAKE_BW
-LUT_TIMING  = true # boot: time one pull of each fast LUT kind, show results on the panel
+LUT_TIMING  = false # boot: time one pull of each fast LUT kind, show results on the panel
 LUT_PROBE   = false # boot-time experiment: which (red, bw) pairs select which table
 
 # Bring-up test for the knob WS2812s: left red, right blue for 10 s, then
@@ -565,6 +591,91 @@ def show_portrait : Nil
   EPD.refresh(false)
 end
 
+# ---- Sketch (port of upstream apps/sketch.py) -------------------------------
+
+module SketchFx
+  @@save = Pointer(UInt8).null
+
+  def self.save_buf : UInt8*
+    @@save = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*) if @@save.null?
+    @@save
+  end
+end
+
+# Flash area: the frame's white screen around the drawable area.
+SK_X0 = Sketch::X_MIN - 6
+SK_Y0 = Sketch::Y_MIN - 6
+SK_W  = Sketch::X_MAX - Sketch::X_MIN + 13
+SK_H  = Sketch::Y_MAX - Sketch::Y_MIN + 13
+
+# Upstream's cleaning flash, limited to the screen area so the red frame is
+# never driven: area black, area white, then the frame (3 pulls). Raw planes
+# with the keep-red LUT: red pixels select ground-only tables.
+def sketch_clean : Nil
+  save = SketchFx.save_buf
+  i = 0
+  while i < EPD::PLANE
+    save[i] = EPD.black[i]
+    i = i &+ 1
+  end
+  EPD.fast_pulls = 1
+  EPD.fill_rect(SK_X0, SK_Y0, SK_W, SK_H, EPD::BLACK)
+  EPD.refresh(true, EPD::LUT_KEEPRED)
+  EPD.fill_rect(SK_X0, SK_Y0, SK_W, SK_H, EPD::WHITE)
+  EPD.refresh(true, EPD::LUT_KEEPRED)
+  i = 0
+  while i < EPD::PLANE
+    EPD.black[i] = save[i]
+    i = i &+ 1
+  end
+  EPD.fast_pulls = 3
+  EPD.refresh(true, EPD::LUT_KEEPRED)
+end
+
+# One Sketch frame. entry = first frame after switching to Sketch: the red
+# frame is put on the panel with a slow full-colour refresh (a fast
+# refresh cannot make a solid red). After that, frames are raw keep-red
+# fast refreshes, so the red frame is never touched.
+def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
+  if Menu.needs_background? || entry
+    ok = PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+    log2("sketch: frame decode ok / err", ok ? 1 : 0, PNG.err)
+    st = Sketch.status_text
+    draw_text(Sketch::STATUS_X, Sketch::STATUS_Y, st, EPD::WHITE, Sketch::STATUS_SCALE) if st.bytesize > 0
+  end
+  Menu.render(EPD.black, EPD.red)
+  draw_sketch_label(wait, up, panel, total)
+  Shared.led_mode = LED_CYAN
+  if entry
+    EPD.raw = false
+    EPD.refresh(false)
+  else
+    EPD.raw = true
+    if Menu.want_clean?
+      sketch_clean
+    else
+      EPD.fast_pulls = 1
+      EPD.refresh(true, EPD::LUT_NOSHAKE_KEEPRED)
+    end
+    EPD.raw = false
+  end
+end
+
+# "SK wait/upload/panel/total" inside the screen area (top-left), x3.
+def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
+  buf = Shared.label_buf
+  buf[0] = 0x53_u8 # S
+  buf[1] = 0x4B_u8 # K
+  buf[2] = 0x20_u8
+  n = 3
+  n = put_field(buf, n, wait, true)
+  n = put_field(buf, n, up, false)
+  n = put_field(buf, n, panel, false)
+  n = put_field(buf, n, total, false)
+  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, n &* 18 &+ 6, 7 &* 3 &+ 6, EPD::WHITE)
+  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 3)
+end
+
 # One 1-pull refresh with each fast LUT kind on alternating frames; the panel
 # busy times are then drawn on the panel and logged.
 def lut_timing : Nil
@@ -659,7 +770,11 @@ fun crystal_app_main : Void
     if changed
       log("menu: mode", Menu.mode)
       t = millis
-      if Menu.render(EPD.black, EPD.red)
+      if Menu.mode == Menu::SKETCH
+        lw = last_wait
+        last_wait = millis &- last_input
+        sketch_frame(last_mode != Menu::SKETCH, lw, EPD.upload_ms, EPD.panel_ms, last_total)
+      elsif Menu.render(EPD.black, EPD.red)
         # Clean (shaking, 3-pull) refresh on mode entry and every CLEAN_EVERY
         # frames; otherwise the no-shake LUT so unchanged cells stay still.
         clean = Menu.mode != last_mode || frames >= CLEAN_EVERY
@@ -676,6 +791,11 @@ fun crystal_app_main : Void
       last_mode = Menu.mode
       last_total = millis &- t
       log2("menu: mode / frame ms", Menu.mode, last_total)
+    end
+    if Menu.mode == Menu::SKETCH && !portrait
+      Shared.led_mode = Sketch.dirty? ? LED_YELLOW : LED_GREEN
+    else
+      Shared.led_mode = 0
     end
     delay_ms(20)
   end

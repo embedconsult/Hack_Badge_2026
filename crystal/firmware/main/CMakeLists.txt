@@ -1,5 +1,5 @@
 idf_component_register(SRCS "main.c"
-                       EMBED_FILES "hello_i_am_blank.png" "portrait.png"
+                       EMBED_FILES "hello_i_am_blank.png" "portrait.png" "sketch_frame.png"
                        PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_driver_rmt esp_adc esp_timer esp_rom heap freertos)
 
 # --- Crystal -> Xtensa object --------------------------------------------------

@@ -783,17 +783,24 @@ module EPD
   LUT_NOSHAKE    = 1 # shake group replaced (paper gets one more white drive)
   LUT_BW         = 2 # upstream "short black/white": base with red idled after group 4
   LUT_NOSHAKE_BW = 3 # both
+  # Keep-red kinds: tables 2 (red) and 3 are ground in every group, so pixels
+  # whose red bit is set get no drive at all. Used with raw planes (red plane
+  # sent as it is) to update black/white content around a red frame that a
+  # slow refresh already put on the panel.
+  LUT_KEEPRED         = 4 # shake + drive on tables 0/1
+  LUT_NOSHAKE_KEEPRED = 5
 
   def self.build_lutb(kind : Int32) : Nil
-    shake = kind == LUT_BASE || kind == LUT_BW
+    shake = kind == LUT_BASE || kind == LUT_BW || kind == LUT_KEEPRED
     bw = kind == LUT_BW || kind == LUT_NOSHAKE_BW
+    keepred = kind == LUT_KEEPRED || kind == LUT_NOSHAKE_KEEPRED
     t = 0
     while t < 5
       g = 0
       while g < 10
         q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
         red_level = g <= 1 ? 0xAA_u8 : 0xFF_u8
-        if t == 4
+        if t == 4 || (keepred && (t == 2 || t == 3))
           put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
         elsif g < 1 && !shake
           # No shake. The freed group gives paper (table 0) one extra white
@@ -1066,7 +1073,7 @@ module EPD
     @@latched_kind = @@lut_kind
     @@latched_probe = @@probe
     @@lut_latched = rc >= 0 && fast
-    @@prev_has_red = draw_red && !@@raw
+    @@prev_has_red = draw_red
     keep = @@keep_awake && @@lut_latched
     cog_stop unless keep
     t_end = millis
