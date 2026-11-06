@@ -14,8 +14,7 @@ require "./common"
 module Sketch
   PX_PER_RANGE = 240
   DEADBAND     =  20 # Q12 units (~1.2 px)
-  PAUSE_MS     = 300
-  MAX_MS       = 3000
+  PAUSE_MS     = 1000 # refresh only once the knobs have been still this long
   WIDTH        =   3
 
   @@canvas = Pointer(UInt8).null
@@ -168,7 +167,7 @@ module Sketch
       @@last_move = now
     end
 
-    if @@dirty && (now &- @@last_move >= PAUSE_MS || now &- @@last_refresh >= MAX_MS)
+    if @@dirty && now &- @@last_move >= PAUSE_MS
       @@dirty = false
       @@last_refresh = now
       return true
