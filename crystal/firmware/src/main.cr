@@ -1238,7 +1238,9 @@ AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this lon
 
 # Fast LUT for frames over Sketch's red frame: red tables must be ground so
 # the red is never driven. HALF60 already is; otherwise the no-shake keep-red.
+SK_RED_INK_PLAIN = false # experiment: plain no-shake B/W LUT over the red frame
 def red_ink_kind : Int32
+  return EPD::LUT_NOSHAKE_BW if SK_RED_INK_PLAIN
   WIN_LUT == EPD::LUT_HALF60 ? EPD::LUT_HALF60 : EPD::LUT_NOSHAKE_KEEPRED
 end
 
