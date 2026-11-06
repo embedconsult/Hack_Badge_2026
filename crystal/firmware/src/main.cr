@@ -149,6 +149,13 @@ module Shared
 
   @@label = Pointer(UInt8).null
 
+  @@ps = Pointer(Int32).null
+
+  def self.ps_times : Int32*
+    @@ps = EPD.dma_alloc(64).as(Int32*) if @@ps.null?
+    @@ps
+  end
+
   def self.label_buf : UInt8*
     @@label = EPD.dma_alloc(32) if @@label.null?
     @@label
@@ -706,8 +713,8 @@ end
 def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
-  draw_text(40, 200, "A: PANEL SPEED TEST (~4 MIN)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: TABLE PROBE (~2 MIN)", EPD::BLACK, 4)
+  draw_text(40, 200, "A: PANEL SPEED TEST (~3 MIN)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: LAST PANEL SPEED RESULTS", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 420, "PROBE QUADRANTS (RED,BW):", EPD::BLACK, 3)
   draw_text(40, 460, "TL 1,1  TR 1,0  BL 0,1  BR 0,0", EPD::BLACK, 3)
@@ -785,7 +792,7 @@ end
 def panel_speed : Nil
   log("ps: start", 0)
   EPD.keep_awake = true
-  tm = EPD.dma_alloc(64).as(Int32*)
+  tm = Shared.ps_times
   # -- timing phase --
   EPD.window(false)
   draw_pattern(1, false)
@@ -807,15 +814,11 @@ def panel_speed : Nil
   draw_pattern(4, false)
   tm[5] = ps_run(EPD::LUT_CUSTOM, 1)
   EPD.osc = -1
-  # zero counts in group 9 (ground): skip, or 256?
-  EPD.custom(0x55_u8, 0xAA_u8, 0, 8, 1_u8, 1_u8, 1_u8, 1_u8, 1_u8, 0_u8)
-  draw_pattern(1, false)
-  tm[6] = ps_run(EPD::LUT_CUSTOM, 1)
-  EPD.custom(0x55_u8, 0xAA_u8, 0, 8, 1_u8, 1_u8, 1_u8, 1_u8, 0_u8, 1_u8)
-  draw_pattern(4, false)
-  tm[7] = ps_run(EPD::LUT_CUSTOM, 1)
+  # (Zero-count tests removed: rep 0 / ph2 0 in a group hung the panel.)
+  tm[6] = 0
+  tm[7] = 0
   k = 0
-  while k < 8
+  while k < 6
     log2("ps: timing test / panel ms", k, tm[k])
     k = k &+ 1
   end
@@ -848,7 +851,25 @@ def panel_speed : Nil
     log2("ps: band test / panel ms", k, tm[k])
     k = k &+ 1
   end
+  Store.save_ps(tm)
   # -- results, refreshed only right of and below the bands --
+  ps_results(tm)
+  EPD.window(true, BAND_C1 &+ 1, EPD::ROW_BYTES &- 1, 0, PS_BANDS &* BAND_H &- 1)
+  ps_run(EPD::LUT_BASE, 3)
+  EPD.window(true, 0, EPD::ROW_BYTES &- 1, PS_BANDS &* BAND_H, EPD::HEIGHT &- 1)
+  ps_run(EPD::LUT_BASE, 3)
+  EPD.window(false)
+  log("ps: done, waiting for a button", 0)
+  ps_wait_button
+end
+
+def ps_name(k : Int32) : String
+  k == 0 ? "BASE 1P" : (k == 1 ? "BASE 3P" : (k == 2 ? "N4" : (k == 3 ? "N10" : (k == 4 ? "N20" : (k == 5 ? "HALF60" : "FULL60")))))
+end
+
+# Times into the frame buffer: band times in the right column, the timing
+# tests below the bands.
+def ps_results(tm : Int32*) : Nil
   k = 0
   while k < PS_BANDS
     ps_text(636, k &* BAND_H &+ 24, "MS", tm[8 &+ k], 4)
@@ -863,15 +884,38 @@ def panel_speed : Nil
   x = ps_text(x &+ 12, y, "OSC11", tm[4], 3)
   ps_text(x &+ 12, y, "OSC12", tm[5], 3)
   y = y &+ 34
-  x = ps_text(12, y, "REP0", tm[6], 3)
-  ps_text(x &+ 12, y, "PH2_0", tm[7], 3)
-  EPD.window(true, BAND_C1 &+ 1, EPD::ROW_BYTES &- 1, 0, PS_BANDS &* BAND_H &- 1)
+  draw_text(12, y, "ANY BUTTON: CONTINUE", EPD::BLACK, 3)
+end
+
+# Blocks until a button is pressed (and released).
+def ps_wait_button : Nil
+  Shared.take_buttons
+  while Shared.take_buttons == 0_u32
+    delay_ms(50)
+  end
+  while Shared.take_buttons != 0_u32
+    delay_ms(50)
+  end
+end
+
+# DIAG B: the last stored run's numbers (band names instead of the ink
+# samples), one clean refresh, held until a button is pressed.
+def ps_show_last : Nil
+  tm = Shared.ps_times
+  EPD.fill(EPD::WHITE)
+  if Store.load_ps(tm)
+    k = 0
+    while k < PS_BANDS
+      draw_text(12, k &* BAND_H &+ 28, ps_name(k), EPD::BLACK, 4)
+      k = k &+ 1
+    end
+    ps_results(tm)
+  else
+    draw_text(40, 40, "NO STORED PANEL SPEED RUN", EPD::BLACK, 4)
+  end
+  EPD.keep_awake = true
   ps_run(EPD::LUT_BASE, 3)
-  EPD.window(true, 0, EPD::ROW_BYTES &- 1, PS_BANDS &* BAND_H, EPD::HEIGHT &- 1)
-  ps_run(EPD::LUT_BASE, 3)
-  EPD.window(false)
-  log("ps: done", 0)
-  delay_ms(60_000) # time to photograph
+  ps_wait_button
 end
 
 # ---- screens, NVS, previews ------------------------------------------------
@@ -882,6 +926,8 @@ lib LibIDF
   fun nvs_get_u8(h : UInt32, key : UInt8*, v : UInt8*) : Int32
   fun nvs_set_u8(h : UInt32, key : UInt8*, v : UInt8) : Int32
   fun nvs_commit(h : UInt32) : Int32
+  fun nvs_set_blob(h : UInt32, key : UInt8*, v : Void*, n : UInt32) : Int32
+  fun nvs_get_blob(h : UInt32, key : UInt8*, v : Void*, n : UInt32*) : Int32
 end
 
 SCR_NAMETAG  = 0
@@ -911,6 +957,20 @@ module Store
     v = 0_u8
     return SCR_NAMETAG if LibIDF.nvs_get_u8(@@h, "screen".to_unsafe, pointerof(v)) != 0
     v.to_i32! < SCR_COUNT ? v.to_i32! : SCR_NAMETAG
+  end
+
+  # Panel-speed results: 16 x Int32.
+  def self.save_ps(tm : Int32*) : Nil
+    return unless @@ok
+    err = LibIDF.nvs_set_blob(@@h, "ps".to_unsafe, tm.as(Void*), 64_u32)
+    LibIDF.nvs_commit(@@h)
+    log("nvs: save panel speed err", err)
+  end
+
+  def self.load_ps(tm : Int32*) : Bool
+    return false unless @@ok
+    n = 64_u32
+    LibIDF.nvs_get_blob(@@h, "ps".to_unsafe, tm.as(Void*), pointerof(n)) == 0 && n == 64
   end
 
   def self.screen=(v : Int32) : Nil
@@ -1208,7 +1268,7 @@ fun crystal_app_main : Void
       if Games.pressed?(inp, Games::BTN_A)
         panel_speed
       elsif Games.pressed?(inp, Games::BTN_B)
-        lut_probe
+        ps_show_last
         show_diag
       end
     elsif scr == SCR_SKETCH
