@@ -576,7 +576,10 @@ GAME_LUT    = EPD::LUT_NOSHAKE_BW
 # 2/3 ground), but erases black -> white weakly (ghosted text after a 3-pull
 # white base, window test v5). If dead Life cells / the snake's tail stay
 # grey, try EPD::LUT_NOSHAKE_BW here.
-WIN_LUT     = EPD::LUT_HALF60
+# Diagnostic: HALF60 (all groups minimal) is suspected of the row-repeat
+# corruption seen with full-screen refreshes (000bd1e); back to the no-shake
+# table that showed no corruption, to rule it in or out.
+WIN_LUT     = EPD::LUT_NOSHAKE_BW
 LUT_TIMING  = false # boot: time one pull of each fast LUT kind, show results on the panel
 LUT_PROBE   = false # boot-time experiment: which (red, bw) pairs select which table
 
@@ -994,6 +997,7 @@ def window_test : Nil
   end
   draw_text(40, 620, "REF v6: W1,W4 MODE 4   W2,W3 MODE 5", EPD::BLACK, 2)
   fast_bw(3, EPD::LUT_HALF60)
+  EPD.cog_stop # full COG re-init on the next refresh: nothing of the test survives
 end
 
 # Build version (git describe + build time), 5x7 font x2, right-aligned to

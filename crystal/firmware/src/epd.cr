@@ -164,6 +164,7 @@ module EPD
   REG45_084   = 0x86_u8
   REG45_B1    = 0x84_u8
   B_REFRESH_PULLS = 3 # epd97.cpp default for driver B fast refresh
+  SESSION_IMAGES  = 20     # epd97_config.h EPD_SESSION_IMAGES
   FAST_TIMEOUT_MS = 5_000   # BUSY wait for a fast waveform (~1.2 s per pull)
   SLOW_TIMEOUT_MS = 180_000 # BUSY wait for the OTP waveform (~33 s)
 
@@ -208,6 +209,7 @@ module EPD
   @@lut_kind = 0         # LUT_* kind of the fast waveform (see build_lutb)
   @@latched_kind = 0
   @@upload_ms = 0
+  @@session_images = 0
   @@restart_ms = 0 # last refresh: COG power-up + register/soft-start setup (0 = session reused)
   @@probe = -1          # >= 0: probe LUT driving only that table (see build_probe)
   @@latched_probe = -1
@@ -773,6 +775,7 @@ module EPD
   # Power-up for a new session once the OTP is known.
   def self.cog_initial : Nil
     @@red_zero = false # new session: COG RAM contents unknown
+    @@session_images = 0
     power_on
     delay_ms(T_RST_PWR)
     second_reset
@@ -1243,8 +1246,15 @@ module EPD
 
   def self.write_planes(fast_ink_red : Bool, draw_red : Bool) : Nil
     cmd1(0x01_u8, @@otp[0x10]) if @@driver_b # DCTL before the windows on driver B
+    # Full-screen DUW and DRFW on every upload, so no window left by a
+    # window test (or window mode) can survive into a full refresh: once to
+    # both COGs (as epd97.cpp), then to each COG on its own.
     send_otp(0x13_u8, 0x16, 6)              # DUW
     send_otp(0x90_u8, 0x0C, 4)              # DRFW
+    send_otp_to(LEFT, 0x13_u8, 0x16, 6)
+    send_otp_to(LEFT, 0x90_u8, 0x0C, 4)
+    send_otp_to(RIGHT, 0x13_u8, 0x16, 6)
+    send_otp_to(RIGHT, 0x90_u8, 0x0C, 4)
     t = LEFT
     while t <= RIGHT
       send_otp_to(t, 0x12_u8, 0x13, 3) # RAM_RW
@@ -1474,7 +1484,10 @@ module EPD
     @@latched_probe = @@probe
     @@lut_latched = rc >= 0 && fast
     @@prev_has_red = draw_red if rc >= 0
-    keep = @@keep_awake && @@lut_latched
+    # Like epd97.cpp (EPD_SESSION_IMAGES), close the session after a bounded
+    # number of images so the COG is re-initialised regularly.
+    @@session_images = @@session_images &+ 1
+    keep = @@keep_awake && @@lut_latched && @@session_images < SESSION_IMAGES
     cog_stop unless keep
     t_end = millis
 
