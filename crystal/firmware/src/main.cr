@@ -184,6 +184,7 @@ module Shared
   # (LED_YELLOW / LED_GREEN / LED_CYAN), as upstream Sketch does.
   @@led_mode = 0
   @@target = 0         # screen the user has asked for (knob task, on Menu edges)
+  @@live = false       # Sketch: the main loop is idle and knob input draws NOW
   @@rendering = false  # main task is drawing a screen (LED indicator pulses)
 
   def self.target : Int32
@@ -196,6 +197,14 @@ module Shared
 
   def self.rendering? : Bool
     @@rendering
+  end
+
+  def self.live? : Bool
+    @@live
+  end
+
+  def self.live=(v : Bool) : Nil
+    @@live = v
   end
 
   def self.rendering=(v : Bool) : Nil
@@ -336,8 +345,6 @@ fun crystal_knob_task(arg : Void*) : Void
   bar_key = -1   # last indicator frame sent (target * 2 + pulse phase)
   prev_btns = 0_u32
   last_menu = 0
-  was_working = false
-  ready_until = 0
   log("knob: loop starting", 0)
   on = false
   raw_l = 0
@@ -385,82 +392,36 @@ fun crystal_knob_task(arg : Void*) : Void
     end
     prev_btns = btns
 
-    # Indicator: pulses while the panel works on the target screen; steady
-    # once done. In Sketch, once its frame is up, Sketch.led_frame takes over.
+    # ONE LED rule for the whole badge: only the bar LED at the current /
+    # target screen's index is lit, in its mode colour; all others are off.
+    # PULSING = busy (rendering, colour render, cleaning flash; input is
+    # ignored). STEADY = ready (input accepted; in Sketch: knobs draw NOW).
     tgt = Shared.target
-    working = Shared.rendering? || Shared.screen != tgt || EPD.busy?
-    # "Ready" signal: when a game screen (Sketch / Life / Snake) finishes
-    # rendering, the whole bar flashes green twice before the normal display.
-    if was_working && !working && (tgt == SCR_SKETCH || tgt == SCR_LIFE || tgt == SCR_SNAKE)
-      ready_until = now_ms &+ 800
-    end
-    was_working = working
-    ready_flash = now_ms &- ready_until < 0
+    working = Shared.rendering? || Shared.screen != tgt || EPD.busy? ||
+              (tgt == SCR_SKETCH && !Shared.live?)
     pulse_dim = working && (now_ms.unsafe_div(250) & 1) == 1
-    sketch_anim = Shared.screen == SCR_SKETCH && tgt == SCR_SKETCH && !Shared.rendering? && !ready_flash
     mode_rgb(tgt, rgb)
-    shift = pulse_dim ? BAR_SHIFT &+ 2 : BAR_SHIFT
+    shift = pulse_dim ? BAR_SHIFT &+ 3 : BAR_SHIFT
     ind_r = rgb[0].unsafe_shr(shift)
     ind_g = rgb[1].unsafe_shr(shift)
     ind_b = rgb[2].unsafe_shr(shift)
-    if bar_ok && ready_flash
-      on_phase = ((ready_until &- now_ms).unsafe_div(200) & 1) == 1
-      key = on_phase ? -2 : -3
+    if bar_ok
+      key = tgt &* 2 &+ (pulse_dim ? 1 : 0)
       if key != bar_key
         Pixel.wait(bar_ch)
         i = 0
-        while i < 24
-          bar_buf[i] = (on_phase && (i.unsafe_mod(3) == 0)) ? 48_u8 : 0_u8 # G only
+        while i < 8
+          lit = i == tgt
+          bar_buf[i &* 3] = lit ? ind_g : 0_u8
+          bar_buf[i &* 3 &+ 1] = lit ? ind_r : 0_u8
+          bar_buf[i &* 3 &+ 2] = lit ? ind_b : 0_u8
           i = i &+ 1
         end
-        bar_ok = false if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
+        if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
+          log("led: bar rmt_transmit failed, bar disabled", 0)
+          bar_ok = false
+        end
         bar_key = key
-      end
-      bar_scr = -1
-    elsif bar_ok
-      if sketch_anim
-        Sketch.led_invalidate unless bar_scr == SCR_SKETCH
-        if Sketch.led_frame(now_ms, EPD.busy?, bar_cols)
-          Pixel.wait(bar_ch)
-          i = 0
-          while i < 8
-            c = bar_cols[i]
-            bar_buf[i &* 3] = (c.unsafe_shr(8) & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8!     # G
-            bar_buf[i &* 3 &+ 1] = (c.unsafe_shr(16) & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8! # R
-            bar_buf[i &* 3 &+ 2] = (c & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8!                # B
-            i = i &+ 1
-          end
-          if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
-            log("led: bar rmt_transmit failed, bar disabled", 0)
-            bar_ok = false
-          end
-        end
-        bar_scr = SCR_SKETCH
-        bar_key = -1
-      else
-        key = tgt &* 2 &+ (pulse_dim ? 1 : 0)
-        if key != bar_key
-          Pixel.wait(bar_ch)
-          i = 0
-          while i < 8
-            if i == tgt
-              bar_buf[i &* 3] = ind_g
-              bar_buf[i &* 3 &+ 1] = ind_r
-              bar_buf[i &* 3 &+ 2] = ind_b
-            else
-              bar_buf[i &* 3] = 1_u8 # other LEDs dim
-              bar_buf[i &* 3 &+ 1] = 1_u8
-              bar_buf[i &* 3 &+ 2] = 1_u8
-            end
-            i = i &+ 1
-          end
-          if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
-            log("led: bar rmt_transmit failed, bar disabled", 0)
-            bar_ok = false
-          end
-          bar_key = key
-        end
-        bar_scr = -1
       end
     end
     Shared.set_knobs(mv_l, mv_r, btns)
@@ -483,8 +444,7 @@ fun crystal_knob_task(arg : Void*) : Void
         Pixel.hue(hue_l, LED_LEVEL, rgb)
         err = Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
       end
-      # Sketch's status colours only once its frame is up; else the mode colour.
-      lm = sketch_anim ? Shared.led_mode : 0
+      lm = 0 # the knob LED follows the same rule as the bar: mode colour, pulse = busy
       if lm == LED_YELLOW
         rgb[0] = 48_u8; rgb[1] = 40_u8; rgb[2] = 0_u8
       elsif lm == LED_GREEN
@@ -1110,6 +1070,7 @@ def show_diag : Nil
   draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
   draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
+  draw_text(40, 370, "LED: STEADY = READY, PULSING = BUSY", EPD::BLACK, 3)
   draw_text(40, 420, "WINDOW TEST: PHOTO AT THE 12 S HOLD,", EPD::BLACK, 3)
   draw_text(40, 460, "THEN THE REFERENCE WITH TIMES", EPD::BLACK, 3)
   EPD.fast_pulls = 3
@@ -1523,9 +1484,13 @@ end
 
 # Sketch colour: redraw the frame with red, overlay the drawing, slow refresh.
 def sketch_colour : Nil
+  Shared.live = false
   sketch_background
   Sketch.render(EPD.black, EPD.red)
   draw_sketch_hint(false)
+  # Label with the R/B/O plane check + version also on the colour frame
+  # (and logged), so the colour render can be diagnosed from a photo.
+  draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
   ok = colour_refresh
   SkState.colour = ok
   SkState.red_frame = ok # stays on the panel until another screen replaces it
@@ -1698,6 +1663,7 @@ fun crystal_app_main : Void
     # The knob task turns Menu presses into Shared.target at once (and the
     # LEDs show it); render whatever the target is now, so several presses
     # during one render only draw the last screen.
+    Shared.live = false # set again at the bottom of the loop when idle in Sketch
     if Shared.target != scr
       scr = Shared.target
       Store.screen = scr
@@ -1855,6 +1821,7 @@ fun crystal_app_main : Void
     else
       Shared.led_mode = 0
     end
+    Shared.live = scr == SCR_SKETCH && !Shared.rendering? && Shared.target == scr
     LibIDF.cr_wait_notify(20_u32) # woken early by the knob task on input
   end
 end
