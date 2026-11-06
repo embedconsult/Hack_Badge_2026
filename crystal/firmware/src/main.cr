@@ -50,6 +50,7 @@ lib LibIDF
   fun cr_hello_png : UInt8*
   fun cr_hello_png_size : Int32
   fun cr_font5x7 : UInt8*
+  fun cr_version : UInt8* # "<git describe> <HH:MM>" (main/version.h)
   fun cr_atomic_or(p : UInt32*, v : UInt32) : UInt32
   fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
   fun cr_notify_main : Void
@@ -976,10 +977,25 @@ def window_test : Nil
   fast_bw(3, EPD::LUT_HALF60)
 end
 
+# Build version (git describe + build time), 5x7 font x2, right-aligned to
+# x_right with its top at y, on a white box.
+def draw_version(x_right : Int32, y : Int32) : Nil
+  v = LibIDF.cr_version
+  n = 0
+  while n < 40 && v[n] != 0_u8
+    n = n &+ 1
+  end
+  w = n &* 12
+  x = x_right &- w
+  EPD.fill_rect(x &- 4, y &- 4, w &+ 8, 7 &* 2 &+ 8, EPD::WHITE)
+  draw_bytes(x, y, v, n, EPD::BLACK, 2)
+end
+
 # DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
 def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
+  draw_version(EPD::WIDTH &- 12, 12)
   draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
   draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
@@ -1304,10 +1320,12 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   if scr == SCR_NAMETAG
     draw_nametag_planes
     red_to_checker
+    draw_version(EPD::WIDTH &- 8, EPD::HEIGHT &- 22) # preview only, not the colour image
     fast_bw(pulls, kind)
   elsif scr == SCR_PORTRAIT
     draw_portrait_planes
     red_to_checker
+    draw_version(EPD::WIDTH &- 8, EPD::HEIGHT &- 22)
     fast_bw(pulls, kind)
   elsif scr == SCR_DIAG
     show_diag

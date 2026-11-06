@@ -21,7 +21,8 @@
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/rmt_tx.h"
-#include "font5x7.h"  // from 2026-Billboard_Badge/firmware/esp32s3-itc97
+#include "font5x7.h"   // from 2026-Billboard_Badge/firmware/esp32s3-itc97
+#include "version.h"   // written by build.sh: git describe + build time
 
 // Tick rate exported for Crystal (configTICK_RATE_HZ is a macro).
 const uint32_t crystal_tick_rate_hz = configTICK_RATE_HZ;
@@ -97,8 +98,12 @@ static TaskHandle_t s_main_task;
 void cr_notify_main(void) { if (s_main_task) xTaskNotifyGive(s_main_task); }
 uint32_t cr_wait_notify(uint32_t ms) { return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms)); }
 
+// "<git describe> <HH:MM>" of this build.
+const char *cr_version(void) { return CR_VERSION; }
+
 void app_main(void)
 {
+    printf("crystal firmware %s\n", CR_VERSION);
     s_main_task = xTaskGetCurrentTaskHandle();
     // Give the Mac's RFC2217 bridge time to come back after a flash/reset,
     // so the start-up log is not lost.
