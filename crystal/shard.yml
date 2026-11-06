@@ -1,0 +1,13 @@
+name: badge
+version: 0.1.0
+
+authors:
+  - Jason Kridner <jkridner@beagleboard.org>
+
+description: |
+  Native Crystal firmware for the Hackaday Supercon 2026 Billboard Badge
+  (ESP32-S3), ported from the MicroPython code in this repository.
+
+crystal: '>= 1.16.0'
+
+license: MIT
