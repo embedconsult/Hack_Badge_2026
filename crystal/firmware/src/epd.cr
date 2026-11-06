@@ -190,6 +190,8 @@ module EPD
   @@keep_awake = false
   @@panel_ms = 0
   @@fast_pulls = B_REFRESH_PULLS
+  @@lut_clean = true     # fast LUT with the shake group (see build_lutb)
+  @@latched_clean = true
 
   def self.black : UInt8*
     @@black
@@ -213,6 +215,12 @@ module EPD
 
   def self.second_pass_ms=(v : Int32) : Nil
     @@second_pass_ms = v
+  end
+
+  # True if a fast refresh requested now would be run on the slow waveform
+  # (red on the panel has to be cleared first).
+  def self.fast_runs_slow? : Bool
+    @@prev_has_red
   end
 
   def self.panel_ms : Int32
@@ -759,7 +767,10 @@ module EPD
 
   # epd_build_lutb() with the epd97_config.h defaults: shake 1 group, drive 4
   # groups (45 on / 1 off x3), red 9 groups (first clears to white).
-  def self.build_lutb : Nil
+  # shake = false replaces the shake group with ground: unchanged pixels are
+  # then only pushed further towards the state they already have, so they
+  # do not visibly blink (game frames). Less clearing, so more ghosting.
+  def self.build_lutb(shake : Bool) : Nil
     t = 0
     while t < 5
       g = 0
@@ -767,6 +778,8 @@ module EPD
         q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
         red_level = g <= 1 ? 0xAA_u8 : 0xFF_u8
         if t == 4
+          put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
+        elsif g < 1 && !shake
           put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
         elsif g < 1
           shk = t == 1 ? 0x66_u8 : (t == 0 ? 0x99_u8 : (t == 2 ? 0xEE_u8 : 0x00_u8))
@@ -933,7 +946,7 @@ module EPD
     update_registers
     if fast
       if @@driver_b
-        build_lutb
+        build_lutb(@@lut_clean)
         send(BOTH, 0xB0_u8, @@lut, LUTB_BYTES)
       else
         build_lut8
@@ -951,7 +964,9 @@ module EPD
 
   # Push the frame buffers to the panel. Fast = short waveform (red drawn as
   # ink). Returns true on success; logs the phase timings.
-  def self.refresh(fast_req : Bool) : Bool
+  # clean = false uses the no-shake fast LUT (driver B), for game frames.
+  def self.refresh(fast_req : Bool, clean : Bool = true) : Bool
+    @@lut_clean = clean || !@@driver_b
     t_start = millis
     have_red = has_red?
     draw_red = have_red && !fast_req
@@ -961,7 +976,7 @@ module EPD
       fast = false
     end
 
-    if @@session_open && @@lut_latched && fast != @@latched_fast
+    if @@session_open && @@lut_latched && (fast != @@latched_fast || (fast && @@lut_clean != @@latched_clean))
       cog_stop
     end
     t_init = millis
@@ -988,6 +1003,7 @@ module EPD
     t_busy_end = millis
     @@panel_ms = rc
     @@latched_fast = fast
+    @@latched_clean = @@lut_clean
     @@lut_latched = rc >= 0 && fast
     @@prev_has_red = draw_red
     keep = @@keep_awake && @@lut_latched
@@ -995,6 +1011,7 @@ module EPD
     t_end = millis
 
     log2("EPD: refresh fast? / first-of-session?", fast ? 1 : 0, first ? 1 : 0)
+    log2("EPD:   clean lut? / pulls", @@lut_clean ? 1 : 0, pulls)
     log("EPD:   power-up + reset ms", t_up &- t_init)
     log("EPD:   upload ms", t_up_end &- t_up)
     log("EPD:   registers+soft start+waveform (pull 1) ms", t_ref_end &- t_up_end)

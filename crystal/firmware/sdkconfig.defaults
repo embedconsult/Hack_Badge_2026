@@ -7,3 +7,5 @@ CONFIG_SPIRAM_SPEED_80M=y
 # 1 tick = 1 ms, so the EPD driver's ms delays are exact.
 CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+# Crystal code runs on the main task (EPD, PNG, games): give it room.
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192

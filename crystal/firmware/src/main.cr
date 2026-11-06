@@ -230,8 +230,10 @@ fun crystal_knob_task(arg : Void*) : Void
     hue_r = mv_to_hue(mv_r, RIGHT_MV_LO, RIGHT_MV_HI)
     Shared.set_knobs(mv_l, mv_r, read_buttons)
     if Shared.leds_ready?
-      Pixel.hue(hue_l, LED_LEVEL, rgb)
-      Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
+      unless Shared.ch_l.null?
+        Pixel.hue(hue_l, LED_LEVEL, rgb)
+        Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
+      end
       Pixel.hue(hue_r, LED_LEVEL, rgb)
       Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
     end
@@ -326,37 +328,60 @@ def draw_name(first : String, last : String) : Nil
 end
 
 SPI_HZ      = 20_000_000
-SPEED_TEST  = true # boot-time 1-pull vs 3-pull fast refresh comparison
+SPEED_TEST  = false # boot-time 1-pull vs 3-pull fast refresh comparison
 GAME_PULLS  = 1    # waveform pulls per fast refresh in the game modes
+CLEAN_EVERY = 30   # game frames between clean (shaking, 3-pull) refreshes
 
 # Bring-up test for the knob WS2812s: left red, right blue for 10 s, then
 # off, with blocking transmits and a log line around every call. On success
 # the handles go to the knob task for the live hue display.
 def led_test : Nil
-  ch_l = Pointer(Void).null
-  enc_l = Pointer(Void).null
   ch_r = Pointer(Void).null
   enc_r = Pointer(Void).null
   buf = EPD.dma_alloc(4)
-  log("led: opening left pixel (GPIO42)", 0)
-  ok_l = Pixel.open(LED_LEFT, pointerof(ch_l), pointerof(enc_l))
+  # The left knob's pixel (GPIO42) never lit on the badge even though RMT
+  # reports success; parked, no RMT channel is created on GPIO42.
   log("led: opening right pixel (GPIO6)", 0)
-  ok_r = Pixel.open(LED_RIGHT, pointerof(ch_r), pointerof(enc_r))
-  unless ok_l && ok_r
-    log("led: open failed, LEDs disabled", 0)
+  unless Pixel.open(LED_RIGHT, pointerof(ch_r), pointerof(enc_r))
+    log("led: open failed, live LED disabled", 0)
     return
   end
-  log("led: left = red 50%", 0)
-  Pixel.show_blocking(ch_l, enc_l, buf, 128_u8, 0_u8, 0_u8)
-  log("led: right = blue 50%", 0)
+  log("led: right = blue 50% for 3 s", 0)
   Pixel.show_blocking(ch_r, enc_r, buf, 0_u8, 0_u8, 128_u8)
-  log("led: holding 10 s", 0)
-  delay_ms(10_000)
-  log("led: both off", 0)
-  Pixel.show_blocking(ch_l, enc_l, buf, 0_u8, 0_u8, 0_u8)
-  Pixel.show_blocking(ch_r, enc_r, buf, 0_u8, 0_u8, 0_u8)
-  log("led: test done, handing pixels to the knob task", 0)
-  Shared.set_leds(ch_l, enc_l, ch_r, enc_r)
+  delay_ms(3000)
+  Shared.set_leds(Pointer(Void).null, Pointer(Void).null, ch_r, enc_r)
+  log("led: right pixel handed to the knob task", 0)
+end
+
+def mode_name(m : Int32) : String
+  if m == Menu::SKETCH
+    "SKETCH"
+  elsif m == Menu::LIFE
+    "LIFE"
+  elsif m == Menu::SNAKE
+    "SNAKE"
+  else
+    "NAMETAG"
+  end
+end
+
+# Mode label in the top-left corner (5x7 font x4) on a white box.
+def draw_mode_label(m : Int32) : Nil
+  name = mode_name(m)
+  EPD.fill_rect(0, 0, text_width(name, 4) &+ 16, 7 &* 4 &+ 16, EPD::WHITE)
+  draw_text(8, 8, name, EPD::BLACK, 4)
+end
+
+# Large centred mode name, for the slow red-clearing refresh on mode entry.
+def draw_mode_banner(m : Int32) : Nil
+  name = mode_name(m)
+  scale = 16
+  w = text_width(name, scale)
+  h = 7 &* scale
+  x = (EPD::WIDTH &- w).unsafe_div(2)
+  y = (EPD::HEIGHT &- h).unsafe_div(2)
+  EPD.fill_rect(x &- 24, y &- 24, w &+ 48, h &+ 48, EPD::WHITE)
+  draw_text(x, y, name, EPD::BLACK, scale)
 end
 
 def show_nametag : Nil
@@ -411,6 +436,8 @@ fun crystal_app_main : Void
   EPD.fast_pulls = GAME_PULLS
   Menu.init(Menu::NAMETAG)
   prev = 0_u32
+  last_mode = Menu.mode
+  frames = 0
   while true
     held = Shared.take_buttons
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
@@ -420,10 +447,18 @@ fun crystal_app_main : Void
       log("menu: mode", Menu.mode)
       t = millis
       if Menu.render(EPD.black, EPD.red)
-        EPD.refresh(true)
+        draw_mode_label(Menu.mode)
+        draw_mode_banner(Menu.mode) if EPD.fast_runs_slow?
+        # Clean (shaking, 3-pull) refresh on mode entry and every CLEAN_EVERY
+        # frames; otherwise the no-shake LUT so unchanged cells stay still.
+        clean = Menu.mode != last_mode || frames >= CLEAN_EVERY
+        frames = clean ? 0 : frames &+ 1
+        EPD.fast_pulls = clean ? 3 : GAME_PULLS
+        EPD.refresh(true, clean)
       else
         show_nametag
       end
+      last_mode = Menu.mode
       log2("menu: mode / frame ms", Menu.mode, millis &- t)
     end
     delay_ms(20)

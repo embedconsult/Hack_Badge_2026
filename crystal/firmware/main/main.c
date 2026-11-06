@@ -69,6 +69,6 @@ void app_main(void)
     // so the start-up log is not lost.
     vTaskDelay(pdMS_TO_TICKS(4000));
     printf("app_main: starting tasks\n");
-    xTaskCreatePinnedToCore(crystal_knob_task, "knob", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(crystal_knob_task, "knob", 8192, NULL, 2, NULL, 1);
     crystal_app_main();
 }
