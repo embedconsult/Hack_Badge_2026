@@ -1,0 +1,38 @@
+#!/bin/sh
+# Build the Crystal blink firmware with ESP-IDF inside the Debian rootfs.
+#
+#   crystal/firmware/build.sh [idf.py args...]      (default: build merge-bin)
+#
+# The rootfs (ROOTFS, default /opt/debian) needs ESP-IDF at /opt/esp/esp-idf,
+# the /proc-free gcc shims at /opt/esp/shims and the patched compiler at
+# /opt/crystal-xtensa; see ../toolchain/README.md. The container can't
+# bind-mount, so sources are copied in and outputs copied back to ./build/.
+# The component manager is disabled: it uses psutil, which needs /proc.
+set -eu
+ROOTFS=${ROOTFS:-/opt/debian}
+HERE=$(cd "$(dirname "$0")" && pwd)
+WORK=/build/crystal-firmware            # path inside the rootfs
+[ $# -gt 0 ] || set -- build merge-bin
+
+mkdir -p "$ROOTFS$WORK"
+rm -rf "$ROOTFS$WORK/main" "$ROOTFS$WORK/src"
+cp -a "$HERE/CMakeLists.txt" "$HERE/sdkconfig.defaults" "$HERE/main" "$HERE/src" "$ROOTFS$WORK/"
+
+chroot "$ROOTFS" /usr/bin/env -i HOME=/root TERM=dumb LANG=C.UTF-8 \
+  PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  IDF_TARGET=esp32s3 IDF_COMPONENT_MANAGER=0 /bin/bash -c "
+    set -e
+    . /opt/esp/esp-idf/export.sh >/dev/null
+    # Espressif's xtensa-esp32s3-elf-* wrappers need /proc/self/exe; use shell shims.
+    export PATH=/opt/esp/shims:\$PATH
+    cd $WORK
+    idf.py $*
+  "
+
+mkdir -p "$HERE/build"
+B="$ROOTFS$WORK/build"
+for f in merged-binary.bin crystal_blink.bin crystal_blink.elf crystal_blink.map flash_args \
+         bootloader/bootloader.bin partition_table/partition-table.bin; do
+  [ -f "$B/$f" ] && cp "$B/$f" "$HERE/build/$(basename "$f")"
+done
+ls -l "$HERE/build"
