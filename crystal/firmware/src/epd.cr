@@ -974,6 +974,9 @@ module EPD
   # scans from row 0 to the box's last row (~1.72 ms per row and pull), and
   # it is the only mode that drew correctly on both COGs. Modes 0/1/3 write
   # through a DUW window, which lands at the wrong x / on the wrong COG.
+  # Mode 4 showed a copy of the top rows inside the refreshed band (label
+  # duplicated next to the snake, v6). Mode 5 is the candidate fix; DIAG B
+  # (window test v6) compares the two. Set back to 4 if 5 misbehaves.
   WIN_MODE = 4
   # Right COG's DRFW x counted from the other end (test hypothesis, v4).
   @@mirror_right = false
@@ -1082,7 +1085,9 @@ module EPD
   # 3 = ROWS ONLY: DUW and DRFW full width x the box rows, those rows
   #     uploaded at full width (x windows never land right, and only the
   #     row count affects the waveform time);
-  # 4 = DUW full + full upload, DRFW full width x the box rows.
+  # 4 = DUW full + full upload, DRFW full width x the box rows;
+  # 5 = DUW full + full upload, THEN DUW and DRFW set to full width x the
+  #     box rows with no further writes (DUW sets where the scan starts).
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
                            wmode : Int32 = WIN_MODE) : Int32
@@ -1133,7 +1138,7 @@ module EPD
       end
       x0 = w[0]
       x1 = w[1]
-      if wmode >= 3 # rows only: full width on every COG
+      if wmode >= 3 # rows only (3, 4, 5): full width on every COG
         x0 = 0
         x1 = HALF_BYTES &- 1
       end
@@ -1142,7 +1147,7 @@ module EPD
       rows_total = rows_total &+ (y1 &- y0 &+ 1)
       log2("EPD: window x0 x1 (bytes in half)", x0, x1)
       log2("EPD: window y0 y1 (rows)", y0, y1)
-      if wmode == 2 || wmode == 4
+      if wmode == 2 || wmode == 4 || wmode == 5
         send_otp_to(t, 0x13_u8, 0x16, 6) # DUW full
       else
         cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
@@ -1150,6 +1155,8 @@ module EPD
       end
       if wmode == 1
         send_otp_to(t, 0x90_u8, 0x0C, 4) # DRFW full
+      elsif wmode == 5
+        # DRFW (and the DUW rows) are set after the upload, below.
       else
         dx0 = x0
         dx1 = x1
@@ -1159,12 +1166,19 @@ module EPD
         end
         cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
       end
-      if wmode == 2 || wmode == 4
+      if wmode == 2 || wmode == 4 || wmode == 5
         send_otp_to(t, 0x12_u8, 0x13, 3)
         send_plane(t, 0x10_u8, @@black, Pointer(UInt8).null)
         send_otp_to(t, 0x12_u8, 0x13, 3)
         send_plane(t, 0x11_u8, @@red, Pointer(UInt8).null)
         @@red_zero = false
+        if wmode == 5
+          # No more writes: now narrow DUW to the rows (it sets where the
+          # scan starts) and DRFW to the same rows, both full width.
+          cmd(t, 0x13_u8, 6, 0_u8, (HALF_BYTES &- 1).to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
+            (y1 & 0xFF).to_u8!, y1.unsafe_shr(8).to_u8!)
+          cmd(t, 0x90_u8, 4, 0_u8, (HALF_BYTES &- 1).to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
+        end
       else
         send_otp_to(t, 0x12_u8, 0x13, 3)
         send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
