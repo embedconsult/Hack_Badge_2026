@@ -1014,6 +1014,12 @@ def draw_version(x_right : Int32, y : Int32) : Nil
   draw_bytes(x, y, v, n, EPD::BLACK, 2)
 end
 
+# "A: COLOR" hint, bottom-left of the B/W previews (x2 on a white box).
+def draw_colour_hint : Nil
+  EPD.fill_rect(4, EPD::HEIGHT &- 26, 8 &* 12 &+ 8, 7 &* 2 &+ 8, EPD::WHITE)
+  draw_text(8, EPD::HEIGHT &- 22, "A: COLOR", EPD::BLACK, 2)
+end
+
 # DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
 def show_diag : Nil
   EPD.fill(EPD::WHITE)
@@ -1024,9 +1030,9 @@ def show_diag : Nil
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 420, "WINDOW TEST: PHOTO AT THE 12 S HOLD,", EPD::BLACK, 3)
   draw_text(40, 460, "THEN THE REFERENCE WITH TIMES", EPD::BLACK, 3)
-  EPD.fast_pulls = 2
+  EPD.fast_pulls = 3
   EPD.raw = true
-  EPD.refresh(true, WIN_LUT) # same kind as every other preview: no COG restart
+  EPD.refresh(true, EPD::LUT_BASE) # static screen: clean (shaking) preview
   EPD.raw = false
 end
 
@@ -1390,18 +1396,23 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   # restart on the first frame). Static screens get 2 pulls (HALF60 erases
   # black -> white weakly), game screens 1 so they are usable at once.
   static_scr = scr == SCR_NAMETAG || scr == SCR_PORTRAIT || scr == SCR_DIAG
-  pulls = boot ? 3 : (static_scr ? 2 : 1)
-  kind = WIN_LUT
+  pulls = boot ? 3 : (static_scr ? 3 : 1)
+  # Static screens: base LUT (with its shake) x3 so the B/W preview of a
+  # dithered image comes out clean (no-shake previews never cleaned up). It
+  # costs one COG restart when coming from a game; the screen is static.
+  kind = static_scr ? EPD::LUT_BASE : WIN_LUT
   log2("main: screen / boot", scr, boot ? 1 : 0)
   if scr == SCR_NAMETAG
     draw_nametag_planes
     red_to_checker
     draw_version(EPD::WIDTH &- 8, EPD::HEIGHT &- 22) # preview only, not the colour image
+    draw_colour_hint
     fast_bw(pulls, kind)
   elsif scr == SCR_PORTRAIT
     draw_portrait_planes
     red_to_checker
     draw_version(EPD::WIDTH &- 8, EPD::HEIGHT &- 22)
+    draw_colour_hint
     fast_bw(pulls, kind)
   elsif scr == SCR_DIAG
     show_diag
