@@ -186,7 +186,7 @@ module EPD
   @@session_open = false
   @@lut_latched = false
   @@latched_fast = false
-  @@prev_has_red = false
+  @@prev_has_red = true # unknown at cold boot: assume red, so the first fast refresh runs slow
   @@keep_awake = false
   @@panel_ms = 0
 
@@ -893,8 +893,10 @@ module EPD
     cmd1(0x02_u8, @@otp[0x11]) # VCOM
   end
 
-  # 0x15 and wait for the waveform; returns panel ms or -1.
-  def self.trigger : Int32
+  # 0x15 and wait for the waveform; returns panel ms or -1. `watch` keeps
+  # looking for a second BUSY pass (epd97.cpp does this after every first
+  # refresh; it costs EPD_SECOND_PASS_MS and has not fired on this panel).
+  def self.trigger(watch : Bool) : Int32
     cmd1(0x15_u8, 0x3C_u8)
     if wait_busy(false, 2000) < 0
       log("EPD: BUSY never went low after 0x15", 0)
@@ -903,7 +905,7 @@ module EPD
     w = wait_busy(true, 180_000)
     return -1 if w < 0
     # Some panels drop BUSY again for a second pass; watch for it.
-    if @@second_pass_ms > 0
+    if watch && @@second_pass_ms > 0
       t0 = millis
       while millis &- t0 < @@second_pass_ms
         delay_ms(10)
@@ -937,7 +939,7 @@ module EPD
       r = wait_busy(true, 10_000)
       log("EPD: booster ready after soft start ms (-1 = timeout)", r)
     end
-    trigger
+    trigger(!fast) # the slow (OTP) waveform is where a second pass could occur
   end
 
   # Push the frame buffers to the panel. Fast = short waveform (red drawn as
@@ -966,12 +968,12 @@ module EPD
     t_up_end = millis
 
     first = !@@lut_latched
-    rc = first ? do_refresh(fast) : trigger
+    rc = first ? do_refresh(fast) : trigger(false)
     t_ref_end = millis
     pulls = 1
     if rc >= 0 && fast && @@driver_b
       while rc >= 0 && pulls < B_REFRESH_PULLS
-        r = trigger
+        r = trigger(false)
         rc = r < 0 ? r : rc &+ r
         pulls = pulls &+ 1
       end

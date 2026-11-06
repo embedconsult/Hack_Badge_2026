@@ -59,3 +59,28 @@ Sources compared:
   `data/rendered_luts.py`; driver "B" = 400 bytes, driver "8" = 180 bytes), multiple `15 3C` refreshes per upload,
   pre-flash of solid black/white frames, periodic full refresh. Py-up's ~6 s update is this fast path, not the OTP waveform.
 - Sequence bytes, delays and the soft-start ramp are otherwise identical across all three.
+
+## The sequence actually used: Hackaday's esp32s3-itc97 driver (epd97.cpp)
+`/work/2026-Billboard_Badge/firmware/esp32s3-itc97` is the primary reference (an ESP32-S3 driver for exactly this panel).
+It differs from the PDi/Python sequence above in several ways:
+- **Panel power**: GPIO48 = EPD_PWR_ENABLE drives the gate of Q2 (SK2301 P-FET; source +3V3, drain VCC_EPD), with no
+  pull resistor. **LOW = panel powered.** Parked HIGH before the pin is made an output, then driven LOW 800 ms before the reset.
+  MicroPython never drives it (it floats; the panel works by luck).
+- **Reset**: power on, 800 ms, RST=1, 50, RST=0, 100, RST=1, 400 ms. A second RST pulse (50/100/400) follows the OTP read.
+- **OTP read** (bitbanged at ~50 kHz, MOSI turned around as input with pull-down, master CS only):
+  driver B: `70 71 36` to both, then index `B9`; driver 8: `A1 00`, `A7 80`, `A3 00 40`, then `A8`. 1 dummy byte + 88 bytes.
+  B is detected by `otp[0x16]==0x3B && otp[0x0D]==0x3B && otp[0x28]&0x80` and remapped into the driver-8 layout.
+  **Our badge: E2969JS0B1 (driver B).** OTP TCON byte = 0x25 (same as the Python's hard-coded value).
+- **Planes**: `01 otp[0x10]` (B only), DUW `13` = otp[0x16..0x1B], DRFW `90` = otp[0x0C..0x0F], RAM_RW `12` = otp[0x13..0x15],
+  then `10` black and `11` red. **No bit reversal**: MSB = leftmost pixel. (The Python's reversal pairs with its own fixed registers.)
+  epd97.cpp interleaves 60 bytes master / 60 bytes slave per line; we send each COG its whole half (same as PDi/Python) so DMA can do big chunks.
+- **Update registers** (to both COGs): wait 660 ms; `05 7D` 200 ms; `05 00` 10 ms; [`C2 3F` driver 8]; `D8 otp[1D]`; `D6 otp[1E]`;
+  `A7 10` 100; `A7 00` 100; [`03 00 otp[12]` driver 8]; `44 00`; `45 80`; `A7 10` 100; `A7 00` 100; `44 06`; `45 84` (B) / `86` (8);
+  `A7 10` 100; `A7 00` 500 ms; `60 otp[0B]`; `61 otp[1C]` (both COGs); [`01 otp[10]` driver 8]; `02 otp[11]`.
+- **Fast**: 400-byte (B) / 180-byte (8) table to `B0` after the registers, before the soft start.
+- **DC/DC soft start** is driven by the 4 OTP ramp stages (8 bytes each at 0x20), not the hard-coded PDi ramp.
+- **Refresh**: 100 ms, wait BUSY idle (10 s), `15 3C`, wait BUSY low (2 s), wait idle; epd97.cpp then watches 1 s for a second pass.
+  Driver B fast = 3 pulls of `15 3C` (each ~1.16 s fixed). In a kept-open session later images only need planes + `15 3C`.
+- **Stop**: `09 7F`, 20 ms, `05 7D`, `09 00`, 200 ms, DC=0, CS=0, 150 ms, RST=0, power off, 300 ms, CS=1, RST=1.
+  Supply must stay off >= 1500 ms before the next power-up.
+- Fast refresh cannot draw red: red is OR'ed into black, red plane sent as zeros. A fast refresh after a red frame is run slow.

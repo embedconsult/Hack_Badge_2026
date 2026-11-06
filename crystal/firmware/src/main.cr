@@ -145,7 +145,7 @@ def draw_pattern(frame : Int32, red : Bool) : Nil
   EPD.fill_rect(280 &+ frame &* 80, 280, 160, 112, EPD::BLACK)
 end
 
-SPI_HZ = 8_000_000
+SPI_HZ = 20_000_000
 
 fun crystal_app_main : Void
   log("main: EPD demo, SPI Hz", SPI_HZ)
@@ -156,21 +156,22 @@ fun crystal_app_main : Void
   end
   log("main: EPD init (incl. OTP probe) ms", millis &- t)
 
-  # 1. Slow (OTP waveform) refresh: the only mode that draws red.
-  t = millis
-  draw_pattern(0, true)
-  log("main: draw ms", millis &- t)
-  EPD.refresh(false)
-
-  # 2..4. Fast refreshes, session kept open between them. The first one
-  # follows a red frame, so the driver promotes it to a slow refresh.
+  # 1..3: fast refreshes (black/white), session kept open between them. What
+  # is on the panel at boot is unknown, so the driver runs the first one on
+  # the slow waveform to clear any red.
   EPD.keep_awake = true
   frame = 1
   while frame <= 3
+    t = millis
     draw_pattern(frame, false)
+    log2("main: frame / draw ms", frame, millis &- t)
     EPD.refresh(true)
+    log2("main: frame / done at ms since boot", frame, millis)
     frame = frame &+ 1
   end
-  EPD.cog_stop
-  log("main: done", 0)
+
+  # 4: slow (OTP waveform) refresh with red stripes; it stays on the panel.
+  draw_pattern(0, true)
+  EPD.refresh(false)
+  log2("main: frame / done at ms since boot (final, red)", 4, millis)
 end
