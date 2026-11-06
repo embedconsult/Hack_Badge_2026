@@ -6,11 +6,13 @@
 #   Menu.init
 #   loop: inp = Games.input(mv_l, mv_r, held, prev_held)
 #         if Menu.tick(millis, inp)
-#           if Menu.needs_background?             # Sketch: frame PNG
-#             PNG.draw(sketch_frame_png, ..., EPD.black, EPD.red, ...)
+#           if Menu.needs_background?             # Sketch: Etch frame
+#             Sketch.prep_background(EPD.black, EPD.red)
+#             PNG.draw(etch_png, ..., EPD.black, EPD.red, ...)
 #           if Menu.render(EPD.black, EPD.red)   # false => Nametag
 #             Menu.want_clean? ? fast refresh with cleaning flash
-#                              : fast 1-pass B/W refresh
+#             : Sketch.dirty_box(...) (Sketch mode) ? partial B/W window
+#             : fast 1-pass B/W refresh
 #           else draw the nametag and do a full colour refresh
 
 require "./common"
