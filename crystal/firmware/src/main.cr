@@ -336,6 +336,8 @@ fun crystal_knob_task(arg : Void*) : Void
   bar_key = -1   # last indicator frame sent (target * 2 + pulse phase)
   prev_btns = 0_u32
   last_menu = 0
+  was_working = false
+  ready_until = 0
   log("knob: loop starting", 0)
   on = false
   raw_l = 0
@@ -387,14 +389,35 @@ fun crystal_knob_task(arg : Void*) : Void
     # once done. In Sketch, once its frame is up, Sketch.led_frame takes over.
     tgt = Shared.target
     working = Shared.rendering? || Shared.screen != tgt || EPD.busy?
+    # "Ready" signal: when a game screen (Sketch / Life / Snake) finishes
+    # rendering, the whole bar flashes green twice before the normal display.
+    if was_working && !working && (tgt == SCR_SKETCH || tgt == SCR_LIFE || tgt == SCR_SNAKE)
+      ready_until = now_ms &+ 800
+    end
+    was_working = working
+    ready_flash = now_ms &- ready_until < 0
     pulse_dim = working && (now_ms.unsafe_div(250) & 1) == 1
-    sketch_anim = Shared.screen == SCR_SKETCH && tgt == SCR_SKETCH && !Shared.rendering?
+    sketch_anim = Shared.screen == SCR_SKETCH && tgt == SCR_SKETCH && !Shared.rendering? && !ready_flash
     mode_rgb(tgt, rgb)
     shift = pulse_dim ? BAR_SHIFT &+ 2 : BAR_SHIFT
     ind_r = rgb[0].unsafe_shr(shift)
     ind_g = rgb[1].unsafe_shr(shift)
     ind_b = rgb[2].unsafe_shr(shift)
-    if bar_ok
+    if bar_ok && ready_flash
+      on_phase = ((ready_until &- now_ms).unsafe_div(200) & 1) == 1
+      key = on_phase ? -2 : -3
+      if key != bar_key
+        Pixel.wait(bar_ch)
+        i = 0
+        while i < 24
+          bar_buf[i] = (on_phase && (i.unsafe_mod(3) == 0)) ? 48_u8 : 0_u8 # G only
+          i = i &+ 1
+        end
+        bar_ok = false if Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24) != 0
+        bar_key = key
+      end
+      bar_scr = -1
+    elsif bar_ok
       if sketch_anim
         Sketch.led_invalidate unless bar_scr == SCR_SKETCH
         if Sketch.led_frame(now_ms, EPD.busy?, bar_cols)
@@ -707,10 +730,16 @@ def draw_mode_label(m : Int32, wait : Int32, up : Int32, panel : Int32, total : 
   n = put_field(buf, n, panel, false)
   n = put_field(buf, n, total, false)
   w = text_width(name, 4) &+ n &* 6 &* 4
-  EPD.fill_rect(0, 0, w &+ 16, LABEL_H, EPD::WHITE)
+  help = m == Menu::LIFE ? "A: RESEED  B: PAUSE  KNOBS: DENSITY/SPEED" : (m == Menu::SNAKE ? "KNOB/B: TURN  A: RESTART" : "")
+  hx = 8 &+ w &+ 16
+  hw = help.bytesize &* 12
+  hw = 0 if hx &+ hw > EPD::WIDTH # no room: label only
+  EPD.fill_rect(0, 0, hx &+ hw &+ 8, LABEL_H, EPD::WHITE)
   draw_text(8, 8, name, EPD::BLACK, 4)
   draw_bytes(8 &+ name.bytesize &* 6 &* 4, 8, buf, n, EPD::BLACK, 4)
-  Shared.label_bytes = (w &+ 16 &+ 7).unsafe_div(8)
+  draw_text(hx, 14, help, EPD::BLACK, 2) if hw > 0
+  # restore_label keeps label and help strip on non-clean frames
+  Shared.label_bytes = (hx &+ hw &+ 8 &+ 7).unsafe_div(8)
 end
 
 LABEL_H = 7 * 4 + 16
@@ -865,6 +894,12 @@ SK_H  = Sketch::Y_MAX - Sketch::Y_MIN + 13
 # never driven: area black, area white, then the frame (3 pulls). Raw planes
 # with the keep-red LUT: red pixels select ground-only tables.
 def sketch_clean(kind : Int32) : Nil
+  Shared.rendering = true # busy: LED pulses, input waits
+  sketch_clean_frames(kind)
+  Shared.rendering = false
+end
+
+def sketch_clean_frames(kind : Int32) : Nil
   save = SketchFx.save_buf
   i = 0
   while i < EPD::PLANE
@@ -1063,8 +1098,8 @@ end
 
 # "A: COLOR" hint, bottom-left of the B/W previews (x2 on a white box).
 def draw_colour_hint : Nil
-  EPD.fill_rect(4, EPD::HEIGHT &- 26, 20 &* 12 &+ 8, 7 &* 2 &+ 8, EPD::WHITE)
-  draw_text(8, EPD::HEIGHT &- 22, "A: COLOR (AUTO 30 S)", EPD::BLACK, 2)
+  EPD.fill_rect(4, EPD::HEIGHT &- 26, 36 &* 12 &+ 8, 7 &* 2 &+ 8, EPD::WHITE)
+  draw_text(8, EPD::HEIGHT &- 22, "HOLD A: COLOR (AUTO 30S)  MENU: NEXT", EPD::BLACK, 2)
 end
 
 # DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
@@ -1130,7 +1165,7 @@ SCR_LIFE     = 3
 SCR_SNAKE    = 4
 SCR_DIAG     = 5
 SCR_COUNT    = 6
-HOLD_MS      = 1000 # Sketch: hold User B this long for the colour refresh
+HOLD_MS      = 1000 # hold User A this long for the colour refresh
 AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this long idle
 
 # Fast LUT for frames over Sketch's red frame: red tables must be ground so
@@ -1141,10 +1176,12 @@ end
 
 SK_HINT_Y = Sketch::Y_MAX - 22
 
-# "B: COLOR (AUTO 30 S)" at the bottom of Sketch's white area (B/W mode).
-def draw_sketch_hint(on : Bool) : Nil
-  EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 2, 20 &* 12 &+ 8, 7 &* 2 &+ 6, EPD::WHITE)
-  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y, "B: COLOR (AUTO 30 S)", EPD::BLACK, 2) if on
+# Help strip at the bottom of Sketch's white area; `ready` adds the
+# "READY" line (entry frame only, removed on the first stroke).
+def draw_sketch_hint(ready : Bool) : Nil
+  EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 20, 46 &* 12 &+ 8, 2 &* 7 &* 2 &+ 10, EPD::WHITE)
+  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y &- 18, "KNOBS: DRAW  A: ERASE  B: CLEAN  HOLD A: COLOR", EPD::BLACK, 2)
+  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y, "READY - TURN KNOBS TO DRAW (COLOR: AUTO 30S)", EPD::BLACK, 2) if ready
 end
 
 module Store
@@ -1473,6 +1510,7 @@ def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Ni
   end
   Menu.render(EPD.black, EPD.red) # only clears red under ink; red plane stays empty
   draw_sketch_label(wait, up, panel, total)
+  draw_sketch_hint(false)
   Shared.led_mode = LED_CYAN
   if Menu.want_clean?
     EPD.raw = true
@@ -1487,6 +1525,7 @@ end
 def sketch_colour : Nil
   sketch_background
   Sketch.render(EPD.black, EPD.red)
+  draw_sketch_hint(false)
   ok = colour_refresh
   SkState.colour = ok
   SkState.red_frame = ok # stays on the panel until another screen replaces it
@@ -1617,29 +1656,33 @@ fun crystal_app_main : Void
   pr = Shared.mv_r
   colour_shown = false # NAMETAG/PORTRAIT: its colour image is on the panel
   colour_due = millis &+ AUTO_COLOUR_MS
-  b_down = 0      # Sketch: when User B went down (0 = up)
-  b_fired = false # Sketch: the hold already triggered the colour refresh
+  a_down = 0      # when User A went down (0 = up)
+  a_fired = false # the hold already fired (no tap on release)
   while true
     held = Shared.take_buttons
     now = millis
     raw_held = held
-    # Sketch: User B is short (clean, passed on at release) or held (colour).
-    if scr == SCR_SKETCH
-      inject = false
-      if (held & Games::BTN_B) != 0_u32
-        b_down = now if b_down == 0
-        if !b_fired && now &- b_down >= HOLD_MS
-          b_fired = true
-          log("sketch: B held, colour refresh", 0)
-          sketch_colour
-        end
-      elsif b_down != 0
-        inject = !b_fired
-        b_down = 0
-        b_fired = false
+    # User A, the same on every screen: a TAP is delivered on release (so a
+    # hold never also taps); a HOLD of HOLD_MS is the full-colour render on
+    # NAMETAG / PORTRAIT / SKETCH. B passes straight through.
+    a_tap = false
+    a_hold = false
+    if (held & Games::BTN_A) != 0_u32
+      a_down = now if a_down == 0
+      if !a_fired && now &- a_down >= HOLD_MS
+        a_fired = true
+        a_hold = true
       end
-      held = held & (Games::BTN_B ^ 0xFFFFFFFF_u32)
-      held = held | Games::BTN_B if inject
+    elsif a_down != 0
+      a_tap = !a_fired
+      a_down = 0
+      a_fired = false
+    end
+    held = held & (Games::BTN_A ^ 0xFFFFFFFF_u32)
+    held = held | Games::BTN_A if a_tap
+    if a_hold && scr == SCR_SKETCH
+      log("sketch: A held, colour refresh", 0)
+      sketch_colour
     end
     held = held & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) # Menu: knob task
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
@@ -1673,7 +1716,7 @@ fun crystal_app_main : Void
       # screen's colour image is still on the panel.
       colour_due = now &+ AUTO_COLOUR_MS if raw_held != 0_u32
       auto = !colour_shown && now &- colour_due >= 0
-      if Games.pressed?(inp, Games::BTN_A) || auto
+      if a_hold || auto
         log("main: colour refresh (1 = auto)", auto ? 1 : 0)
         if scr == SCR_NAMETAG
           draw_nametag_planes
