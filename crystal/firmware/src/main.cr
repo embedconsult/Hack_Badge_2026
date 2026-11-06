@@ -826,15 +826,18 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration v4 (DIAG, User B). Full planes uploaded every step;
-# only the refresh window (DRFW) is set, same rows on both COGs. From a white
-# screen, each step adds a marker and refreshes only its window:
-#   V1 left     x200 y200  1 pull
-#   V2 right    x650 y400  1 pull, right DRFW x as is
-#   V3 across   x420 y300  1 pull
-#   V4 right    x700 y120  1 pull, right DRFW x MIRRORED (59 - x)
-#   V5 left     x200 y480  3 pulls
+# Window calibration v5 (DIAG, User B). HALF60 LUT, 1 pull. From a white
+# screen, each step adds a marker and refreshes only through a window:
+#   V1 left    x200 y200  mode 3: rows only (DUW+DRFW full width, box rows,
+#                         rows uploaded) - both COGs refresh those rows
+#   V2 right   x650 y400  mode 3
+#   V3 across  x420 y300  mode 3
+#   V4 right   x700 y120  mode 4: full upload, DUW full, DRFW full width x
+#                         box rows (does the scan then start at row 0?)
+#   V5 left    x200 y480  mode 3, 3 pulls (drive comparison)
 # Holds 12 s (photo), then the reference with each step's panel ms.
+# Expected times at ~1.72 ms per scanned row: mode 3 ~ (rows) x 1.72,
+# mode 4 ~ (last row + 1) x 1.72 if the scan starts at row 0.
 def wt_pos(i : Int32, x : Bool) : Int32
   if x
     i == 0 ? 200 : (i == 1 ? 650 : (i == 2 ? 420 : (i == 3 ? 700 : 200)))
@@ -846,9 +849,9 @@ end
 WT_STEPS = 5
 
 def window_test : Nil
-  log("wtest v4: white base", 0)
+  log("wtest v5: white base", 0)
   EPD.fill(EPD::WHITE)
-  fast_bw(3, GAME_LUT)
+  fast_bw(3, EPD::LUT_HALF60)
   times = Shared.times_buf
   i = 0
   while i < WT_STEPS
@@ -858,16 +861,9 @@ def window_test : Nil
     c0 = x.unsafe_shr(3)
     c1 = (x &+ 119).unsafe_shr(3)
     EPD.fast_pulls = i == 4 ? 3 : 1
-    EPD.mirror_right = i == 3
-    log2("wtest: step / mirror_right", i &+ 1, i == 3 ? 1 : 0)
-    if i == 2
-      EPD.refresh_window2(y, y &+ 79, c0, c1, y, y &+ 79, c0, c1, GAME_LUT)
-    elsif c1 < EPD::HALF_BYTES
-      EPD.refresh_window2(y, y &+ 79, c0, c1, 1, 0, 120, -1, GAME_LUT)
-    else
-      EPD.refresh_window2(1, 0, 120, -1, y, y &+ 79, c0, c1, GAME_LUT)
-    end
-    EPD.mirror_right = false
+    mode = i == 3 ? 4 : 3
+    log2("wtest: step / mode", i &+ 1, mode)
+    EPD.refresh_window2(y, y &+ 79, c0, c1, y, y &+ 79, c0, c1, EPD::LUT_HALF60, mode)
     times[i] = EPD.panel_ms
     delay_ms(1500)
     i = i &+ 1
@@ -886,8 +882,8 @@ def window_test : Nil
     draw_bytes(wt_pos(i, true), wt_pos(i, false) &+ 84, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 620, "REF v4: DRFW ONLY. V4 = RIGHT X MIRRORED. V5 3 PULLS", EPD::BLACK, 2)
-  fast_bw(3, GAME_LUT)
+  draw_text(40, 620, "REF v5: HALF60. ROWS-ONLY WINDOWS. V4 DUW FULL. V5 3 PULLS", EPD::BLACK, 2)
+  fast_bw(3, EPD::LUT_HALF60)
 end
 
 # DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
@@ -895,7 +891,7 @@ def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: WINDOW TEST v4 (~30 S)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: WINDOW TEST v5 (~30 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 420, "WINDOW TEST: PHOTO AT THE 12 S HOLD,", EPD::BLACK, 3)
   draw_text(40, 460, "THEN THE REFERENCE WITH TIMES", EPD::BLACK, 3)

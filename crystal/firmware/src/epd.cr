@@ -838,8 +838,27 @@ module EPD
   # slow refresh already put on the panel.
   LUT_KEEPRED         = 4 # shake + drive on tables 0/1
   LUT_NOSHAKE_KEEPRED = 5
+  # HALF60 (panel-speed branch, 885d589): 0x44 ink / 0xAA paper in all 10
+  # groups, 1/1/1 x1 in every table. A group lasts as long as its shortest
+  # table (VCOM included), so this is as long as one BASE pull but turns
+  # white solid black in ONE pull. Red tables ground.
+  LUT_HALF60          = 6
 
   def self.build_lutb(kind : Int32) : Nil
+    if kind == LUT_HALF60
+      t = 0
+      while t < 5
+        g = 0
+        while g < 10
+          q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
+          lvl = t == 1 ? 0x44_u8 : (t == 0 ? 0xAA_u8 : 0x00_u8)
+          put_group_b(q, lvl, 1_u8, 1_u8, 1_u8) # put_group_b writes ph2 = 1
+          g = g &+ 1
+        end
+        t = t &+ 1
+      end
+      return
+    end
     shake = kind == LUT_BASE || kind == LUT_BW || kind == LUT_KEEPRED
     bw = kind == LUT_BW || kind == LUT_NOSHAKE_BW
     keepred = kind == LUT_KEEPRED || kind == LUT_NOSHAKE_KEEPRED
@@ -950,6 +969,7 @@ module EPD
   # default the full planes are uploaded (66 ms) and only DRFW is windowed;
   # the waveform time still shrinks with the DRFW rows.
   WIN_FULL_UPLOAD = true
+  WIN_MODE = 3 # default window mode (rows only, see refresh_window2)
   # Right COG's DRFW x counted from the other end (test hypothesis, v4).
   @@mirror_right = false
 
@@ -1051,12 +1071,16 @@ module EPD
 
   # Window refresh with a separate box per COG half: left rows lr0..lr1,
   # frame bytes lc0..lc1; right likewise (empty box: lr1 < lr0).
-  # wmode (DIAG calibration): 0 = DUW and DRFW both set to the box (normal);
+  # wmode (DIAG calibration): 0 = DUW and DRFW both set to the box;
   # 1 = DUW box + box upload, DRFW full screen (shows where RAM writes land);
-  # 2 = DUW full + full upload, DRFW box (shows where the refresh window lands).
+  # 2 = DUW full + full upload, DRFW box (shows where the refresh window lands);
+  # 3 = ROWS ONLY: DUW and DRFW full width x the box rows, those rows
+  #     uploaded at full width (x windows never land right, and only the
+  #     row count affects the waveform time);
+  # 4 = DUW full + full upload, DRFW full width x the box rows.
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
-                           wmode : Int32 = (WIN_FULL_UPLOAD ? 2 : 0)) : Int32
+                           wmode : Int32 = WIN_MODE) : Int32
     @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
       @@raw = true
@@ -1104,12 +1128,16 @@ module EPD
       end
       x0 = w[0]
       x1 = w[1]
+      if wmode >= 3 # rows only: full width on every COG
+        x0 = 0
+        x1 = HALF_BYTES &- 1
+      end
       y0 = a0
       y1 = a1
       rows_total = rows_total &+ (y1 &- y0 &+ 1)
       log2("EPD: window x0 x1 (bytes in half)", x0, x1)
       log2("EPD: window y0 y1 (rows)", y0, y1)
-      if wmode == 2
+      if wmode == 2 || wmode == 4
         send_otp_to(t, 0x13_u8, 0x16, 6) # DUW full
       else
         cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
@@ -1126,7 +1154,7 @@ module EPD
         end
         cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
       end
-      if wmode == 2
+      if wmode == 2 || wmode == 4
         send_otp_to(t, 0x12_u8, 0x13, 3)
         send_plane(t, 0x10_u8, @@black, Pointer(UInt8).null)
         send_otp_to(t, 0x12_u8, 0x13, 3)
