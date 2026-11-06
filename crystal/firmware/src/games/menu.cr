@@ -6,8 +6,11 @@
 #   Menu.init
 #   loop: inp = Games.input(mv_l, mv_r, held, prev_held)
 #         if Menu.tick(millis, inp)
+#           if Menu.needs_background?             # Sketch: frame PNG
+#             PNG.draw(sketch_frame_png, ..., EPD.black, EPD.red, ...)
 #           if Menu.render(EPD.black, EPD.red)   # false => Nametag
-#             fast B/W refresh
+#             Menu.want_clean? ? fast refresh with cleaning flash
+#                              : fast 1-pass B/W refresh
 #           else draw the nametag and do a full colour refresh
 
 require "./common"
@@ -33,6 +36,16 @@ module Menu
   # Nametag uses the slow full-colour refresh; the games use fast B/W.
   def self.full_color? : Bool
     @@mode == NAMETAG
+  end
+
+  # Sketch only: decode sketch_frame.png into the planes before render.
+  def self.needs_background? : Bool
+    @@mode == SKETCH && ok? && Sketch.needs_background?
+  end
+
+  # Sketch only: this refresh should use the cleaning flash. Call after render.
+  def self.want_clean? : Bool
+    @@mode == SKETCH && ok? && Sketch.want_clean?
   end
 
   # false if a game's allocation failed (that game then stays inert).

@@ -50,6 +50,8 @@ lib LibIDF
   fun cr_hello_png : UInt8*
   fun cr_hello_png_size : Int32
   fun cr_font5x7 : UInt8*
+  fun cr_portrait_png : UInt8*
+  fun cr_portrait_png_size : Int32
 end
 
 require "./epd"
@@ -338,6 +340,9 @@ SPI_HZ      = 20_000_000
 SPEED_TEST  = false # boot-time 1-pull vs 3-pull fast refresh comparison
 GAME_PULLS  = 1    # waveform pulls per fast refresh in the game modes
 CLEAN_EVERY = 30   # game frames between clean (shaking, 3-pull) refreshes
+GAME_LUT    = EPD::LUT_NOSHAKE_BW
+LUT_TIMING  = true # boot: time one pull of each fast LUT kind, show results on the panel
+LUT_PROBE   = false # boot-time experiment: which (red, bw) pairs select which table
 
 # Bring-up test for the knob WS2812s: left red, right blue for 10 s, then
 # off, with blocking transmits and a log line around every call. On success
@@ -421,19 +426,39 @@ def draw_bytes(x : Int32, y : Int32, buf : UInt8*, n : Int32, color : Int32, sca
   x
 end
 
-# Mode label in the top-left corner (5x7 font x4) on a white box, followed by
-# "<pulls>P <ms>MS" for the previous frame, so a video shows the timing.
-def draw_mode_label(m : Int32, pulls : Int32, last_ms : Int32) : Nil
-  name = mode_name(m)
+def short_name(m : Int32) : String
+  if m == Menu::SKETCH
+    "SK"
+  elsif m == Menu::LIFE
+    "LIFE"
+  elsif m == Menu::SNAKE
+    "SNAKE"
+  else
+    "TAG"
+  end
+end
+
+# Appends "/<v>" (or "<v>" when first) to buf at n; returns the new length.
+def put_field(buf : UInt8*, n : Int32, v : Int32, first : Bool) : Int32
+  unless first
+    buf[n] = 0x2F_u8 # '/'
+    n = n &+ 1
+  end
+  n &+ put_decimal(buf + n.to_i64!, v)
+end
+
+# Top-left label (5x7 font x4 on a white box) with the previous frame's
+# timing, since reading the console resets the chip:
+#   "SK wait/upload/panel/total" in ms, wait = last input -> refresh start.
+def draw_mode_label(m : Int32, wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
+  name = short_name(m)
   buf = Shared.label_buf
-  n = 0
-  buf[n] = 0x20_u8; n = n &+ 1
-  n = n &+ put_decimal(buf + n.to_i64!, pulls)
-  buf[n] = 0x50_u8; n = n &+ 1 # P
-  buf[n] = 0x20_u8; n = n &+ 1
-  n = n &+ put_decimal(buf + n.to_i64!, last_ms)
-  buf[n] = 0x4D_u8; n = n &+ 1 # M
-  buf[n] = 0x53_u8; n = n &+ 1 # S
+  buf[0] = 0x20_u8
+  n = 1
+  n = put_field(buf, n, wait, true)
+  n = put_field(buf, n, up, false)
+  n = put_field(buf, n, panel, false)
+  n = put_field(buf, n, total, false)
   w = text_width(name, 4) &+ n &* 6 &* 4
   EPD.fill_rect(0, 0, w &+ 16, 7 &* 4 &+ 16, EPD::WHITE)
   draw_text(8, 8, name, EPD::BLACK, 4)
@@ -486,6 +511,90 @@ def speed_test : Nil
   log("speed: done", 0)
 end
 
+# White base (clean 3-pull fast refresh of a blank frame).
+def probe_white : Nil
+  EPD.raw = false
+  EPD.probe = -1
+  EPD.fast_pulls = 3
+  EPD.fill(EPD::WHITE)
+  EPD.refresh(true, EPD::LUT_BASE)
+end
+
+# For k = 0..3: white base, then one 1-pull refresh with the planes as
+# quadrants (bw bit set on the LEFT half, red bit set on the TOP half) and a
+# LUT that drives only table k black. The quadrants that darken are the
+# (red, bw) pairs that select table k:
+#   top-left (1,1)  top-right (1,0)  bottom-left (0,1)  bottom-right (0,0)
+def lut_probe : Nil
+  EPD.keep_awake = true
+  log("probe: white base (runs slow first if red is on the panel)", 0)
+  probe_white
+  k = 0
+  while k < 4
+    probe_white
+    EPD.fill(EPD::WHITE)
+    i = 0
+    while i < EPD::PLANE
+      col = i.unsafe_mod(EPD::ROW_BYTES)
+      row = i.unsafe_div(EPD::ROW_BYTES)
+      EPD.black[i] = col < 60 ? 0xFF_u8 : 0x00_u8
+      EPD.red[i] = row < 336 ? 0xFF_u8 : 0x00_u8
+      i = i &+ 1
+    end
+    EPD.raw = true
+    EPD.probe = k
+    EPD.fast_pulls = 1
+    log2("probe: table, at ms", k, millis)
+    EPD.refresh(true, EPD::LUT_NOSHAKE)
+    delay_ms(4000) # time to look
+    k = k &+ 1
+  end
+  EPD.raw = false
+  EPD.probe = -1
+  EPD.prev_has_red = true # nothing known about the red pigment now
+  log("probe: done", 0)
+end
+
+# Portrait screen (960x672 white/black/red PNG), one slow full-colour refresh.
+def show_portrait : Nil
+  EPD.fill(EPD::WHITE)
+  t = millis
+  ok = PNG.draw(LibIDF.cr_portrait_png, LibIDF.cr_portrait_png_size, EPD.black, EPD.red, 0, 0, true)
+  log2("main: portrait decode ms / err", millis &- t, ok ? 0 : PNG.err)
+  draw_pattern(0, true) unless ok
+  EPD.refresh(false)
+end
+
+# One 1-pull refresh with each fast LUT kind on alternating frames; the panel
+# busy times are then drawn on the panel and logged.
+def lut_timing : Nil
+  EPD.keep_awake = true
+  EPD.fast_pulls = 1
+  times = EPD.dma_alloc(16).as(Int32*)
+  k = 0
+  while k < 4
+    draw_pattern((k & 1) == 0 ? 1 : 4, false)
+    EPD.refresh(true, k)
+    times[k] = EPD.panel_ms
+    log2("lut: kind / 1-pull panel ms", k, EPD.panel_ms)
+    k = k &+ 1
+  end
+  EPD.fill(EPD::WHITE)
+  draw_text(40, 40, "1-PULL PANEL MS BY LUT", EPD::BLACK, 5)
+  buf = Shared.label_buf
+  k = 0
+  while k < 4
+    name = k == 0 ? "BASE" : (k == 1 ? "NOSHAKE" : (k == 2 ? "UPSTREAM BW" : "NOSHAKE+BW"))
+    draw_text(40, 140 &+ k &* 90, name, EPD::BLACK, 5)
+    n = put_decimal(buf, times[k])
+    draw_bytes(600, 140 &+ k &* 90, buf, n, EPD::BLACK, 5)
+    k = k &+ 1
+  end
+  EPD.fast_pulls = 3
+  EPD.refresh(true, EPD::LUT_BASE)
+  delay_ms(8000) # time to read it
+end
+
 fun crystal_app_main : Void
   led_test
   log("main: EPD, SPI Hz", SPI_HZ)
@@ -497,6 +606,8 @@ fun crystal_app_main : Void
   log("main: EPD init (incl. OTP probe) ms", millis &- t)
 
   speed_test if SPEED_TEST
+  lut_probe if LUT_PROBE
+  lut_timing if LUT_TIMING
   show_nametag
 
   # Menu loop: Menu +/- cycles Nametag -> Sketch -> Life -> Snake.
@@ -506,13 +617,46 @@ fun crystal_app_main : Void
   prev = 0_u32
   last_mode = Menu.mode
   frames = 0
-  last_ms = 0
+  last_total = 0
+  last_wait = 0
+  last_input = millis
+  pl = Shared.mv_l
+  pr = Shared.mv_r
+  portrait = false
   while true
     held = Shared.take_buttons
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
     prev = held
     now = millis
-    if Menu.tick(now, inp)
+    dl = Shared.mv_l &- pl
+    dr = Shared.mv_r &- pr
+    if dl > 15 || dl < -15 || dr > 15 || dr < -15 || held != 0_u32
+      last_input = now
+      pl = Shared.mv_l
+      pr = Shared.mv_r
+    end
+    # PORTRAIT sits between NAMETAG and SKETCH in the Menu +/- cycle; it is
+    # handled here so games/menu.cr needs no change.
+    plus = Games.pressed?(inp, Games::BTN_PLUS)
+    minus = Games.pressed?(inp, Games::BTN_MINUS)
+    if portrait
+      if plus || minus
+        portrait = false
+        Menu.enter(plus ? Menu::SKETCH : Menu::NAMETAG)
+        changed = true
+      else
+        changed = false
+      end
+    elsif (plus && Menu.mode == Menu::NAMETAG) || (minus && Menu.mode == Menu::SKETCH)
+      portrait = true
+      log("menu: mode PORTRAIT", 0)
+      show_portrait
+      last_mode = -1
+      changed = false
+    else
+      changed = Menu.tick(now, inp)
+    end
+    if changed
       log("menu: mode", Menu.mode)
       t = millis
       if Menu.render(EPD.black, EPD.red)
@@ -521,16 +665,17 @@ fun crystal_app_main : Void
         clean = Menu.mode != last_mode || frames >= CLEAN_EVERY
         frames = clean ? 0 : frames &+ 1
         pulls = clean ? 3 : GAME_PULLS
-        draw_mode_label(Menu.mode, pulls, last_ms)
+        draw_mode_label(Menu.mode, last_wait, EPD.upload_ms, EPD.panel_ms, last_total)
         draw_mode_banner(Menu.mode) if EPD.fast_runs_slow?
         EPD.fast_pulls = pulls
-        EPD.refresh(true, clean)
+        last_wait = millis &- last_input
+        EPD.refresh(true, clean ? EPD::LUT_BASE : GAME_LUT)
       else
         show_nametag
       end
       last_mode = Menu.mode
-      last_ms = millis &- t
-      log2("menu: mode / frame ms", Menu.mode, last_ms)
+      last_total = millis &- t
+      log2("menu: mode / frame ms", Menu.mode, last_total)
     end
     delay_ms(20)
   end

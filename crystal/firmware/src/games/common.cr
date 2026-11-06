@@ -31,7 +31,7 @@ module Games
   BTN_MINUS = 8_u32 # Menu -
 
   # Knob ranges measured on the badge (calibrated mV).
-  LEFT_MV_LO  =  769
+  LEFT_MV_LO  =  694
   LEFT_MV_HI  = 2963
   RIGHT_MV_LO =   70
   RIGHT_MV_HI = 2703

@@ -33,9 +33,9 @@ end
 
 describe "Games helpers" do
   it "clamps knobs to 0..4096" do
-    Games.knob(0, 769, 2963).should eq 0
-    Games.knob(5000, 769, 2963).should eq 4096
-    Games.knob(1866, 769, 2963).should eq 2048
+    Games.knob(0, 694, 2963).should eq 0
+    Games.knob(5000, 694, 2963).should eq 4096
+    Games.knob(1828, 694, 2963).should eq 2047
   end
 
   it "computes pressed edges" do
@@ -231,76 +231,160 @@ describe Snake do
   end
 end
 
+def sk_tick(t, cl, cr, pressed = 0_u32)
+  Sketch.tick_counts(t, cl, cr, pressed)
+end
+
+# Fresh two-knob sketch, launch refresh consumed, knob refs at (cl, cr).
+def sk_fresh(cl = 1000, cr = 1000, knobs = 2)
+  Sketch.init(knobs).should be_true
+  sk_tick(0, cl, cr).should be_true # launch: cleaning flash
+  Sketch.want_clean?.should be_true
+  Sketch.render(plane, plane)
+end
+
 describe Sketch do
-  it "applies deadband and wrap to knob deltas" do
-    Sketch.knob_delta(1000, 1010).should eq 0
-    Sketch.knob_delta(1000, 981).should eq 0
-    Sketch.knob_delta(1000, 1030).should eq 30
-    Sketch.knob_delta(4000, 50).should eq 146
-    Sketch.knob_delta(50, 4000).should eq -146
+  it "maps millivolts onto 0..4095 counts" do
+    Sketch.counts(0, 694, 2963).should eq 0
+    Sketch.counts(694, 694, 2963).should eq 0
+    Sketch.counts(2963, 694, 2963).should eq 4095
+    Sketch.counts(9999, 70, 2703).should eq 4095
+    Sketch.counts(1387, 70, 2703).should eq 2048
   end
 
-  it "draws Bresenham lines including both endpoints" do
-    p = plane
-    Sketch.line(p, 10, 20, 50, 35, 1)
-    Games.get(p, 10, 20).should be_true
-    Games.get(p, 50, 35).should be_true
-    count_bits(p).should eq 41 # one pixel per x step
-    Games.get(p, 9, 20).should be_false
-    Games.get(p, 51, 35).should be_false
+  it "uses upstream's delta: first read 0, deadband keeps the reference, wraps" do
+    last = -1
+    Sketch.delta(1000, pointerof(last)).should eq 0
+    last.should eq 1000
+    Sketch.delta(1003, pointerof(last)).should eq 0
+    Sketch.delta(997, pointerof(last)).should eq 0
+    last.should eq 1000
+    Sketch.delta(1002, pointerof(last)).should eq 0
+    Sketch.delta(1004, pointerof(last)).should eq 4 # slow turn accumulates
+    last.should eq 1004
+    last = 4090
+    Sketch.delta(5, pointerof(last)).should eq 11
+    last = 5
+    Sketch.delta(4090, pointerof(last)).should eq -11
+  end
 
+  it "draws 3 px Bresenham lines including both endpoints" do
     p = plane
-    Sketch.line(p, 100, 100, 100, 90, 3)
+    Sketch.line(p, 100, 100, 100, 90)
     count_bits(p).should eq 3 * 13
     Games.get(p, 99, 89).should be_true
     Games.get(p, 101, 101).should be_true
     Games.get(p, 102, 100).should be_false
+    p = plane
+    Sketch.line(p, 10, 20, 50, 35)
+    Games.get(p, 9, 19).should be_true
+    Games.get(p, 51, 36).should be_true
+    Games.get(p, 52, 35).should be_false
   end
 
-  it "moves the pen from knob deltas and refreshes after a pause" do
+  it "starts mid-area with a pen dot, needing the frame and a clean flash" do
     Sketch.init.should be_true
-    Sketch.tick(0, inp(1000, 2000)).should be_false # sync
-    Sketch.tick(400, inp(1000, 2000)).should be_true # initial show
-    Sketch.tick(500, inp(2024, 2000)).should be_false
-    (Sketch.x - 480).should be_close(60, 1)
-    Sketch.y.should eq 336
-    Sketch.tick(600, inp(2024, 3024)).should be_false # clockwise = up
-    (336 - Sketch.y).should be_close(60, 1)
-    Sketch.tick(800, inp(2024, 3024)).should be_false # < 300 ms pause
-    Sketch.tick(950, inp(2024, 3024)).should be_true
-    Sketch.tick(2000, inp(2024, 3024)).should be_false # nothing new
-    x = Sketch.x
-    Sketch.tick(2010, inp(2034, 3024)).should be_false # within deadband
-    Sketch.x.should eq x
-    Games.get(Sketch.canvas, 480, 336).should be_true
-    Games.get(Sketch.canvas, Sketch.x, Sketch.y).should be_true
+    Sketch.x.should eq 480
+    Sketch.y.should eq 295
+    Sketch.needs_background?.should be_true
+    count_bits(Sketch.canvas).should eq 9
+    Sketch.status_text.should eq ""
   end
 
-  it "refreshes at most every MAX_MS while drawing, erases on User A" do
-    Sketch.init
-    t = 0
-    Sketch.tick(t, inp(0, 2000))
-    pos = 0
-    refreshes = 0
-    40.times do
+  it "moves 240 px per revolution, clockwise = right / up, clamped" do
+    sk_fresh
+    sk_tick(10, 2024, 1000).should be_false
+    Sketch.x.should eq 540 # 1024 counts * 240 / 4096
+    sk_tick(20, 2024, 2024).should be_false
+    Sketch.y.should eq 235
+    sk_tick(30, 2041, 2024) # 17 counts = 0.996 px: remainder kept
+    Sketch.x.should eq 540
+    sk_tick(40, 2059, 2024) # +18 -> 35 counts = 2.05 px
+    Sketch.x.should eq 542
+    Games.get(Sketch.canvas, 480, 295).should be_true
+    Games.get(Sketch.canvas, 540, 260).should be_true
+    c = 2059
+    6.times { |i| c = (c + 2000) & 4095; sk_tick(50 + i, c, 2024) } # wraps past 4095
+    Sketch.x.should eq Sketch::X_MAX
+    d = 2024
+    6.times { |i| d = (d + 2000) & 4095; sk_tick(70 + i, c, d) }
+    Sketch.y.should eq Sketch::Y_MIN
+  end
+
+  it "refreshes IDLE_REFRESH_MS after motion stops, or MAX_WAIT_MS while drawing" do
+    sk_fresh
+    sk_tick(100, 1100, 1000).should be_false
+    Sketch.dirty?.should be_true
+    Sketch.last_motion_ms.should eq 100
+    sk_tick(799, 1100, 1000).should be_false
+    sk_tick(800, 1100, 1000).should be_true
+    Sketch.want_clean?.should be_false
+    Sketch.refresh_reason.should eq Sketch::R_IDLE
+    Sketch.refresh_ms.should eq 800
+    sk_tick(5000, 1100, 1000).should be_false
+
+    pos = 1100
+    t = 10_000
+    hits = [] of Int32
+    60.times do
       t += 100
       pos += 40
-      refreshes += 1 if Sketch.tick(t, inp(pos, 2000))
+      hits << t if sk_tick(t, pos, 1000)
     end
-    refreshes.should eq 1 # at t = 3000
-    Sketch.tick(t + 10, press(Games::BTN_A, pos, 2000)).should be_true
-    count_bits(Sketch.canvas).should eq 0
+    hits.first.should eq 14_100 # first change at 10_100 + 4000
+    Sketch.first_change_ms.should be > 14_100
+    Sketch.refresh_reason.should eq Sketch::R_MAX
   end
 
-  it "renders canvas plus cursor into black, clears red" do
-    Sketch.init
-    Games.set(Sketch.canvas, 5, 5)
+  it "erases on User A with a cleaning flash; User B re-flashes the drawing" do
+    sk_fresh
+    sk_tick(10, 2000, 1000)
+    sk_tick(20, 2000, 1000, Games::BTN_A).should be_true
+    Sketch.want_clean?.should be_true
+    Sketch.needs_background?.should be_true
+    Sketch.refresh_reason.should eq Sketch::R_CLEAN
+    count_bits(Sketch.canvas).should eq 9 # just the pen dot, where the pen is
+    Games.get(Sketch.canvas, Sketch.x, Sketch.y).should be_true
+    Sketch.render(plane, plane)
+    sk_tick(30, 2000, 1000).should be_false
+    sk_tick(40, 2000, 1000, Games::BTN_B).should be_true
+    Sketch.want_clean?.should be_true
+    Sketch.needs_background?.should be_false
+  end
+
+  it "single-knob mode: User B switches the axis" do
+    sk_fresh(1000, 1000, 1)
+    Sketch.status_text.should eq "1 knob (left) - B switches X/Y"
+    sk_tick(10, 2024, 3000).should be_false
+    Sketch.x.should eq 540
+    Sketch.y.should eq 295
+    sk_tick(20, 2024, 3000, Games::BTN_B).should be_false
+    Sketch.single_axis_y?.should be_true
+    Sketch.blink_request.should eq 2
+    Sketch.blink_request.should eq 0
+    sk_tick(30, 3048, 0)
+    Sketch.x.should eq 540
+    Sketch.y.should eq 235
+  end
+
+  it "takes knob millivolts through tick()" do
+    sk_fresh
+    Sketch.tick(10, inp(1000, 1000))     # re-reference at the mV mapping
+    Sketch.tick(20, inp(2024, 1000))
+    (Sketch.x - 480).should be_close(60, 1)
+  end
+
+  it "overlays the trace on the frame: black set, red cleared" do
+    sk_fresh
     b, r = plane, plane
-    r[100] = 1_u8
+    Games::PLANE.times { |i| r[i] = 0xFF_u8 }
+    b[0] = 0x80_u8
     Sketch.render(b, r)
-    Games.get(b, 5, 5).should be_true
-    count_bits(r).should eq 0
-    count_bits(b).should eq 1 + 48 # 13x13 one-pixel outline
+    Games.get(b, 480, 295).should be_true
+    Games.get(r, 480, 295).should be_false
+    Games.get(r, 10, 10).should be_true
+    Games.get(b, 0, 0).should be_true
+    count_bits(b).should eq 1 + 9
   end
 end
 
@@ -313,6 +397,10 @@ describe Menu do
     Menu.render(b, r).should be_false
     Menu.tick(0, press(Games::BTN_PLUS)).should be_true
     Menu.mode.should eq Menu::SKETCH
+    Menu.needs_background?.should be_true
+    Menu.render(b, r).should be_true
+    Menu.want_clean?.should be_true
+    Menu.needs_background?.should be_false
     Menu.tick(0, press(Games::BTN_PLUS))
     Menu.mode.should eq Menu::LIFE
     Menu.render(b, r).should be_true

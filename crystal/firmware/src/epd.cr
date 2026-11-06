@@ -190,8 +190,12 @@ module EPD
   @@keep_awake = false
   @@panel_ms = 0
   @@fast_pulls = B_REFRESH_PULLS
-  @@lut_clean = true     # fast LUT with the shake group (see build_lutb)
-  @@latched_clean = true
+  @@lut_kind = 0         # LUT_* kind of the fast waveform (see build_lutb)
+  @@latched_kind = 0
+  @@upload_ms = 0
+  @@probe = -1          # >= 0: probe LUT driving only that table (see build_probe)
+  @@latched_probe = -1
+  @@raw = false          # send black and red planes as they are (no red-as-ink)
 
   def self.black : UInt8*
     @@black
@@ -221,6 +225,10 @@ module EPD
   # (red on the panel has to be cleared first).
   def self.fast_runs_slow? : Bool
     @@prev_has_red
+  end
+
+  def self.upload_ms : Int32
+    @@upload_ms
   end
 
   def self.panel_ms : Int32
@@ -770,7 +778,15 @@ module EPD
   # shake = false replaces the shake group with ground: unchanged pixels are
   # then only pushed further towards the state they already have, so they
   # do not visibly blink (game frames). Less clearing, so more ghosting.
-  def self.build_lutb(shake : Bool) : Nil
+  # Fast LUT kinds (driver B):
+  LUT_BASE       = 0 # epd97/upstream base: shake + 4 drive groups + 9 red groups
+  LUT_NOSHAKE    = 1 # shake group replaced (paper gets one more white drive)
+  LUT_BW         = 2 # upstream "short black/white": base with red idled after group 4
+  LUT_NOSHAKE_BW = 3 # both
+
+  def self.build_lutb(kind : Int32) : Nil
+    shake = kind == LUT_BASE || kind == LUT_BW
+    bw = kind == LUT_BW || kind == LUT_NOSHAKE_BW
     t = 0
     while t < 5
       g = 0
@@ -801,7 +817,7 @@ module EPD
           else
             put_group_b(q, 0x00_u8, 45_u8, 1_u8, 3_u8)
           end
-        elsif t == 2
+        elsif t == 2 && !bw
           put_group_b(q, red_level, 45_u8, 1_u8, 3_u8)
         else
           put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
@@ -810,6 +826,38 @@ module EPD
       end
       t = t &+ 1
     end
+  end
+
+  # Table-mapping probe (driver B): table k gets the ink drive (VDH, the 4
+  # drive groups), every other table and group is ground. Shows on the panel
+  # which (red, bw) bit pairs select table k.
+  def self.build_probe(k : Int32) : Nil
+    t = 0
+    while t < 5
+      g = 0
+      while g < 10
+        q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
+        if t == k && g >= 1 && g < 5
+          put_group_b(q, 0x44_u8, 45_u8, 1_u8, 3_u8)
+        else
+          put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
+        end
+        g = g &+ 1
+      end
+      t = t &+ 1
+    end
+  end
+
+  def self.probe=(k : Int32) : Nil
+    @@probe = k
+  end
+
+  def self.raw=(v : Bool) : Nil
+    @@raw = v
+  end
+
+  def self.prev_has_red=(v : Bool) : Nil
+    @@prev_has_red = v
   end
 
   # ---- refresh -----------------------------------------------------------------
@@ -953,7 +1001,11 @@ module EPD
     update_registers
     if fast
       if @@driver_b
-        build_lutb(@@lut_clean)
+        if @@probe >= 0
+          build_probe(@@probe)
+        else
+          build_lutb(@@lut_kind)
+        end
         send(BOTH, 0xB0_u8, @@lut, LUTB_BYTES)
       else
         build_lut8
@@ -972,18 +1024,18 @@ module EPD
   # Push the frame buffers to the panel. Fast = short waveform (red drawn as
   # ink). Returns true on success; logs the phase timings.
   # clean = false uses the no-shake fast LUT (driver B), for game frames.
-  def self.refresh(fast_req : Bool, clean : Bool = true) : Bool
-    @@lut_clean = clean || !@@driver_b
+  def self.refresh(fast_req : Bool, kind : Int32 = LUT_BASE) : Bool
+    @@lut_kind = @@driver_b ? kind : LUT_BASE
     t_start = millis
     have_red = has_red?
-    draw_red = have_red && !fast_req
+    draw_red = have_red && (!fast_req || @@raw)
     fast = fast_req
-    if fast && @@prev_has_red
+    if fast && @@prev_has_red && !@@raw
       log("EPD: red on the panel - this fast refresh runs slow to clear it", 0)
       fast = false
     end
 
-    if @@session_open && @@lut_latched && (fast != @@latched_fast || (fast && @@lut_clean != @@latched_clean))
+    if @@session_open && @@lut_latched && (fast != @@latched_fast || (fast && (@@lut_kind != @@latched_kind || @@probe != @@latched_probe)))
       cog_stop
     end
     t_init = millis
@@ -995,6 +1047,7 @@ module EPD
     t_up = millis
     write_planes(have_red && !draw_red, draw_red)
     t_up_end = millis
+    @@upload_ms = t_up_end &- t_up
 
     first = !@@lut_latched
     rc = first ? do_refresh(fast) : trigger(false)
@@ -1010,15 +1063,16 @@ module EPD
     t_busy_end = millis
     @@panel_ms = rc
     @@latched_fast = fast
-    @@latched_clean = @@lut_clean
+    @@latched_kind = @@lut_kind
+    @@latched_probe = @@probe
     @@lut_latched = rc >= 0 && fast
-    @@prev_has_red = draw_red
+    @@prev_has_red = draw_red && !@@raw
     keep = @@keep_awake && @@lut_latched
     cog_stop unless keep
     t_end = millis
 
     log2("EPD: refresh fast? / first-of-session?", fast ? 1 : 0, first ? 1 : 0)
-    log2("EPD:   clean lut? / pulls", @@lut_clean ? 1 : 0, pulls)
+    log2("EPD:   lut kind / pulls", @@lut_kind, pulls)
     log("EPD:   power-up + reset ms", t_up &- t_init)
     log("EPD:   upload ms", t_up_end &- t_up)
     log("EPD:   registers+soft start+waveform (pull 1) ms", t_ref_end &- t_up_end)
