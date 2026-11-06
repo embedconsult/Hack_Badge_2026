@@ -6,7 +6,8 @@
 # The rootfs (ROOTFS, default /opt/debian) needs ESP-IDF at /opt/esp/esp-idf,
 # the /proc-free gcc shims at /opt/esp/shims and the patched compiler at
 # /opt/crystal-xtensa; see ../toolchain/README.md. The container can't
-# bind-mount, so sources are copied in and outputs copied back to ./build/.
+# bind-mount, so sources are copied in and outputs copied back to ./build/
+# (or to $OUT, e.g. OUT=build-test ./build.sh to keep ./build untouched).
 # The component manager is disabled: it uses psutil, which needs /proc.
 set -eu
 ROOTFS=${ROOTFS:-/opt/debian}
@@ -14,7 +15,16 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=/build/crystal-firmware            # path inside the rootfs
 [ $# -gt 0 ] || set -- build merge-bin
 
+OUT=${OUT:-$HERE/build}                 # where the outputs are copied
+
 mkdir -p "$ROOTFS$WORK"
+# idf.py only applies sdkconfig.defaults when it creates sdkconfig, so a
+# changed defaults file would be silently ignored by the persistent build
+# dir. Regenerate sdkconfig whenever the defaults change.
+if ! cmp -s "$HERE/sdkconfig.defaults" "$ROOTFS$WORK/sdkconfig.defaults"; then
+  echo "build.sh: sdkconfig.defaults changed, regenerating sdkconfig"
+  rm -f "$ROOTFS$WORK/sdkconfig"
+fi
 rm -rf "$ROOTFS$WORK/main" "$ROOTFS$WORK/src"
 cp -a "$HERE/CMakeLists.txt" "$HERE/sdkconfig.defaults" "$HERE/main" "$HERE/src" "$ROOTFS$WORK/"
 
@@ -29,10 +39,10 @@ chroot "$ROOTFS" /usr/bin/env -i HOME=/root TERM=dumb LANG=C.UTF-8 \
     idf.py $*
   "
 
-mkdir -p "$HERE/build"
+mkdir -p "$OUT"
 B="$ROOTFS$WORK/build"
 for f in merged-binary.bin crystal_blink.bin crystal_blink.elf crystal_blink.map flash_args \
          bootloader/bootloader.bin partition_table/partition-table.bin; do
-  [ -f "$B/$f" ] && cp "$B/$f" "$HERE/build/$(basename "$f")"
+  [ -f "$B/$f" ] && cp "$B/$f" "$OUT/$(basename "$f")"
 done
-ls -l "$HERE/build"
+ls -l "$OUT"

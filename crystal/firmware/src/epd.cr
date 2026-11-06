@@ -230,6 +230,7 @@ module EPD
   end
 
   def self.chunk_rows=(n : Int32) : Nil
+    n = 1 if n < 1
     @@chunk_rows = n > MAX_CHUNK_ROWS ? MAX_CHUNK_ROWS : n
   end
 
@@ -305,6 +306,10 @@ module EPD
     dev_cfg.spics_io_num = -1 # CS1/CS2 are driven by hand
     dev_cfg.queue_size = 2
     err = LibIDF.spi_bus_add_device(SPI2_HOST, pointerof(dev_cfg), pointerof(@@dev))
+    if err != 0
+      log("EPD: spi_bus_add_device failed, err", err)
+      return err
+    end
     khz = 0
     LibIDF.spi_device_get_actual_freq(@@dev, pointerof(khz))
     log2("EPD: spi_bus_add_device err / actual kHz", err, khz)
@@ -948,6 +953,10 @@ module EPD
   def self.send_box(target : Int32, idx : UInt8, plane : UInt8*, x0 : Int32, x1 : Int32, y0 : Int32, y1 : Int32) : Nil
     half = target == RIGHT ? 1 : 0
     w = x1 &- x0 &+ 1
+    if w < 1 || w > HALF_BYTES || x0 < 0 || y0 < 0 || y1 < y0 || y1 >= HEIGHT
+      spi_error("EPD: send_box bad window (w)", w)
+      return
+    end
     rows_per = (MAX_CHUNK_ROWS &* HALF_BYTES).unsafe_div(w)
     index(target, idx)
     cs_lo(target)
@@ -1026,7 +1035,7 @@ module EPD
     end
     w[0] = (b0 > lo ? b0 : lo) &- lo
     w[1] = (b1 < hi ? b1 : hi) &- lo
-    true
+    true # 0 <= w[0] <= w[1] <= HALF_BYTES - 1 by construction
   end
 
   # Window refresh with a separate box per COG half: left rows lr0..lr1,
@@ -1050,8 +1059,18 @@ module EPD
     # on one COG drove its rows across the whole width, and a COG whose rows
     # differed from the master's drew nothing). So both COGs get the SAME
     # rows: the union of the two boxes, padded and 4-row aligned.
-    l_empty = lr1 < lr0
-    r_empty = rr1 < rr0
+    # Clip both axes first; an empty or inverted box (rows or columns) means
+    # "nothing for this COG" and never reaches the padding below.
+    lr0 = 0 if lr0 < 0
+    rr0 = 0 if rr0 < 0
+    lr1 = HEIGHT &- 1 if lr1 > HEIGHT &- 1
+    rr1 = HEIGHT &- 1 if rr1 > HEIGHT &- 1
+    lc0 = 0 if lc0 < 0
+    rc0 = 0 if rc0 < 0
+    lc1 = ROW_BYTES &- 1 if lc1 > ROW_BYTES &- 1
+    rc1 = ROW_BYTES &- 1 if rc1 > ROW_BYTES &- 1
+    l_empty = lr1 < lr0 || lc1 < lc0
+    r_empty = rr1 < rr0 || rc1 < rc0
     if l_empty && r_empty
       return 0
     end
@@ -1122,8 +1141,12 @@ module EPD
       pulls = pulls &+ 1
     end
     @@panel_ms = rc
-    @@lut_latched = rc >= 0
     log2("EPD: window rows (both COGs) / panel ms", rows_total, rc)
+    if rc < 0 || @@spi_fail
+      log("EPD: window refresh failed, COG powered down", rc)
+      cog_stop # also clears session_open / lut_latched
+      return -1
+    end
     rc
   end
 
@@ -1262,6 +1285,7 @@ module EPD
   # refresh; it costs EPD_SECOND_PASS_MS and has not fired on this panel).
   def self.trigger(watch : Bool, timeout_ms : Int32) : Int32
     cmd1(0x15_u8, 0x3C_u8)
+    return -1 if @@spi_fail
     if wait_busy(false, 2000) < 0
       log("EPD: BUSY never went low after 0x15", 0)
       return -1
@@ -1277,7 +1301,8 @@ module EPD
         if busy?
           again = wait_busy(true, timeout_ms)
           log("EPD: second waveform pass ms", again)
-          w = w &+ again if again > 0
+          return -1 if again < 0
+          w = w &+ again
           break
         end
       end
@@ -1289,6 +1314,7 @@ module EPD
   def self.do_refresh(fast : Bool) : Int32
     delay_ms(T_PRE_UPD)
     update_registers
+    return -1 if @@spi_fail
     if fast
       if @@driver_b
         if @@probe >= 0
@@ -1302,11 +1328,14 @@ module EPD
         send(BOTH, 0xB0_u8, @@lut, LUT8_BYTES)
       end
     end
+    return -1 if @@spi_fail
     dcdc_soft_start
+    return -1 if @@spi_fail
     delay_ms(100)
     if busy?
       r = wait_busy(true, 10_000)
       log("EPD: booster ready after soft start ms (-1 = timeout)", r)
+      return -1 if r < 0 # epd97.cpp goes on anyway; we stop and power down
     end
     # The slow (OTP) waveform is where a second pass could occur.
     trigger(!fast, fast ? FAST_TIMEOUT_MS : SLOW_TIMEOUT_MS)
@@ -1366,12 +1395,13 @@ module EPD
       end
     end
     t_busy_end = millis
+    rc = -1 if @@spi_fail # any SPI error after the upload fails the frame
     @@panel_ms = rc
     @@latched_fast = fast
     @@latched_kind = @@lut_kind
     @@latched_probe = @@probe
     @@lut_latched = rc >= 0 && fast
-    @@prev_has_red = draw_red
+    @@prev_has_red = draw_red if rc >= 0
     keep = @@keep_awake && @@lut_latched
     cog_stop unless keep
     t_end = millis

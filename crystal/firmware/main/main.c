@@ -5,6 +5,19 @@
 #include <stdio.h>
 #include <stddef.h>
 #include "freertos/FreeRTOS.h"
+#include "sdkconfig.h"
+
+// Settings the Crystal code relies on. build.sh regenerates sdkconfig when
+// sdkconfig.defaults changes; these catch a stale one.
+#if CONFIG_FREERTOS_HZ != 1000
+#error "CONFIG_FREERTOS_HZ must be 1000: src/epd.cr treats 1 tick as 1 ms"
+#endif
+#if CONFIG_ESP_MAIN_TASK_STACK_SIZE < 8192
+#error "CONFIG_ESP_MAIN_TASK_STACK_SIZE must be >= 8192 (smaller overflowed silently and killed USB)"
+#endif
+#if !CONFIG_SPIRAM
+#warning "PSRAM disabled: frame buffers fall back to internal RAM"
+#endif
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/rmt_tx.h"
