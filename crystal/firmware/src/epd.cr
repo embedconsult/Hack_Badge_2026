@@ -163,6 +163,20 @@ module EPD
   REG45_084   = 0x86_u8
   REG45_B1    = 0x84_u8
   B_REFRESH_PULLS = 3 # epd97.cpp default for driver B fast refresh
+  FAST_TIMEOUT_MS = 5_000   # BUSY wait for a fast waveform (~1.2 s per pull)
+  SLOW_TIMEOUT_MS = 180_000 # BUSY wait for the OTP waveform (~33 s)
+
+  # Skip uploading an all-zero red plane (0x11) when the last red upload in
+  # this open session was all zeros too (~33 ms per frame). Assumes the COG
+  # keeps its RAM between refreshes: NEEDS A HARDWARE CHECK; set false if
+  # red ghosts appear after fast frames.
+  SKIP_ZERO_RED = true
+
+  # Change the fast LUT kind by rewriting 0xB0 inside an open session instead
+  # of a ~5 s COG restart. epd97.cpp notes that a rewrite inside a session
+  # "drops the panel back onto its own waveform", so this is OFF until it has
+  # been tried on the panel.
+  REWRITE_LUT_IN_SESSION = false
 
   @@dev = uninitialized Void*
   @@black = uninitialized UInt8*
@@ -197,6 +211,8 @@ module EPD
   @@latched_probe = -1
   @@raw = false          # send black and red planes as they are (no red-as-ink)
   @@promote = true       # run a fast refresh slow when red is on the panel
+  @@spi_fail = false     # an SPI call failed during the current frame
+  @@red_zero = false     # COG red RAM known to be all zeros (this session)
   @@abortable = false    # a long BUSY wait may be cut short by request_abort
   @@abort = false
 
@@ -432,7 +448,30 @@ module EPD
     zero(pointerof(@@ts).as(UInt8*), sizeof(LibIDF::SpiTransaction))
     @@ts.length = (n &* 8).to_u32!
     @@ts.tx_buffer = buf.as(Void*)
-    LibIDF.spi_device_polling_transmit(@@dev, pointerof(@@ts))
+    err = LibIDF.spi_device_polling_transmit(@@dev, pointerof(@@ts))
+    spi_error("polling_transmit", err) if err != 0
+  end
+
+  # Records an SPI failure: the frame in progress is abandoned by refresh.
+  def self.spi_error(what : String, err : Int32) : Nil
+    log(what, err)
+    @@spi_fail = true
+  end
+
+  # Queues t; false (and the frame marked failed) if the driver refused it.
+  def self.queue(t : LibIDF::SpiTransaction*) : Bool
+    err = LibIDF.spi_device_queue_trans(@@dev, t, PORT_MAX_DELAY)
+    if err != 0
+      spi_error("EPD: spi_device_queue_trans err", err)
+      return false
+    end
+    true
+  end
+
+  def self.reap : Nil
+    done = uninitialized LibIDF::SpiTransaction*
+    err = LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+    spi_error("EPD: spi_device_get_trans_result err", err) if err != 0
   end
 
   # Index byte; afterwards DC is high and CS is up.
@@ -527,27 +566,26 @@ module EPD
     row = 0
     pending = 0
     use1 = false
-    done = uninitialized LibIDF::SpiTransaction*
-    while row < HEIGHT
+    while row < HEIGHT && !@@spi_fail
       n = HEIGHT &- row
       n = rows if n > rows
       buf = use1 ? @@dma1 : @@dma0
       t = use1 ? pointerof(@@t1) : pointerof(@@t0)
       if pending == 2
-        LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+        reap
         pending = 1
       end
       pack(buf, plane, orp, half, row, n)
       zero(t.as(UInt8*), sizeof(LibIDF::SpiTransaction))
       t.value.length = (n &* HALF_BYTES &* 8).to_u32!
       t.value.tx_buffer = buf.as(Void*)
-      LibIDF.spi_device_queue_trans(@@dev, t, PORT_MAX_DELAY)
+      break unless queue(t)
       pending = pending &+ 1
       use1 = !use1
       row = row &+ n
     end
-    while pending > 0
-      LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+    while pending > 0 # only transactions that were actually queued
+      reap
       pending = pending &- 1
     end
     cs_hi
@@ -723,12 +761,14 @@ module EPD
 
   # Power-up for a new session once the OTP is known.
   def self.cog_initial : Nil
+    @@red_zero = false # new session: COG RAM contents unknown
     power_on
     delay_ms(T_RST_PWR)
     second_reset
   end
 
   def self.cog_stop : Nil
+    @@red_zero = false
     cmd1(0x09_u8, 0x7F_u8)
     delay_ms(20)
     cmd1(0x05_u8, 0x7D_u8)
@@ -913,14 +953,13 @@ module EPD
     row = y0
     pending = 0
     use1 = false
-    done = uninitialized LibIDF::SpiTransaction*
-    while row <= y1
+    while row <= y1 && !@@spi_fail
       n = y1 &- row &+ 1
       n = rows_per if n > rows_per
       buf = use1 ? @@dma1 : @@dma0
       t = use1 ? pointerof(@@t1) : pointerof(@@t0)
       if pending == 2
-        LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+        reap
         pending = 1
       end
       k = 0
@@ -947,13 +986,13 @@ module EPD
       zero(t.as(UInt8*), sizeof(LibIDF::SpiTransaction))
       t.value.length = (k &* 8).to_u32!
       t.value.tx_buffer = buf.as(Void*)
-      LibIDF.spi_device_queue_trans(@@dev, t, PORT_MAX_DELAY)
+      break unless queue(t)
       pending = pending &+ 1
       use1 = !use1
       row = row &+ n
     end
-    while pending > 0
-      LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+    while pending > 0 # only transactions that were actually queued
+      reap
       pending = pending &- 1
     end
     cs_hi
@@ -965,6 +1004,7 @@ module EPD
   # session with the fast LUT already latched; otherwise does a normal fast
   # refresh with `kind`. Returns panel busy ms (or -1).
   def self.refresh_window(c0 : Int32, c1 : Int32, r0 : Int32, r1 : Int32, kind : Int32) : Int32
+    @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
       @@raw = true
       refresh(true, kind)
@@ -1004,15 +1044,24 @@ module EPD
       cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
       send_otp_to(t, 0x12_u8, 0x13, 3)
       send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
-      send_otp_to(t, 0x12_u8, 0x13, 3)
-      send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
+      zero_box = red_box_zero?(t == LEFT ? 0 : 1, x0, x1, y0, y1)
+      unless SKIP_ZERO_RED && zero_box && @@red_zero
+        send_otp_to(t, 0x12_u8, 0x13, 3)
+        send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
+        @@red_zero = false unless zero_box
+      end
       t = t &+ 1
     end
     @@upload_ms = millis &- t_up
+    if @@spi_fail
+      log("EPD: window upload failed, frame dropped", 0)
+      cog_stop
+      return -1
+    end
     rc = 0
     pulls = 0
     while rc >= 0 && pulls < @@fast_pulls
-      r = trigger(false)
+      r = trigger(false, FAST_TIMEOUT_MS)
       rc = r < 0 ? r : rc &+ r
       pulls = pulls &+ 1
     end
@@ -1052,10 +1101,28 @@ module EPD
     while t <= RIGHT
       send_otp_to(t, 0x12_u8, 0x13, 3) # RAM_RW
       send_plane(t, 0x10_u8, @@black, fast_ink_red ? @@red : Pointer(UInt8).null)
-      send_otp_to(t, 0x12_u8, 0x13, 3)
-      send_plane(t, 0x11_u8, draw_red ? @@red : Pointer(UInt8).null, Pointer(UInt8).null)
+      unless SKIP_ZERO_RED && !draw_red && @@red_zero
+        send_otp_to(t, 0x12_u8, 0x13, 3)
+        send_plane(t, 0x11_u8, draw_red ? @@red : Pointer(UInt8).null, Pointer(UInt8).null)
+      end
       t = t &+ 1
     end
+    @@red_zero = !draw_red
+  end
+
+  # True if rows y0..y1, bytes x0..x1 of one half of the red plane are zero.
+  def self.red_box_zero?(half : Int32, x0 : Int32, x1 : Int32, y0 : Int32, y1 : Int32) : Bool
+    row = y0
+    while row <= y1
+      p = @@red + (row &* ROW_BYTES &+ half &* HALF_BYTES).to_i64!
+      c = x0
+      while c <= x1
+        return false if p[c] != 0_u8
+        c = c &+ 1
+      end
+      row = row &+ 1
+    end
+    true
   end
 
   def self.send_otp_to(target : Int32, idx : UInt8, off : Int32, n : Int32) : Nil
@@ -1137,13 +1204,14 @@ module EPD
   # 0x15 and wait for the waveform; returns panel ms or -1. `watch` keeps
   # looking for a second BUSY pass (epd97.cpp does this after every first
   # refresh; it costs EPD_SECOND_PASS_MS and has not fired on this panel).
-  def self.trigger(watch : Bool) : Int32
+  def self.trigger(watch : Bool, timeout_ms : Int32) : Int32
     cmd1(0x15_u8, 0x3C_u8)
     if wait_busy(false, 2000) < 0
       log("EPD: BUSY never went low after 0x15", 0)
       return -1
     end
-    w = wait_busy(true, 180_000)
+    w = wait_busy(true, timeout_ms)
+    log("EPD: BUSY timeout / aborted (ms limit)", timeout_ms) if w < 0
     return -1 if w < 0
     # Some panels drop BUSY again for a second pass; watch for it.
     if watch && @@second_pass_ms > 0
@@ -1151,7 +1219,7 @@ module EPD
       while millis &- t0 < @@second_pass_ms
         delay_ms(10)
         if busy?
-          again = wait_busy(true, 180_000)
+          again = wait_busy(true, timeout_ms)
           log("EPD: second waveform pass ms", again)
           w = w &+ again if again > 0
           break
@@ -1184,7 +1252,8 @@ module EPD
       r = wait_busy(true, 10_000)
       log("EPD: booster ready after soft start ms (-1 = timeout)", r)
     end
-    trigger(!fast) # the slow (OTP) waveform is where a second pass could occur
+    # The slow (OTP) waveform is where a second pass could occur.
+    trigger(!fast, fast ? FAST_TIMEOUT_MS : SLOW_TIMEOUT_MS)
   end
 
   # Push the frame buffers to the panel. Fast = short waveform (red drawn as
@@ -1201,6 +1270,15 @@ module EPD
       fast = false
     end
 
+    @@spi_fail = false
+    if @@session_open && @@lut_latched && REWRITE_LUT_IN_SESSION && fast && @@latched_fast &&
+       @@driver_b && @@probe < 0 && @@latched_probe < 0 && @@lut_kind != @@latched_kind
+      # Untested: swap the fast table without restarting the COG.
+      build_lutb(@@lut_kind)
+      send(BOTH, 0xB0_u8, @@lut, LUTB_BYTES)
+      @@latched_kind = @@lut_kind
+      log("EPD: LUT rewritten in session, kind", @@lut_kind)
+    end
     if @@session_open && @@lut_latched && (fast != @@latched_fast || (fast && (@@lut_kind != @@latched_kind || @@probe != @@latched_probe)))
       cog_stop
     end
@@ -1214,14 +1292,19 @@ module EPD
     write_planes(have_red && !draw_red, draw_red)
     t_up_end = millis
     @@upload_ms = t_up_end &- t_up
+    if @@spi_fail
+      log("EPD: upload failed, frame dropped", 0)
+      cog_stop
+      return false
+    end
 
     first = !@@lut_latched
-    rc = first ? do_refresh(fast) : trigger(false)
+    rc = first ? do_refresh(fast) : trigger(false, fast ? FAST_TIMEOUT_MS : SLOW_TIMEOUT_MS)
     t_ref_end = millis
     pulls = 1
     if rc >= 0 && fast && @@driver_b
       while rc >= 0 && pulls < @@fast_pulls
-        r = trigger(false)
+        r = trigger(false, FAST_TIMEOUT_MS)
         rc = r < 0 ? r : rc &+ r
         pulls = pulls &+ 1
       end
