@@ -817,16 +817,74 @@ def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : 
   draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 3)
 end
 
+# Asymmetric marker for the window test: 120x80 outline (6 px), a solid
+# 32x32 square in its top-left corner and a bar along its bottom-right.
+def window_marker(x : Int32, y : Int32) : Nil
+  EPD.fill_rect(x, y, 120, 80, EPD::BLACK)
+  EPD.fill_rect(x &+ 6, y &+ 6, 108, 68, EPD::WHITE)
+  EPD.fill_rect(x &+ 6, y &+ 6, 32, 32, EPD::BLACK)
+  EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
+end
+
+# Window calibration (DIAG, User B). From a white screen, each step adds a
+# marker to the planes and refreshes it only through the window path:
+#   1 left x200 y200, 2 right x650 y400: DUW + DRFW box (normal)
+#   3 left x200 y420, 4 right x650 y120: DUW box + box upload, DRFW full
+#   5 left x400 y200, 6 right x700 y240: full upload, DRFW box
+# Holds 12 s for a photo, then a full refresh shows where each marker was
+# meant to be, numbered, for comparison.
+def wt_pos(i : Int32, x : Bool) : Int32
+  if x
+    i == 0 ? 200 : (i == 1 ? 650 : (i == 2 ? 200 : (i == 3 ? 650 : (i == 4 ? 400 : 700))))
+  else
+    i == 0 ? 200 : (i == 1 ? 400 : (i == 2 ? 420 : (i == 3 ? 120 : (i == 4 ? 200 : 240))))
+  end
+end
+
+def window_test : Nil
+  log("wtest: white base", 0)
+  EPD.fill(EPD::WHITE)
+  fast_bw(3, GAME_LUT)
+  i = 0
+  while i < 6
+    x = wt_pos(i, true)
+    y = wt_pos(i, false)
+    window_marker(x, y)
+    mode = i.unsafe_div(2) # 0, 0, 1, 1, 2, 2
+    c0 = x.unsafe_shr(3)
+    c1 = (x &+ 119).unsafe_shr(3)
+    log2("wtest: step / mode", i &+ 1, mode)
+    EPD.fast_pulls = 1
+    if (i & 1) == 0 # left half
+      EPD.refresh_window2(y, y &+ 79, c0, c1, 1, 0, 120, -1, GAME_LUT, mode)
+    else
+      EPD.refresh_window2(1, 0, 120, -1, y, y &+ 79, c0, c1, GAME_LUT, mode)
+    end
+    delay_ms(1500)
+    i = i &+ 1
+  end
+  log("wtest: hold 12 s for a photo", 0)
+  delay_ms(12_000)
+  i = 0
+  buf = Shared.label_buf
+  while i < 6
+    buf[0] = (0x31 &+ i).to_u8!
+    draw_bytes(wt_pos(i, true) &+ 130, wt_pos(i, false) &+ 20, buf, 1, EPD::BLACK, 6)
+    i = i &+ 1
+  end
+  draw_text(40, 600, "REFERENCE: 1,2 BOTH  3,4 DUW ONLY  5,6 DRFW ONLY", EPD::BLACK, 3)
+  fast_bw(3, GAME_LUT)
+end
+
 # DIAG mode help screen (fast refresh; the driver runs it slow if red is up).
 def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: TABLE PROBE (~2 MIN)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
-  draw_text(40, 420, "PROBE QUADRANTS (RED,BW):", EPD::BLACK, 3)
-  draw_text(40, 460, "TL 1,1  TR 1,0  BL 0,1  BR 0,0", EPD::BLACK, 3)
-  draw_text(40, 500, "ORDER: TABLE 0,1,2,3, WHITE BETWEEN", EPD::BLACK, 3)
+  draw_text(40, 420, "WINDOW TEST: PHOTO DURING THE 12 S", EPD::BLACK, 3)
+  draw_text(40, 460, "HOLD, THEN THE NUMBERED REFERENCE", EPD::BLACK, 3)
   EPD.fast_pulls = 3
   EPD.refresh(true, EPD::LUT_BASE)
 end
@@ -1254,8 +1312,7 @@ fun crystal_app_main : Void
       if Games.pressed?(inp, Games::BTN_A)
         lut_timing
       elsif Games.pressed?(inp, Games::BTN_B)
-        lut_probe
-        show_diag
+        window_test
       end
     elsif scr == SCR_SKETCH
       ticked = Menu.tick(now, inp)

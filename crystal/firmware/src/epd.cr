@@ -1039,8 +1039,12 @@ module EPD
 
   # Window refresh with a separate box per COG half: left rows lr0..lr1,
   # frame bytes lc0..lc1; right likewise (empty box: lr1 < lr0).
+  # wmode (DIAG calibration): 0 = DUW and DRFW both set to the box (normal);
+  # 1 = DUW box + box upload, DRFW full screen (shows where RAM writes land);
+  # 2 = DUW full + full upload, DRFW box (shows where the refresh window lands).
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
-                           rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32) : Int32
+                           rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
+                           wmode : Int32 = 0) : Int32
     @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
       @@raw = true
@@ -1064,16 +1068,34 @@ module EPD
       y0 = w[2]
       y1 = w[3]
       rows_total = rows_total &+ (y1 &- y0 &+ 1)
-      cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
-        (y1 & 0xFF).to_u8!, y1.unsafe_shr(8).to_u8!)
-      cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
-      send_otp_to(t, 0x12_u8, 0x13, 3)
-      send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
-      zero_box = red_box_zero?(t == LEFT ? 0 : 1, x0, x1, y0, y1)
-      unless SKIP_ZERO_RED && zero_box && @@red_zero
+      log2("EPD: window x0 x1 (bytes in half)", x0, x1)
+      log2("EPD: window y0 y1 (rows)", y0, y1)
+      if wmode == 2
+        send_otp_to(t, 0x13_u8, 0x16, 6) # DUW full
+      else
+        cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
+          (y1 & 0xFF).to_u8!, y1.unsafe_shr(8).to_u8!)
+      end
+      if wmode == 1
+        send_otp_to(t, 0x90_u8, 0x0C, 4) # DRFW full
+      else
+        cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
+      end
+      if wmode == 2
         send_otp_to(t, 0x12_u8, 0x13, 3)
-        send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
-        @@red_zero = false unless zero_box
+        send_plane(t, 0x10_u8, @@black, Pointer(UInt8).null)
+        send_otp_to(t, 0x12_u8, 0x13, 3)
+        send_plane(t, 0x11_u8, @@red, Pointer(UInt8).null)
+        @@red_zero = false
+      else
+        send_otp_to(t, 0x12_u8, 0x13, 3)
+        send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
+        zero_box = red_box_zero?(t == LEFT ? 0 : 1, x0, x1, y0, y1)
+        unless SKIP_ZERO_RED && zero_box && @@red_zero
+          send_otp_to(t, 0x12_u8, 0x13, 3)
+          send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
+          @@red_zero = false unless zero_box
+        end
       end
       t = t &+ 1
     end
