@@ -1005,6 +1005,42 @@ module EPD
   # session with the fast LUT already latched; otherwise does a normal fast
   # refresh with `kind`. Returns panel busy ms (or -1).
   def self.refresh_window(c0 : Int32, c1 : Int32, r0 : Int32, r1 : Int32, kind : Int32) : Int32
+    refresh_window2(r0, r1, c0, c1, r0, r1, c0, c1, kind)
+  end
+
+  # Pads and aligns one box (rows a0..a1, frame bytes b0..b1) and clips it to
+  # COG half `t`. Writes x0, x1 (bytes within the half), y0, y1 into w;
+  # an empty or non-overlapping box gives the 1-unit idle window.
+  def self.win_for(t : Int32, a0 : Int32, a1 : Int32, b0 : Int32, b1 : Int32, w : Int32*) : Nil
+    u = WIN_Y_UNIT
+    lo = t == LEFT ? 0 : HALF_BYTES
+    hi = lo &+ HALF_BYTES &- 1
+    b0 = b0 &- WIN_PAD_COLS
+    b0 = 0 if b0 < 0
+    b1 = b1 &+ WIN_PAD_COLS
+    b1 = ROW_BYTES &- 1 if b1 > ROW_BYTES &- 1
+    if a1 < a0 || b1 < lo || b0 > hi
+      w[0] = HALF_BYTES.unsafe_div(2)
+      w[1] = w[0]
+      w[2] = (HEIGHT.unsafe_div(2)).unsafe_div(u) &* u
+      w[3] = w[2] &+ u &- 1
+      return
+    end
+    a0 = a0 &- WIN_PAD_ROWS
+    a0 = 0 if a0 < 0
+    a0 = a0.unsafe_div(u) &* u
+    a1 = (a1 &+ WIN_PAD_ROWS).unsafe_div(u) &* u &+ u
+    a1 = HEIGHT if a1 > HEIGHT
+    w[0] = (b0 > lo ? b0 : lo) &- lo
+    w[1] = (b1 < hi ? b1 : hi) &- lo
+    w[2] = a0
+    w[3] = a1 &- 1
+  end
+
+  # Window refresh with a separate box per COG half: left rows lr0..lr1,
+  # frame bytes lc0..lc1; right likewise (empty box: lr1 < lr0).
+  def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
+                           rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32) : Int32
     @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
       @@raw = true
@@ -1013,33 +1049,21 @@ module EPD
       return @@panel_ms
     end
     u = WIN_Y_UNIT
-    r0 = r0 &- WIN_PAD_ROWS
-    r0 = 0 if r0 < 0
-    r0 = r0.unsafe_div(u) &* u
-    r1 = (r1 &+ WIN_PAD_ROWS).unsafe_div(u) &* u &+ u
-    r1 = HEIGHT if r1 > HEIGHT
-    r1 = r1 &- 1
-    c0 = c0 &- WIN_PAD_COLS
-    c0 = 0 if c0 < 0
-    c1 = c1 &+ WIN_PAD_COLS
-    c1 = ROW_BYTES &- 1 if c1 > ROW_BYTES &- 1
+    w = @@small.as(Int32*) + 4_i64 # 4 ints scratch after the command bytes
     t_up = millis
     t = LEFT
+    rows_total = 0
     while t <= RIGHT
-      lo = t == LEFT ? 0 : HALF_BYTES
-      hi = lo &+ HALF_BYTES &- 1
-      if c1 < lo || c0 > hi
-        # Nothing for this COG: a one-unit window in the white middle.
-        x0 = HALF_BYTES.unsafe_div(2)
-        x1 = x0
-        y0 = (HEIGHT.unsafe_div(2)).unsafe_div(u) &* u
-        y1 = y0 &+ u &- 1
+      if t == LEFT
+        win_for(t, lr0, lr1, lc0, lc1, w)
       else
-        x0 = (c0 > lo ? c0 : lo) &- lo
-        x1 = (c1 < hi ? c1 : hi) &- lo
-        y0 = r0
-        y1 = r1
+        win_for(t, rr0, rr1, rc0, rc1, w)
       end
+      x0 = w[0]
+      x1 = w[1]
+      y0 = w[2]
+      y1 = w[3]
+      rows_total = rows_total &+ (y1 &- y0 &+ 1)
       cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
         (y1 & 0xFF).to_u8!, y1.unsafe_shr(8).to_u8!)
       cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
@@ -1068,7 +1092,7 @@ module EPD
     end
     @@panel_ms = rc
     @@lut_latched = rc >= 0
-    log2("EPD: window rows / panel ms", r1 &- r0 &+ 1, rc)
+    log2("EPD: window rows (both COGs) / panel ms", rows_total, rc)
     rc
   end
 

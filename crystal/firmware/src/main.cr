@@ -991,7 +991,7 @@ module SkState
   end
 
   def self.box : Int32*
-    @@box = EPD.dma_alloc(16).as(Int32*) if @@box.null?
+    @@box = EPD.dma_alloc(48).as(Int32*) if @@box.null?
     @@box
   end
 
@@ -1014,10 +1014,18 @@ module SkState
     sh = shown.as(UInt32*)
     bk = EPD.black.as(UInt32*)
     wpr = EPD::ROW_BYTES.unsafe_div(4) # 30 words per row
-    r0 = EPD::HEIGHT
-    r1 = -1
-    c0 = wpr
-    c1 = -1
+    half_w = wpr.unsafe_div(2) # words 0..14 = left COG, 15..29 = right
+    b = box
+    # b[0..3]: whole box; b[4..7]: left half; b[8..11]: right half
+    # (rows r0, r1, then words c0, c1 until converted to bytes below).
+    k = 0
+    while k < 12
+      b[k] = EPD::HEIGHT # r0
+      b[k &+ 1] = -1     # r1
+      b[k &+ 2] = wpr    # c0 (words)
+      b[k &+ 3] = -1     # c1 (words)
+      k = k &+ 4
+    end
     row = y0
     while row <= y1
       i = row &* wpr
@@ -1026,21 +1034,27 @@ module SkState
         v = bk[i &+ w]
         if v != sh[i &+ w]
           sh[i &+ w] = v
-          r0 = row if row < r0
-          r1 = row
-          c0 = w if w < c0
-          c1 = w if w > c1
+          h = w < half_w ? 4 : 8
+          k = 0
+          while k <= h
+            b[k] = row if row < b[k]
+            b[k &+ 1] = row
+            b[k &+ 2] = w if w < b[k &+ 2]
+            b[k &+ 3] = w if w > b[k &+ 3]
+            k = k &+ h
+          end
         end
         w = w &+ 1
       end
       row = row &+ 1
     end
-    b = box
-    b[0] = r0
-    b[1] = r1
-    b[2] = c0 &* 4
-    b[3] = c1 &* 4 &+ 3
-    r1 >= 0
+    k = 0
+    while k < 12
+      b[k &+ 2] = b[k &+ 2] &* 4
+      b[k &+ 3] = b[k &+ 3] &* 4 &+ 3
+      k = k &+ 4
+    end
+    b[1] >= 0
   end
 
   def self.diff : Bool
@@ -1335,7 +1349,8 @@ fun crystal_app_main : Void
             b = SkState.box
             EPD.fast_pulls = GAME_PULLS
             if GAME_WINDOWED
-              EPD.refresh_window(b[2], b[3], b[0], b[1], GAME_LUT)
+              # One box per COG half keeps each window small.
+              EPD.refresh_window2(b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], GAME_LUT)
             else
               EPD.raw = true
               EPD.refresh(true, GAME_LUT)
