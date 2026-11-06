@@ -54,6 +54,8 @@ lib LibIDF
   fun cr_portrait_png_size : Int32
   fun cr_sketch_png : UInt8*
   fun cr_sketch_png_size : Int32
+  fun cr_etch_png : UInt8*
+  fun cr_etch_png_size : Int32
 end
 
 require "./epd"
@@ -246,8 +248,19 @@ fun crystal_knob_task(arg : Void*) : Void
   last_log = now
   last_blink = now
   while true
-    LibIDF.adc_oneshot_read(adc, KNOB_LEFT_CH, pointerof(raw_l))
-    LibIDF.adc_oneshot_read(adc, KNOB_RIGHT_CH, pointerof(raw_r))
+    # Average ADC_SAMPLES reads per knob (Sketch's deadband assumes this).
+    sum_l = 0
+    sum_r = 0
+    k = 0
+    while k < Sketch::ADC_SAMPLES
+      LibIDF.adc_oneshot_read(adc, KNOB_LEFT_CH, pointerof(raw_l))
+      LibIDF.adc_oneshot_read(adc, KNOB_RIGHT_CH, pointerof(raw_r))
+      sum_l = sum_l &+ raw_l
+      sum_r = sum_r &+ raw_r
+      k = k &+ 1
+    end
+    raw_l = sum_l.unsafe_div(Sketch::ADC_SAMPLES)
+    raw_r = sum_r.unsafe_div(Sketch::ADC_SAMPLES)
     raw_l = 0 if raw_l < 0
     raw_r = 0 if raw_r < 0
     mv_l = knob_mv(cal_l, raw_l)
@@ -607,6 +620,16 @@ module SketchFx
   end
 end
 
+# Sketch background (upstream 5665ab1): prep (white, rows 668..671 red), then
+# EtchASketch.png on top, then the single-knob status line if any.
+def sketch_background : Nil
+  Sketch.prep_background(EPD.black, EPD.red)
+  ok = PNG.draw(LibIDF.cr_etch_png, LibIDF.cr_etch_png_size, EPD.black, EPD.red, 0, 0, false)
+  log2("sketch: background ok / err", ok ? 1 : 0, PNG.err)
+  st = Sketch.status_text
+  draw_text(Sketch::STATUS_X, Sketch::STATUS_Y, st, EPD::WHITE, Sketch::STATUS_SCALE) if st.bytesize > 0
+end
+
 # Flash area: the frame's white screen around the drawable area.
 SK_X0 = Sketch::X_MIN - 6
 SK_Y0 = Sketch::Y_MIN - 6
@@ -643,10 +666,7 @@ end
 # fast refreshes, so the red frame is never touched.
 def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
   if Menu.needs_background? || entry
-    ok = PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
-    log2("sketch: frame decode ok / err", ok ? 1 : 0, PNG.err)
-    st = Sketch.status_text
-    draw_text(Sketch::STATUS_X, Sketch::STATUS_Y, st, EPD::WHITE, Sketch::STATUS_SCALE) if st.bytesize > 0
+    sketch_background
   end
   Menu.render(EPD.black, EPD.red)
   draw_sketch_label(wait, up, panel, total)
@@ -832,8 +852,77 @@ def colour_refresh : Bool
   ok
 end
 
+SK_WINDOWED = true # Sketch ink updates refresh only the changed box (DUW+DRFW)
+
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
+  @@shown = Pointer(UInt8).null # black plane as last sent to the panel
+  @@box = Pointer(Int32).null   # r0, r1, c0, c1 of the last diff
+  @@last_lat = 0                # input -> ink on panel, last incremental frame
+
+  def self.last_lat : Int32
+    @@last_lat
+  end
+
+  def self.last_lat=(v : Int32) : Nil
+    @@last_lat = v
+  end
+
+  def self.shown : UInt8*
+    @@shown = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*) if @@shown.null?
+    @@shown
+  end
+
+  def self.box : Int32*
+    @@box = EPD.dma_alloc(16).as(Int32*) if @@box.null?
+    @@box
+  end
+
+  # Remember the planes as shown (after any full Sketch refresh).
+  def self.mark_shown : Nil
+    sh = shown
+    bk = EPD.black
+    i = 0
+    while i < EPD::PLANE
+      sh[i] = bk[i]
+      i = i &+ 1
+    end
+  end
+
+  # Bounding box (rows, byte columns) of black-plane bytes that differ from
+  # what is shown; copies them into `shown`. False if nothing changed.
+  def self.diff : Bool
+    sh = shown
+    bk = EPD.black
+    r0 = EPD::HEIGHT
+    r1 = -1
+    c0 = EPD::ROW_BYTES
+    c1 = -1
+    row = 0
+    i = 0
+    while row < EPD::HEIGHT
+      col = 0
+      while col < EPD::ROW_BYTES
+        v = bk[i]
+        if v != sh[i]
+          sh[i] = v
+          r0 = row if row < r0
+          r1 = row
+          c0 = col if col < c0
+          c1 = col if col > c1
+        end
+        col = col &+ 1
+        i = i &+ 1
+      end
+      row = row &+ 1
+    end
+    b = box
+    b[0] = r0
+    b[1] = r1
+    b[2] = c0
+    b[3] = c1
+    r1 >= 0
+  end
 
   def self.colour? : Bool
     @@colour
@@ -847,7 +936,7 @@ end
 # Sketch frame in preview (B/W) mode: frame red as checker, normal fast LUT.
 def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
   if Menu.needs_background?
-    PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+    sketch_background
     red_to_checker
   end
   Menu.render(EPD.black, EPD.red)
@@ -865,9 +954,10 @@ end
 
 # Sketch colour: redraw the frame with red, overlay the drawing, slow refresh.
 def sketch_colour : Nil
-  PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+  sketch_background
   Sketch.render(EPD.black, EPD.red)
   SkState.colour = colour_refresh
+  SkState.mark_shown
 end
 
 # Shows a screen on entry: always a fast black/white frame.
@@ -889,14 +979,16 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
     Menu.enter(menu_mode_for(scr))
     SkState.colour = false
     if scr == SCR_SKETCH
-      PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+      sketch_background
       Menu.render(EPD.black, EPD.red)
       red_to_checker
+      draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
     else
       Menu.render(EPD.black, EPD.red)
       draw_mode_label(Menu.mode, 0, 0, 0, 0)
     end
     fast_bw(pulls, kind)
+    SkState.mark_shown if scr == SCR_SKETCH
   end
 end
 
@@ -988,6 +1080,43 @@ fun crystal_app_main : Void
       elsif Games.pressed?(inp, Games::BTN_B)
         lut_probe
         show_diag
+      end
+    elsif scr == SCR_SKETCH
+      ticked = Menu.tick(now, inp)
+      if ticked && (Menu.needs_background? || Sketch.want_clean?)
+        # Erase / clean / background: the full path, then remember the planes.
+        t = millis
+        lw = last_wait
+        last_wait = millis &- last_input
+        lat = SkState.last_lat
+        if SkState.colour?
+          sketch_frame(false, lat, EPD.upload_ms, EPD.panel_ms, last_total)
+        else
+          sketch_frame_bw(lat, EPD.upload_ms, EPD.panel_ms, last_total)
+        end
+        SkState.mark_shown
+        last_total = millis &- t
+      else
+        # Live ink: render, diff against what is shown, refresh that box now.
+        Menu.render(EPD.black, EPD.red)
+        red_to_checker unless SkState.colour?
+        if SkState.diff
+          b = SkState.box
+          t = millis
+          Shared.led_mode = LED_CYAN
+          kind = SkState.colour? ? EPD::LUT_NOSHAKE_KEEPRED : GAME_LUT
+          EPD.fast_pulls = 1
+          if SK_WINDOWED
+            EPD.refresh_window(b[2], b[3], b[0], b[1], kind)
+          else
+            EPD.raw = true
+            EPD.refresh(true, kind)
+            EPD.raw = false
+          end
+          last_total = millis &- t
+          SkState.last_lat = millis &- last_input
+          log2("sketch: ink rows / latency ms", b[1] &- b[0] &+ 1, SkState.last_lat)
+        end
       end
     elsif Menu.tick(now, inp)
       t = millis

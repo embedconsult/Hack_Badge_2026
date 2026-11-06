@@ -896,6 +896,132 @@ module EPD
     @@prev_has_red = v
   end
 
+  # ---- partial window (upstream lib/epd.py update_partial, PARTIAL_WINDOW) ---
+
+  WIN_Y_UNIT   = 4 # gate lines per DRFW y step (full screen = 0..0xA9)
+  WIN_PAD_ROWS = 8
+  WIN_PAD_COLS = 1 # bytes
+
+  # Streams rows y0..y1, bytes x0..x1 of one COG's half of `plane` (null =
+  # zeros) after index idx, double-buffered through the DMA buffers.
+  def self.send_box(target : Int32, idx : UInt8, plane : UInt8*, x0 : Int32, x1 : Int32, y0 : Int32, y1 : Int32) : Nil
+    half = target == RIGHT ? 1 : 0
+    w = x1 &- x0 &+ 1
+    rows_per = (MAX_CHUNK_ROWS &* HALF_BYTES).unsafe_div(w)
+    index(target, idx)
+    cs_lo(target)
+    row = y0
+    pending = 0
+    use1 = false
+    done = uninitialized LibIDF::SpiTransaction*
+    while row <= y1
+      n = y1 &- row &+ 1
+      n = rows_per if n > rows_per
+      buf = use1 ? @@dma1 : @@dma0
+      t = use1 ? pointerof(@@t1) : pointerof(@@t0)
+      if pending == 2
+        LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+        pending = 1
+      end
+      k = 0
+      r = 0
+      while r < n
+        if plane.null?
+          c = 0
+          while c < w
+            buf[k] = 0_u8
+            k = k &+ 1
+            c = c &+ 1
+          end
+        else
+          src = plane + ((row &+ r) &* ROW_BYTES &+ half &* HALF_BYTES &+ x0).to_i64!
+          c = 0
+          while c < w
+            buf[k] = src[c]
+            k = k &+ 1
+            c = c &+ 1
+          end
+        end
+        r = r &+ 1
+      end
+      zero(t.as(UInt8*), sizeof(LibIDF::SpiTransaction))
+      t.value.length = (k &* 8).to_u32!
+      t.value.tx_buffer = buf.as(Void*)
+      LibIDF.spi_device_queue_trans(@@dev, t, PORT_MAX_DELAY)
+      pending = pending &+ 1
+      use1 = !use1
+      row = row &+ n
+    end
+    while pending > 0
+      LibIDF.spi_device_get_trans_result(@@dev, pointerof(done), PORT_MAX_DELAY)
+      pending = pending &- 1
+    end
+    cs_hi
+  end
+
+  # Fast refresh of only the box rows r0..r1, frame byte columns c0..c1
+  # (padded and 4-row aligned): DUW (0x13) and DRFW (0x90) set to the same
+  # box on each COG and only that box uploaded (raw planes). Needs an open
+  # session with the fast LUT already latched; otherwise does a normal fast
+  # refresh with `kind`. Returns panel busy ms (or -1).
+  def self.refresh_window(c0 : Int32, c1 : Int32, r0 : Int32, r1 : Int32, kind : Int32) : Int32
+    unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
+      @@raw = true
+      refresh(true, kind)
+      @@raw = false
+      return @@panel_ms
+    end
+    u = WIN_Y_UNIT
+    r0 = r0 &- WIN_PAD_ROWS
+    r0 = 0 if r0 < 0
+    r0 = r0.unsafe_div(u) &* u
+    r1 = (r1 &+ WIN_PAD_ROWS).unsafe_div(u) &* u &+ u
+    r1 = HEIGHT if r1 > HEIGHT
+    r1 = r1 &- 1
+    c0 = c0 &- WIN_PAD_COLS
+    c0 = 0 if c0 < 0
+    c1 = c1 &+ WIN_PAD_COLS
+    c1 = ROW_BYTES &- 1 if c1 > ROW_BYTES &- 1
+    t_up = millis
+    t = LEFT
+    while t <= RIGHT
+      lo = t == LEFT ? 0 : HALF_BYTES
+      hi = lo &+ HALF_BYTES &- 1
+      if c1 < lo || c0 > hi
+        # Nothing for this COG: a one-unit window in the white middle.
+        x0 = HALF_BYTES.unsafe_div(2)
+        x1 = x0
+        y0 = (HEIGHT.unsafe_div(2)).unsafe_div(u) &* u
+        y1 = y0 &+ u &- 1
+      else
+        x0 = (c0 > lo ? c0 : lo) &- lo
+        x1 = (c1 < hi ? c1 : hi) &- lo
+        y0 = r0
+        y1 = r1
+      end
+      cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
+        (y1 & 0xFF).to_u8!, y1.unsafe_shr(8).to_u8!)
+      cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
+      send_otp_to(t, 0x12_u8, 0x13, 3)
+      send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
+      send_otp_to(t, 0x12_u8, 0x13, 3)
+      send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
+      t = t &+ 1
+    end
+    @@upload_ms = millis &- t_up
+    rc = 0
+    pulls = 0
+    while rc >= 0 && pulls < @@fast_pulls
+      r = trigger(false)
+      rc = r < 0 ? r : rc &+ r
+      pulls = pulls &+ 1
+    end
+    @@panel_ms = rc
+    @@lut_latched = rc >= 0
+    log2("EPD: window rows / panel ms", r1 &- r0 &+ 1, rc)
+    rc
+  end
+
   # ---- refresh -----------------------------------------------------------------
 
   def self.busy? : Bool
