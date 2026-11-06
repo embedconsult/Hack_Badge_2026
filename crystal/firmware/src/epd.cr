@@ -945,6 +945,17 @@ module EPD
   # ---- partial window (upstream lib/epd.py update_partial, PARTIAL_WINDOW) ---
 
   WIN_Y_UNIT   = 4 # gate lines per DRFW y step (full screen = 0..0xA9)
+  # Measured (DIAG window tests v1..v3): a RAM write window (DUW) lands at
+  # the wrong x, while the refresh window (DRFW) alone lands correctly. So by
+  # default the full planes are uploaded (66 ms) and only DRFW is windowed;
+  # the waveform time still shrinks with the DRFW rows.
+  WIN_FULL_UPLOAD = true
+  # Right COG's DRFW x counted from the other end (test hypothesis, v4).
+  @@mirror_right = false
+
+  def self.mirror_right=(v : Bool) : Nil
+    @@mirror_right = v
+  end
   WIN_PAD_ROWS = 8
   WIN_PAD_COLS = 1 # bytes
 
@@ -1045,7 +1056,7 @@ module EPD
   # 2 = DUW full + full upload, DRFW box (shows where the refresh window lands).
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
-                           wmode : Int32 = 0) : Int32
+                           wmode : Int32 = (WIN_FULL_UPLOAD ? 2 : 0)) : Int32
     @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
       @@raw = true
@@ -1107,7 +1118,13 @@ module EPD
       if wmode == 1
         send_otp_to(t, 0x90_u8, 0x0C, 4) # DRFW full
       else
-        cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
+        dx0 = x0
+        dx1 = x1
+        if t == RIGHT && @@mirror_right
+          dx0 = HALF_BYTES &- 1 &- x1
+          dx1 = HALF_BYTES &- 1 &- x0
+        end
+        cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
       end
       if wmode == 2
         send_otp_to(t, 0x12_u8, 0x13, 3)
