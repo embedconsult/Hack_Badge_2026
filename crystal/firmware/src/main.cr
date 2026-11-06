@@ -112,6 +112,8 @@ LOOP_MS     =   50 # 20 Hz
 LED_YELLOW  =    1
 LED_GREEN   =    2
 LED_CYAN    =    3
+BAR_GPIO    =   38 # 8-LED WS2812 bar along the top edge
+BAR_SHIFT   =    3 # brightness: colour >> 3
 
 # State shared between the main task and the knob task (word-sized fields).
 module Shared
@@ -157,6 +159,24 @@ module Shared
   # Right-knob LED: 0 = live hue from the knob, else a fixed status colour
   # (LED_YELLOW / LED_GREEN / LED_CYAN), as upstream Sketch does.
   @@led_mode = 0
+  @@label_bytes = 0
+
+  def self.label_bytes : Int32
+    @@label_bytes
+  end
+
+  def self.label_bytes=(v : Int32) : Nil
+    @@label_bytes = v
+  end
+  @@screen = 0
+
+  def self.screen : Int32
+    @@screen
+  end
+
+  def self.screen=(v : Int32) : Nil
+    @@screen = v
+  end
 
   def self.led_mode : Int32
     @@led_mode
@@ -240,6 +260,13 @@ fun crystal_knob_task(arg : Void*) : Void
   buf_r = EPD.dma_alloc(4)
   rgb = EPD.dma_alloc(4)
 
+  bar_ch = Pointer(Void).null
+  bar_enc = Pointer(Void).null
+  bar_ok = Pixel.open(BAR_GPIO, pointerof(bar_ch), pointerof(bar_enc))
+  bar_buf = EPD.dma_alloc(24)
+  bar_cols = EPD.dma_alloc(32).as(UInt32*)
+  bar_lit = true # unknown state at boot: blank it once
+  bar_scr = -1
   log("knob: loop starting", 0)
   on = false
   raw_l = 0
@@ -267,6 +294,36 @@ fun crystal_knob_task(arg : Void*) : Void
     mv_r = knob_mv(cal_r, raw_r)
     hue_l = mv_to_hue(mv_l, LEFT_MV_LO, LEFT_MV_HI)
     hue_r = mv_to_hue(mv_r, RIGHT_MV_LO, RIGHT_MV_HI)
+    # LED bar: Sketch's animation (upstream led_frame) in Sketch, else off.
+    if bar_ok
+      scr_now = Shared.screen
+      if scr_now == SCR_SKETCH
+        Sketch.led_invalidate if bar_scr != SCR_SKETCH
+        if Sketch.led_frame(millis, EPD.busy?, bar_cols)
+          Pixel.wait(bar_ch)
+          i = 0
+          while i < 8
+            c = bar_cols[i]
+            bar_buf[i &* 3] = (c.unsafe_shr(8) & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8!     # G
+            bar_buf[i &* 3 &+ 1] = (c.unsafe_shr(16) & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8! # R
+            bar_buf[i &* 3 &+ 2] = (c & 0xFF_u32).unsafe_shr(BAR_SHIFT).to_u8!                # B
+            i = i &+ 1
+          end
+          Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24)
+          bar_lit = true
+        end
+      elsif bar_lit
+        Pixel.wait(bar_ch)
+        i = 0
+        while i < 24
+          bar_buf[i] = 0_u8
+          i = i &+ 1
+        end
+        Pixel.show_bytes(bar_ch, bar_enc, bar_buf, 24)
+        bar_lit = false
+      end
+      bar_scr = scr_now
+    end
     btns = read_buttons
     Shared.set_knobs(mv_l, mv_r, btns)
     # A Menu press aborts a slow (colour) refresh in progress.
@@ -504,9 +561,31 @@ def draw_mode_label(m : Int32, wait : Int32, up : Int32, panel : Int32, total : 
   n = put_field(buf, n, panel, false)
   n = put_field(buf, n, total, false)
   w = text_width(name, 4) &+ n &* 6 &* 4
-  EPD.fill_rect(0, 0, w &+ 16, 7 &* 4 &+ 16, EPD::WHITE)
+  EPD.fill_rect(0, 0, w &+ 16, LABEL_H, EPD::WHITE)
   draw_text(8, 8, name, EPD::BLACK, 4)
   draw_bytes(8 &+ name.bytesize &* 6 &* 4, 8, buf, n, EPD::BLACK, 4)
+  Shared.label_bytes = (w &+ 16 &+ 7).unsafe_div(8)
+end
+
+LABEL_H = 7 * 4 + 16
+
+# Puts the label box back from what is shown, so a game frame that is not
+# a clean one keeps the old label instead of changing those pixels.
+def restore_label : Nil
+  sh = SkState.shown
+  bk = EPD.black
+  wb = Shared.label_bytes
+  wb = EPD::ROW_BYTES if wb > EPD::ROW_BYTES
+  row = 0
+  while row < LABEL_H
+    i = row &* EPD::ROW_BYTES
+    c = 0
+    while c < wb
+      bk[i &+ c] = sh[i &+ c]
+      c = c &+ 1
+    end
+    row = row &+ 1
+  end
 end
 
 # Large centred mode name, for the slow red-clearing refresh on mode entry.
@@ -852,7 +931,8 @@ def colour_refresh : Bool
   ok
 end
 
-SK_WINDOWED = true # Sketch ink updates refresh only the changed box (DUW+DRFW)
+SK_WINDOWED   = true # Sketch ink updates refresh only the changed box (DUW+DRFW)
+GAME_WINDOWED = true # same for Life / Snake frames
 
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
@@ -962,6 +1042,7 @@ end
 
 # Shows a screen on entry: always a fast black/white frame.
 def enter_screen(scr : Int32, boot : Bool) : Nil
+  Shared.screen = scr
   pulls = boot ? 3 : 1
   kind = boot ? EPD::LUT_BASE : GAME_LUT
   log2("main: screen / boot", scr, boot ? 1 : 0)
@@ -988,7 +1069,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
       draw_mode_label(Menu.mode, 0, 0, 0, 0)
     end
     fast_bw(pulls, kind)
-    SkState.mark_shown if scr == SCR_SKETCH
+    SkState.mark_shown
   end
 end
 
@@ -1132,9 +1213,28 @@ fun crystal_app_main : Void
         Menu.render(EPD.black, EPD.red)
         clean = frames >= CLEAN_EVERY
         frames = clean ? 0 : frames &+ 1
-        draw_mode_label(Menu.mode, lw, EPD.upload_ms, EPD.panel_ms, last_total)
-        EPD.fast_pulls = clean ? 3 : GAME_PULLS
-        EPD.refresh(true, clean ? EPD::LUT_BASE : GAME_LUT)
+        if clean
+          # Clean frame: new label, full 3-pull refresh with the shaking LUT.
+          draw_mode_label(Menu.mode, lw, EPD.upload_ms, EPD.panel_ms, last_total)
+          EPD.fast_pulls = 3
+          EPD.refresh(true, EPD::LUT_BASE)
+          SkState.mark_shown
+        else
+          # Keep the shown label; refresh only the changed box.
+          restore_label
+          if SkState.diff
+            b = SkState.box
+            EPD.fast_pulls = GAME_PULLS
+            if GAME_WINDOWED
+              EPD.refresh_window(b[2], b[3], b[0], b[1], GAME_LUT)
+            else
+              EPD.raw = true
+              EPD.refresh(true, GAME_LUT)
+              EPD.raw = false
+            end
+            log2("game: changed rows / panel ms", b[1] &- b[0] &+ 1, EPD.panel_ms)
+          end
+        end
       end
       last_total = millis &- t
       log2("main: screen / frame ms", scr, last_total)

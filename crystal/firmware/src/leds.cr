@@ -87,6 +87,18 @@ module Pixel
     LibIDF.rmt_transmit(chan, enc, buf.as(Void*), 3_u32, pointerof(tcfg))
   end
 
+  # Sends n bytes (GRB per pixel) from buf, non-blocking (buf must stay
+  # untouched until the next call, which waits for the previous frame).
+  def self.show_bytes(chan : Void*, enc : Void*, buf : UInt8*, n : Int32) : Nil
+    tcfg = LibIDF::RmtTransmitConfig.new
+    tcfg.flags = 2_u32
+    LibIDF.rmt_transmit(chan, enc, buf.as(Void*), n.to_u32!, pointerof(tcfg))
+  end
+
+  def self.wait(chan : Void*) : Nil
+    LibIDF.rmt_tx_wait_all_done(chan, 50)
+  end
+
   # Hue 0..1535 (six 256-step sectors) at the given brightness -> r, g, b.
   def self.hue(h : Int32, v : Int32, rgb : UInt8*) : Nil
     sector = h.unsafe_shr(8)
