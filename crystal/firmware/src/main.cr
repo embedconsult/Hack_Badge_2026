@@ -969,7 +969,7 @@ def colour_refresh : Bool
 end
 
 SK_WINDOWED   = true # Sketch ink updates refresh only the changed box (DUW+DRFW)
-GAME_WINDOWED = true # same for Life / Snake frames
+GAME_WINDOWED = false # same for Life / Snake frames
 
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)

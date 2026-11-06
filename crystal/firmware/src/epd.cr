@@ -171,7 +171,7 @@ module EPD
   # this open session was all zeros too (~33 ms per frame). Assumes the COG
   # keeps its RAM between refreshes: NEEDS A HARDWARE CHECK; set false if
   # red ghosts appear after fast frames.
-  SKIP_ZERO_RED = true
+  SKIP_ZERO_RED = false
 
   # Change the fast LUT kind by rewriting 0xB0 inside an open session instead
   # of a ~5 s COG restart. epd97.cpp notes that a rewrite inside a session
