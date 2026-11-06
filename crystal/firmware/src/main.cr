@@ -387,6 +387,7 @@ CLEAN_EVERY = 30   # game frames between clean (shaking, 3-pull) refreshes
 GAME_LUT    = EPD::LUT_NOSHAKE_BW
 LUT_TIMING  = false # boot: time one pull of each fast LUT kind, show results on the panel
 LUT_PROBE   = false # boot-time experiment: which (red, bw) pairs select which table
+PANEL_SPEED = true  # boot: run panel_speed (DIAG A runs it too)
 
 # Bring-up test for the knob WS2812s: left red, right blue for 10 s, then
 # off, with blocking transmits and a log line around every call. On success
@@ -705,7 +706,7 @@ end
 def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
-  draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
+  draw_text(40, 200, "A: PANEL SPEED TEST (~4 MIN)", EPD::BLACK, 4)
   draw_text(40, 260, "B: TABLE PROBE (~2 MIN)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 420, "PROBE QUADRANTS (RED,BW):", EPD::BLACK, 3)
@@ -743,6 +744,134 @@ def lut_timing : Nil
   EPD.fast_pulls = 3
   EPD.refresh(true, EPD::LUT_BASE)
   delay_ms(8000) # time to read it
+end
+
+# ---- panel speed experiment ---------------------------------------------------
+# One refresh, red plane raw (no promotion to slow); returns panel busy ms.
+def ps_run(kind : Int32, pulls : Int32) : Int32
+  EPD.raw = true
+  EPD.fast_pulls = pulls
+  EPD.refresh(true, kind)
+  EPD.raw = false
+  EPD.panel_ms
+end
+
+def ps_text(x : Int32, y : Int32, s : String, v : Int32, scale : Int32) : Int32
+  draw_text(x, y, s, EPD::BLACK, scale)
+  buf = Shared.label_buf
+  n = put_decimal(buf, v < 0 ? 0 : v)
+  buf[n] = 0x20_u8
+  draw_bytes(x &+ (s.bytesize &+ 1) &* 6 &* scale, y, buf, n &+ 1, EPD::BLACK, scale)
+end
+
+BAND_H    = 80
+BAND_C1   = 77  # bands use frame bytes 0..77 (x 0..623); results to the right
+PS_BANDS  = 7
+
+def ps_band(i : Int32, name : String, desc : String) : Nil
+  y = i &* BAND_H
+  draw_text(12, y &+ 10, name, EPD::BLACK, 3)
+  draw_text(12, y &+ 46, desc, EPD::BLACK, 2)
+  EPD.fill_rect(380, y &+ 8, 230, 64, EPD::BLACK)
+  EPD.window(true, 0, BAND_C1, y, y &+ BAND_H &- 1)
+end
+
+# Questions: does panel busy time scale with LUT frame counts once every
+# table (VCOM included) carries them; does a smaller DUW/DRFW window shorten
+# it; does an oscillator write (0x03) change it; what is the shortest LUT
+# that turns white solidly black. Timing first (full screen), then a clean
+# white, then one band per ink variant (each refreshed only in its band, so
+# they can be compared side by side), then all times on the panel.
+def panel_speed : Nil
+  log("ps: start", 0)
+  EPD.keep_awake = true
+  tm = EPD.dma_alloc(64).as(Int32*)
+  # -- timing phase --
+  EPD.window(false)
+  draw_pattern(1, false)
+  tm[0] = ps_run(EPD::LUT_BASE, 1)                     # base, full screen
+  draw_pattern(4, false)
+  EPD.window(true, 58, 61, 332, 339)                   # 32 x 8 px box
+  tm[1] = ps_run(EPD::LUT_BASE, 1)
+  draw_pattern(1, false)
+  EPD.window(true, 0, 119, 0, 335)                     # top half
+  tm[2] = ps_run(EPD::LUT_BASE, 1)
+  EPD.window(false)
+  EPD.custom(0x55_u8, 0xAA_u8, 0, 9, 1_u8, 1_u8, 1_u8, 1_u8)
+  draw_pattern(4, false)
+  tm[3] = ps_run(EPD::LUT_CUSTOM, 1)                   # full-duty, all groups minimal
+  EPD.osc = 0x11
+  draw_pattern(1, false)
+  tm[4] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.osc = 0x12
+  draw_pattern(4, false)
+  tm[5] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.osc = -1
+  # zero counts in group 9 (ground): skip, or 256?
+  EPD.custom(0x55_u8, 0xAA_u8, 0, 8, 1_u8, 1_u8, 1_u8, 1_u8, 1_u8, 0_u8)
+  draw_pattern(1, false)
+  tm[6] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.custom(0x55_u8, 0xAA_u8, 0, 8, 1_u8, 1_u8, 1_u8, 1_u8, 0_u8, 1_u8)
+  draw_pattern(4, false)
+  tm[7] = ps_run(EPD::LUT_CUSTOM, 1)
+  k = 0
+  while k < 8
+    log2("ps: timing test / panel ms", k, tm[k])
+    k = k &+ 1
+  end
+  # -- clean white --
+  EPD.fill(EPD::WHITE)
+  ps_run(EPD::LUT_BASE, 3)
+  ps_run(EPD::LUT_BASE, 3)
+  # -- ink bands (white -> black), each refreshed in its own band only --
+  ps_band(0, "BASE 1P", "SHAKE+4X45/1X3, VCOM 1/1")
+  tm[8] = ps_run(EPD::LUT_BASE, 1)
+  ps_band(1, "BASE 3P", "CURRENT CLEAN")
+  tm[9] = ps_run(EPD::LUT_BASE, 3)
+  EPD.custom(0x44_u8, 0xAA_u8, 1, 4, 4_u8, 1_u8, 1_u8, 1_u8)
+  ps_band(2, "N4", "44/AA 4 GRP 4/1/1 ALL TBL")
+  tm[10] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.custom(0x44_u8, 0xAA_u8, 1, 4, 10_u8, 1_u8, 1_u8, 1_u8)
+  ps_band(3, "N10", "44/AA 4 GRP 10/1/1 ALL TBL")
+  tm[11] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.custom(0x44_u8, 0xAA_u8, 1, 4, 20_u8, 1_u8, 1_u8, 1_u8)
+  ps_band(4, "N20", "44/AA 4 GRP 20/1/1 ALL TBL")
+  tm[12] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.custom(0x44_u8, 0xAA_u8, 0, 9, 1_u8, 1_u8, 1_u8, 1_u8)
+  ps_band(5, "HALF60", "44/AA ALL 10 GRP 1/1/1")
+  tm[13] = ps_run(EPD::LUT_CUSTOM, 1)
+  EPD.custom(0x55_u8, 0xAA_u8, 0, 9, 1_u8, 1_u8, 1_u8, 1_u8)
+  ps_band(6, "FULL60", "55/AA ALL 10 GRP 1/1/1")
+  tm[14] = ps_run(EPD::LUT_CUSTOM, 1)
+  k = 8
+  while k < 15
+    log2("ps: band test / panel ms", k, tm[k])
+    k = k &+ 1
+  end
+  # -- results, refreshed only right of and below the bands --
+  k = 0
+  while k < PS_BANDS
+    ps_text(636, k &* BAND_H &+ 24, "MS", tm[8 &+ k], 4)
+    k = k &+ 1
+  end
+  y = PS_BANDS &* BAND_H &+ 8
+  x = ps_text(12, y, "FULL", tm[0], 3)
+  x = ps_text(x &+ 12, y, "WIN8", tm[1], 3)
+  ps_text(x &+ 12, y, "HALFH", tm[2], 3)
+  y = y &+ 34
+  x = ps_text(12, y, "F60", tm[3], 3)
+  x = ps_text(x &+ 12, y, "OSC11", tm[4], 3)
+  ps_text(x &+ 12, y, "OSC12", tm[5], 3)
+  y = y &+ 34
+  x = ps_text(12, y, "REP0", tm[6], 3)
+  ps_text(x &+ 12, y, "PH2_0", tm[7], 3)
+  EPD.window(true, BAND_C1 &+ 1, EPD::ROW_BYTES &- 1, 0, PS_BANDS &* BAND_H &- 1)
+  ps_run(EPD::LUT_BASE, 3)
+  EPD.window(true, 0, EPD::ROW_BYTES &- 1, PS_BANDS &* BAND_H, EPD::HEIGHT &- 1)
+  ps_run(EPD::LUT_BASE, 3)
+  EPD.window(false)
+  log("ps: done", 0)
+  delay_ms(60_000) # time to photograph
 end
 
 # ---- screens, NVS, previews ------------------------------------------------
@@ -1006,6 +1135,7 @@ fun crystal_app_main : Void
   speed_test if SPEED_TEST
   lut_probe if LUT_PROBE
   lut_timing if LUT_TIMING
+  panel_speed if PANEL_SPEED
 
   # Browsing never waits for the slow waveform: no red-clearing promotion.
   EPD.promote = false
@@ -1076,7 +1206,7 @@ fun crystal_app_main : Void
       end
     elsif scr == SCR_DIAG
       if Games.pressed?(inp, Games::BTN_A)
-        lut_timing
+        panel_speed
       elsif Games.pressed?(inp, Games::BTN_B)
         lut_probe
         show_diag

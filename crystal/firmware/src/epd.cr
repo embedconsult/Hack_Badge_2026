@@ -199,6 +199,26 @@ module EPD
   @@promote = true       # run a fast refresh slow when red is on the panel
   @@abortable = false    # a long BUSY wait may be cut short by request_abort
   @@abort = false
+  # Panel-speed experiments (LUT_CUSTOM, oscillator write, cold window).
+  @@c_ink = 0x55_u8      # ink table (1) level in drive groups
+  @@c_pap = 0xAA_u8      # paper table (0) level in drive groups
+  @@c_g0 = 0             # first drive group
+  @@c_g1 = 9             # last drive group
+  @@c_on = 1_u8          # drive-group counts, written into EVERY table (VCOM too)
+  @@c_off = 1_u8
+  @@c_ph2 = 1_u8
+  @@c_rep = 1_u8
+  @@c_tail_ph2 = 1_u8    # group 9 ph2 / repeat (zero-count tests)
+  @@c_tail_rep = 1_u8
+  @@c_serial = 0
+  @@latched_serial = 0
+  @@osc = -1             # >= 0: send 0x03 00 osc after load strobe 1 (driver B)
+  @@latched_osc = -1
+  @@win_on = false       # refresh(): after the full upload, narrow DUW/DRFW to a box
+  @@win_c0 = 0
+  @@win_c1 = 0
+  @@win_r0 = 0
+  @@win_r1 = 0
 
   def self.black : UInt8*
     @@black
@@ -792,6 +812,7 @@ module EPD
   # slow refresh already put on the panel.
   LUT_KEEPRED         = 4 # shake + drive on tables 0/1
   LUT_NOSHAKE_KEEPRED = 5
+  LUT_CUSTOM          = 6 # experiment: see custom / build_lut_custom
 
   def self.build_lutb(kind : Int32) : Nil
     shake = kind == LUT_BASE || kind == LUT_BW || kind == LUT_KEEPRED
@@ -890,6 +911,88 @@ module EPD
 
   def self.raw=(v : Bool) : Nil
     @@raw = v
+  end
+
+  # Custom driver-B LUT (kind LUT_CUSTOM): groups g0..g1 drive ink/paper with
+  # (on, off, ph2) x rep in every table; all other groups are 1/1/1 x1 ground.
+  def self.custom(ink : UInt8, pap : UInt8, g0 : Int32, g1 : Int32, on : UInt8, off : UInt8,
+                  ph2 : UInt8, rep : UInt8, tail_ph2 : UInt8 = 1_u8, tail_rep : UInt8 = 1_u8) : Nil
+    @@c_ink = ink; @@c_pap = pap; @@c_g0 = g0; @@c_g1 = g1
+    @@c_on = on; @@c_off = off; @@c_ph2 = ph2; @@c_rep = rep
+    @@c_tail_ph2 = tail_ph2; @@c_tail_rep = tail_rep
+    @@c_serial = @@c_serial &+ 1
+  end
+
+  def self.osc=(v : Int32) : Nil
+    @@osc = v
+  end
+
+  # Box in frame coordinates (bytes c0..c1, rows r0..r1, r0/r1+1 multiples
+  # of 4) for the next refresh() calls; off = full screen.
+  def self.window(on : Bool, c0 : Int32 = 0, c1 : Int32 = 0, r0 : Int32 = 0, r1 : Int32 = 0) : Nil
+    @@win_on = on
+    @@win_c0 = c0; @@win_c1 = c1; @@win_r0 = r0; @@win_r1 = r1
+  end
+
+  def self.put_group_c(q : UInt8*, level : UInt8, on : UInt8, off : UInt8, ph2 : UInt8, rep : UInt8) : Nil
+    q[0] = level
+    q[1] = on; q[2] = off; q[3] = ph2
+    q[4] = on; q[5] = off; q[6] = ph2
+    q[7] = rep
+  end
+
+  def self.build_lut_custom : Nil
+    t = 0
+    while t < 5
+      g = 0
+      while g < 10
+        q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
+        drive = g >= @@c_g0 && g <= @@c_g1
+        lvl = 0x00_u8
+        lvl = @@c_ink if drive && t == 1
+        lvl = @@c_pap if drive && t == 0
+        if g == 9
+          put_group_c(q, lvl, 1_u8, 1_u8, @@c_tail_ph2, @@c_tail_rep)
+        elsif drive
+          put_group_c(q, lvl, @@c_on, @@c_off, @@c_ph2, @@c_rep)
+        else
+          put_group_c(q, 0x00_u8, 1_u8, 1_u8, 1_u8, 1_u8)
+        end
+        g = g &+ 1
+      end
+      t = t &+ 1
+    end
+  end
+
+  # After a full upload: DUW + DRFW narrowed to the @@win box on each COG and
+  # the box re-sent. A COG with nothing in the box gets a one-unit window at
+  # the bottom-middle (white margin).
+  def self.window_planes : Nil
+    u = WIN_Y_UNIT
+    t = LEFT
+    while t <= RIGHT
+      lo = t == LEFT ? 0 : HALF_BYTES
+      hi = lo &+ HALF_BYTES &- 1
+      if @@win_c1 < lo || @@win_c0 > hi
+        x0 = HALF_BYTES.unsafe_div(2)
+        x1 = x0
+        y0 = HEIGHT &- 2 &* u
+        y1 = y0 &+ u &- 1
+      else
+        x0 = (@@win_c0 > lo ? @@win_c0 : lo) &- lo
+        x1 = (@@win_c1 < hi ? @@win_c1 : hi) &- lo
+        y0 = @@win_r0
+        y1 = @@win_r1
+      end
+      cmd(t, 0x13_u8, 6, x0.to_u8!, x1.to_u8!, (y0 & 0xFF).to_u8!, y0.unsafe_shr(8).to_u8!,
+        (y1 & 0xFF).to_u8!, y1.unsafe_shr(8).to_u8!)
+      cmd(t, 0x90_u8, 4, x0.to_u8!, x1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
+      send_otp_to(t, 0x12_u8, 0x13, 3)
+      send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
+      send_otp_to(t, 0x12_u8, 0x13, 3)
+      send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
+      t = t &+ 1
+    end
   end
 
   def self.prev_has_red=(v : Bool) : Nil
@@ -1120,6 +1223,7 @@ module EPD
     cmd1(0xA7_u8, 0x10_u8); delay_ms(100)
     cmd1(0xA7_u8, 0x00_u8); delay_ms(100)
     cmd(BOTH, 0x03_u8, 2, 0x00_u8, @@otp[0x12]) unless b # OSC, driver 8 only
+    cmd(BOTH, 0x03_u8, 2, 0x00_u8, @@osc.to_u8!) if b && @@osc >= 0 # experiment
     cmd1(0x44_u8, 0x00_u8)
     cmd1(0x45_u8, 0x80_u8)
     cmd1(0xA7_u8, 0x10_u8); delay_ms(100)
@@ -1167,7 +1271,9 @@ module EPD
     update_registers
     if fast
       if @@driver_b
-        if @@probe >= 0
+        if @@lut_kind == LUT_CUSTOM
+          build_lut_custom
+        elsif @@probe >= 0
           build_probe(@@probe)
         else
           build_lutb(@@lut_kind)
@@ -1201,7 +1307,8 @@ module EPD
       fast = false
     end
 
-    if @@session_open && @@lut_latched && (fast != @@latched_fast || (fast && (@@lut_kind != @@latched_kind || @@probe != @@latched_probe)))
+    if @@session_open && @@lut_latched && (fast != @@latched_fast || (fast && (@@lut_kind != @@latched_kind || @@probe != @@latched_probe)) ||
+                                        @@c_serial != @@latched_serial || @@osc != @@latched_osc)
       cog_stop
     end
     t_init = millis
@@ -1212,6 +1319,7 @@ module EPD
     end
     t_up = millis
     write_planes(have_red && !draw_red, draw_red)
+    window_planes if @@win_on
     t_up_end = millis
     @@upload_ms = t_up_end &- t_up
 
@@ -1231,6 +1339,8 @@ module EPD
     @@latched_fast = fast
     @@latched_kind = @@lut_kind
     @@latched_probe = @@probe
+    @@latched_serial = @@c_serial
+    @@latched_osc = @@osc
     @@lut_latched = rc >= 0 && fast
     @@prev_has_red = draw_red
     keep = @@keep_awake && @@lut_latched
