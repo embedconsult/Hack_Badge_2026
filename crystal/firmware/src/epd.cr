@@ -1008,33 +1008,25 @@ module EPD
     refresh_window2(r0, r1, c0, c1, r0, r1, c0, c1, kind)
   end
 
-  # Pads and aligns one box (rows a0..a1, frame bytes b0..b1) and clips it to
-  # COG half `t`. Writes x0, x1 (bytes within the half), y0, y1 into w;
-  # an empty or non-overlapping box gives the 1-unit idle window.
-  def self.win_for(t : Int32, a0 : Int32, a1 : Int32, b0 : Int32, b1 : Int32, w : Int32*) : Nil
-    u = WIN_Y_UNIT
+  # x part of one COG's window: frame bytes b0..b1 padded and clipped to
+  # half `t`, written to w[0], w[1] (bytes within the half). A COG with
+  # nothing in its box gets a 1-byte slice at its left edge: it re-drives
+  # what is already shown there. Returns false for that idle case.
+  def self.win_x(t : Int32, empty : Bool, b0 : Int32, b1 : Int32, w : Int32*) : Bool
     lo = t == LEFT ? 0 : HALF_BYTES
     hi = lo &+ HALF_BYTES &- 1
     b0 = b0 &- WIN_PAD_COLS
     b0 = 0 if b0 < 0
     b1 = b1 &+ WIN_PAD_COLS
     b1 = ROW_BYTES &- 1 if b1 > ROW_BYTES &- 1
-    if a1 < a0 || b1 < lo || b0 > hi
-      w[0] = HALF_BYTES.unsafe_div(2)
-      w[1] = w[0]
-      w[2] = (HEIGHT.unsafe_div(2)).unsafe_div(u) &* u
-      w[3] = w[2] &+ u &- 1
-      return
+    if empty || b1 < lo || b0 > hi
+      w[0] = 0
+      w[1] = 0
+      return false
     end
-    a0 = a0 &- WIN_PAD_ROWS
-    a0 = 0 if a0 < 0
-    a0 = a0.unsafe_div(u) &* u
-    a1 = (a1 &+ WIN_PAD_ROWS).unsafe_div(u) &* u &+ u
-    a1 = HEIGHT if a1 > HEIGHT
     w[0] = (b0 > lo ? b0 : lo) &- lo
     w[1] = (b1 < hi ? b1 : hi) &- lo
-    w[2] = a0
-    w[3] = a1 &- 1
+    true
   end
 
   # Window refresh with a separate box per COG half: left rows lr0..lr1,
@@ -1054,19 +1046,36 @@ module EPD
     end
     u = WIN_Y_UNIT
     w = @@small.as(Int32*) + 4_i64 # 4 ints scratch after the command bytes
+    # The gate (row) scan is shared by the two COGs (measured: an idle window
+    # on one COG drove its rows across the whole width, and a COG whose rows
+    # differed from the master's drew nothing). So both COGs get the SAME
+    # rows: the union of the two boxes, padded and 4-row aligned.
+    l_empty = lr1 < lr0
+    r_empty = rr1 < rr0
+    if l_empty && r_empty
+      return 0
+    end
+    a0 = l_empty ? rr0 : (r_empty ? lr0 : (lr0 < rr0 ? lr0 : rr0))
+    a1 = l_empty ? rr1 : (r_empty ? lr1 : (lr1 > rr1 ? lr1 : rr1))
+    a0 = a0 &- WIN_PAD_ROWS
+    a0 = 0 if a0 < 0
+    a0 = a0.unsafe_div(u) &* u
+    a1 = (a1 &+ WIN_PAD_ROWS).unsafe_div(u) &* u &+ u
+    a1 = HEIGHT if a1 > HEIGHT
+    a1 = a1 &- 1
     t_up = millis
     t = LEFT
     rows_total = 0
     while t <= RIGHT
       if t == LEFT
-        win_for(t, lr0, lr1, lc0, lc1, w)
+        win_x(t, l_empty, lc0, lc1, w)
       else
-        win_for(t, rr0, rr1, rc0, rc1, w)
+        win_x(t, r_empty, rc0, rc1, w)
       end
       x0 = w[0]
       x1 = w[1]
-      y0 = w[2]
-      y1 = w[3]
+      y0 = a0
+      y1 = a1
       rows_total = rows_total &+ (y1 &- y0 &+ 1)
       log2("EPD: window x0 x1 (bytes in half)", x0, x1)
       log2("EPD: window y0 y1 (rows)", y0, y1)

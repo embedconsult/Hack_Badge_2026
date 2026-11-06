@@ -826,53 +826,63 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration (DIAG, User B). From a white screen, each step adds a
-# marker to the planes and refreshes it only through the window path:
-#   1 left x200 y200, 2 right x650 y400: DUW + DRFW box (normal)
-#   3 left x200 y420, 4 right x650 y120: DUW box + box upload, DRFW full
-#   5 left x400 y200, 6 right x700 y240: full upload, DRFW box
-# Holds 12 s for a photo, then a full refresh shows where each marker was
-# meant to be, numbered, for comparison.
+# Window calibration v2 (DIAG, User B). From a white screen, each step
+# adds a marker to the planes and refreshes it only through the window path
+# (both COGs share the window rows; see EPD.refresh_window2):
+#   1 left   x200 y200  1 pull       2 right  x650 y400  1 pull
+#   3 across x420 y420  1 pull (box on both COGs)
+#   4 left   x200 y520  3 pulls      5 right  x700 y120  3 pulls
+# Holds 12 s for a photo, then a full refresh shows the intended positions,
+# numbered, with each step's panel busy ms.
 def wt_pos(i : Int32, x : Bool) : Int32
   if x
-    i == 0 ? 200 : (i == 1 ? 650 : (i == 2 ? 200 : (i == 3 ? 650 : (i == 4 ? 400 : 700))))
+    i == 0 ? 200 : (i == 1 ? 650 : (i == 2 ? 420 : (i == 3 ? 200 : 700)))
   else
-    i == 0 ? 200 : (i == 1 ? 400 : (i == 2 ? 420 : (i == 3 ? 120 : (i == 4 ? 200 : 240))))
+    i == 0 ? 200 : (i == 1 ? 400 : (i == 2 ? 420 : (i == 3 ? 520 : 120)))
   end
 end
+
+WT_STEPS = 5
 
 def window_test : Nil
   log("wtest: white base", 0)
   EPD.fill(EPD::WHITE)
   fast_bw(3, GAME_LUT)
+  times = Shared.times_buf
   i = 0
-  while i < 6
+  while i < WT_STEPS
     x = wt_pos(i, true)
     y = wt_pos(i, false)
     window_marker(x, y)
-    mode = i.unsafe_div(2) # 0, 0, 1, 1, 2, 2
     c0 = x.unsafe_shr(3)
     c1 = (x &+ 119).unsafe_shr(3)
-    log2("wtest: step / mode", i &+ 1, mode)
-    EPD.fast_pulls = 1
-    if (i & 1) == 0 # left half
-      EPD.refresh_window2(y, y &+ 79, c0, c1, 1, 0, 120, -1, GAME_LUT, mode)
+    EPD.fast_pulls = i >= 3 ? 3 : 1
+    log2("wtest: step / pulls", i &+ 1, i >= 3 ? 3 : 1)
+    if i == 2 # across the COG boundary: each COG gets its part
+      EPD.refresh_window2(y, y &+ 79, c0, c1, y, y &+ 79, c0, c1, GAME_LUT)
+    elsif c1 < EPD::HALF_BYTES
+      EPD.refresh_window2(y, y &+ 79, c0, c1, 1, 0, 120, -1, GAME_LUT)
     else
-      EPD.refresh_window2(1, 0, 120, -1, y, y &+ 79, c0, c1, GAME_LUT, mode)
+      EPD.refresh_window2(1, 0, 120, -1, y, y &+ 79, c0, c1, GAME_LUT)
     end
+    times[i] = EPD.panel_ms
     delay_ms(1500)
     i = i &+ 1
   end
   log("wtest: hold 12 s for a photo", 0)
   delay_ms(12_000)
-  i = 0
   buf = Shared.label_buf
-  while i < 6
+  i = 0
+  while i < WT_STEPS
     buf[0] = (0x31 &+ i).to_u8!
-    draw_bytes(wt_pos(i, true) &+ 130, wt_pos(i, false) &+ 20, buf, 1, EPD::BLACK, 6)
+    buf[1] = 0x20_u8
+    n = 2 &+ put_decimal(buf + 2_i64, times[i])
+    buf[n] = 0x4D_u8
+    buf[n &+ 1] = 0x53_u8
+    draw_bytes(wt_pos(i, true), wt_pos(i, false) &+ 84, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 600, "REFERENCE: 1,2 BOTH  3,4 DUW ONLY  5,6 DRFW ONLY", EPD::BLACK, 3)
+  draw_text(40, 620, "REF v2: 1,2,3 1 PULL  4,5 3 PULLS  (STEP PANEL MS)", EPD::BLACK, 2)
   fast_bw(3, GAME_LUT)
 end
 
@@ -1026,7 +1036,7 @@ def colour_refresh : Bool
   ok
 end
 
-SK_WINDOWED   = true # Sketch ink updates refresh only the changed box (DUW+DRFW)
+SK_WINDOWED   = false # Sketch ink updates refresh only the changed box (DUW+DRFW)
 GAME_WINDOWED = false # same for Life / Snake frames
 
 module SkState
