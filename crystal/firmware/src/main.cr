@@ -138,6 +138,13 @@ module Shared
     b
   end
 
+  @@label = Pointer(UInt8).null
+
+  def self.label_buf : UInt8*
+    @@label = EPD.dma_alloc(32) if @@label.null?
+    @@label
+  end
+
   def self.leds_ready? : Bool
     @@leds_ready
   end
@@ -365,11 +372,72 @@ def mode_name(m : Int32) : String
   end
 end
 
-# Mode label in the top-left corner (5x7 font x4) on a white box.
-def draw_mode_label(m : Int32) : Nil
+# Decimal digits of n (>= 0) into buf; returns the count.
+def put_decimal(buf : UInt8*, n : Int32) : Int32
+  tmp = 0
+  k = 0
+  if n <= 0
+    buf[0] = 0x30_u8
+    return 1
+  end
+  t = n
+  while t > 0
+    t = t.unsafe_div(10)
+    k = k &+ 1
+  end
+  i = k
+  t = n
+  while i > 0
+    i = i &- 1
+    buf[i] = (0x30 &+ t.unsafe_mod(10)).to_u8!
+    t = t.unsafe_div(10)
+  end
+  k
+end
+
+# Draws n bytes of buf in the 5x7 font (like draw_text, for built strings).
+def draw_bytes(x : Int32, y : Int32, buf : UInt8*, n : Int32, color : Int32, scale : Int32) : Int32
+  font = LibIDF.cr_font5x7
+  i = 0
+  while i < n
+    ch = buf[i].to_i32!
+    ch = 0x3F if ch < 0x20 || ch > 0x7E
+    g = font + ((ch &- 0x20) &* 5).to_i64!
+    col = 0
+    while col < 5
+      bits = g[col]
+      row = 0
+      while row < 7
+        if (bits.unsafe_shr(row) & 1_u8) != 0_u8
+          EPD.fill_rect(x &+ col &* scale, y &+ row &* scale, scale, scale, color)
+        end
+        row = row &+ 1
+      end
+      col = col &+ 1
+    end
+    x = x &+ 6 &* scale
+    i = i &+ 1
+  end
+  x
+end
+
+# Mode label in the top-left corner (5x7 font x4) on a white box, followed by
+# "<pulls>P <ms>MS" for the previous frame, so a video shows the timing.
+def draw_mode_label(m : Int32, pulls : Int32, last_ms : Int32) : Nil
   name = mode_name(m)
-  EPD.fill_rect(0, 0, text_width(name, 4) &+ 16, 7 &* 4 &+ 16, EPD::WHITE)
+  buf = Shared.label_buf
+  n = 0
+  buf[n] = 0x20_u8; n = n &+ 1
+  n = n &+ put_decimal(buf + n.to_i64!, pulls)
+  buf[n] = 0x50_u8; n = n &+ 1 # P
+  buf[n] = 0x20_u8; n = n &+ 1
+  n = n &+ put_decimal(buf + n.to_i64!, last_ms)
+  buf[n] = 0x4D_u8; n = n &+ 1 # M
+  buf[n] = 0x53_u8; n = n &+ 1 # S
+  w = text_width(name, 4) &+ n &* 6 &* 4
+  EPD.fill_rect(0, 0, w &+ 16, 7 &* 4 &+ 16, EPD::WHITE)
   draw_text(8, 8, name, EPD::BLACK, 4)
+  draw_bytes(8 &+ name.bytesize &* 6 &* 4, 8, buf, n, EPD::BLACK, 4)
 end
 
 # Large centred mode name, for the slow red-clearing refresh on mode entry.
@@ -438,6 +506,7 @@ fun crystal_app_main : Void
   prev = 0_u32
   last_mode = Menu.mode
   frames = 0
+  last_ms = 0
   while true
     held = Shared.take_buttons
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
@@ -447,19 +516,21 @@ fun crystal_app_main : Void
       log("menu: mode", Menu.mode)
       t = millis
       if Menu.render(EPD.black, EPD.red)
-        draw_mode_label(Menu.mode)
-        draw_mode_banner(Menu.mode) if EPD.fast_runs_slow?
         # Clean (shaking, 3-pull) refresh on mode entry and every CLEAN_EVERY
         # frames; otherwise the no-shake LUT so unchanged cells stay still.
         clean = Menu.mode != last_mode || frames >= CLEAN_EVERY
         frames = clean ? 0 : frames &+ 1
-        EPD.fast_pulls = clean ? 3 : GAME_PULLS
+        pulls = clean ? 3 : GAME_PULLS
+        draw_mode_label(Menu.mode, pulls, last_ms)
+        draw_mode_banner(Menu.mode) if EPD.fast_runs_slow?
+        EPD.fast_pulls = pulls
         EPD.refresh(true, clean)
       else
         show_nametag
       end
       last_mode = Menu.mode
-      log2("menu: mode / frame ms", Menu.mode, millis &- t)
+      last_ms = millis &- t
+      log2("menu: mode / frame ms", Menu.mode, last_ms)
     end
     delay_ms(20)
   end

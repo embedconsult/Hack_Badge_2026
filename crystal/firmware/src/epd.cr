@@ -780,7 +780,14 @@ module EPD
         if t == 4
           put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
         elsif g < 1 && !shake
-          put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
+          # No shake. The freed group gives paper (table 0) one extra white
+          # drive, so pixels going black -> white (dying cells, the snake's
+          # tail) clear in a single pull; every other table rests at ground.
+          if t == 0
+            put_group_b(q, 0xAA_u8, 45_u8, 3_u8, 3_u8)
+          else
+            put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
+          end
         elsif g < 1
           shk = t == 1 ? 0x66_u8 : (t == 0 ? 0x99_u8 : (t == 2 ? 0xEE_u8 : 0x00_u8))
           put_group_b(q, shk, 10_u8, 10_u8, 3_u8)

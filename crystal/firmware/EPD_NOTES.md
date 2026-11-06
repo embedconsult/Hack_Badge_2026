@@ -84,3 +84,24 @@ It differs from the PDi/Python sequence above in several ways:
 - **Stop**: `09 7F`, 20 ms, `05 7D`, `09 00`, 200 ms, DC=0, CS=0, 150 ms, RST=0, power off, 300 ms, CS=1, RST=1.
   Supply must stay off >= 1500 ms before the next power-up.
 - Fast refresh cannot draw red: red is OR'ed into black, red plane sent as zeros. A fast refresh after a red frame is run slow.
+
+## Measured on the badge (E2969JS0B1, SPI 20 MHz, planes in PSRAM)
+| Step | Time |
+|---|---|
+| OTP probe (bitbanged, 50 kHz) | 1384 ms |
+| Upload, both planes, both COGs (DMA, 4080-byte chunks) | 66 ms (164 ms at 8 MHz) |
+| Slow (OTP waveform) refresh, panel busy | 33.0 s; ~36 s from upload start incl. registers + soft start |
+| Fast, first image of a session | ~5.6 s upload-start to BUSY released (+2.4 s power-up/reset) |
+| Fast, session kept open, 3 pulls | 3.55 s total (66 ms upload + 3 x 1.16 s) |
+| Fast pull on driver B | fixed ~1.16 s whatever the 0xB0 table asks |
+| PNG decode (1287-byte 960x672 palette PNG) | 155 ms |
+
+Notes:
+- epd97.cpp's 1 s "second pass" watch after each refresh never fired; it is kept only for slow refreshes.
+- Game frames use a fast LUT without the shake group (`build_lutb(shake: false)`); the freed group
+  drives paper (table 0) white once more. Unchanged pixels then do not visibly blink. A clean
+  (shaking, 3-pull) refresh runs on mode entry and every 30 game frames.
+- A fast refresh after a red frame is promoted to slow (fast cannot remove red).
+- Task stacks must be 8 KB (main and knob task): at 4 KB / 3.5 KB adding the RMT calls overflowed
+  silently and took down the USB-Serial/JTAG console and esptool's auto-reset.
+- Opening the console through the RFC2217 bridge resets the chip.
