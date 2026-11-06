@@ -105,3 +105,16 @@ Notes:
 - Task stacks must be 8 KB (main and knob task): at 4 KB / 3.5 KB adding the RMT calls overflowed
   silently and took down the USB-Serial/JTAG console and esptool's auto-reset.
 - Opening the console through the RFC2217 bridge resets the chip.
+- Fast LUT kinds (`EPD::LUT_*`): BASE (epd97/upstream, byte-identical to upstream lutb_base), NOSHAKE,
+  BW (upstream "short black/white": table 2 idle after group 4), NOSHAKE_BW (game frames), KEEPRED and
+  NOSHAKE_KEEPRED (tables 2 and 3 ground in every group: red pixels get no drive; used with raw planes so a
+  red frame put up by a slow refresh survives fast updates, e.g. Sketch).
+- Changing the LUT kind reopens the COG session (~5 s); keep one kind per run of frames.
+- Partial window (`EPD.refresh_window`, from upstream PARTIAL_WINDOW): DUW 0x13 = [x0,x1,y0lo,y0hi,y1lo,y1hi]
+  and DRFW 0x90 = [x0,x1,y0/4,y1/4] per COG (x in bytes of that half, rows 4-aligned), then RAM_RW and only
+  the box's bytes. A COG with nothing to do gets a 1-unit window mid-screen. Setting DRFW alone shifts the image
+  (upstream c2387f0). Not yet verified on our badge.
+- Upstream da2826e: on driver B tables 0/1 split pixels in a checkerboard with the pixel value setting
+  polarity, so an old/new differential via LUT edits alone is not possible; use the window instead.
+- Slow refreshes can be aborted (`EPD.abortable=`, `request_abort` from the button poll): the BUSY wait
+  returns, the COG is stopped and powered down.
