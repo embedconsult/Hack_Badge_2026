@@ -165,6 +165,12 @@ module EPD
   REG45_B1    = 0x84_u8
   B_REFRESH_PULLS = 3 # epd97.cpp default for driver B fast refresh
   SESSION_IMAGES  = 20     # epd97_config.h EPD_SESSION_IMAGES
+  # Quick session open for fast (0xB0) sessions, from yigitabi5444's
+  # supercon26-badge-os (measured on this badge: open 348 ms instead of
+  # 2443 ms, 0xB0 still latches): panel supply left on between fast sessions,
+  # reset 2/4/20 ms, 05 7D 50 ms, 05 00 1 ms, load strobes 2/10 ms, no 660 ms
+  # pre-update wait. Slow (OTP waveform) sessions keep the reference waits.
+  QUICK_OPEN      = true
   FAST_TIMEOUT_MS = 5_000   # BUSY wait for a fast waveform (~1.2 s per pull)
   SLOW_TIMEOUT_MS = 180_000 # BUSY wait for the OTP waveform (~33 s)
 
@@ -210,6 +216,9 @@ module EPD
   @@latched_kind = 0
   @@upload_ms = 0
   @@session_images = 0
+  @@quick = false        # current session opened with the quick waits
+  @@powered = false      # panel supply (GPIO48) is on
+  @@stop_pending = false # a refresh was aborted: wait for BUSY, then close
   @@restart_ms = 0 # last refresh: COG power-up + register/soft-start setup (0 = session reused)
   @@probe = -1          # >= 0: probe LUT driving only that table (see build_probe)
   @@latched_probe = -1
@@ -384,6 +393,7 @@ module EPD
     # Leave the session open: the probe already powered up and reset the COG,
     # so the first refresh only needs the second reset (as in cog_initial).
     second_reset
+    cmd(BOTH, 0x70_u8, 2, 0x71_u8, 0x36_u8) if @@driver_b # after every reset (errata 9)
     @@session_open = true
     @@lut_latched = false
     true
@@ -658,9 +668,11 @@ module EPD
       @@power_off_valid = false
     end
     LibIDF.gpio_set_level(PWR, 0_u32)
+    @@powered = true
   end
 
   def self.power_off : Nil
+    @@powered = false
     LibIDF.gpio_set_level(PWR, 1_u32)
     @@power_off_ms = millis
     @@power_off_valid = true
@@ -773,31 +785,73 @@ module EPD
   end
 
   # Power-up for a new session once the OTP is known.
-  def self.cog_initial : Nil
+  def self.cog_initial(quick : Bool = false) : Nil
     @@red_zero = false # new session: COG RAM contents unknown
     @@session_images = 0
-    power_on
-    delay_ms(T_RST_PWR)
-    second_reset
+    @@quick = quick && @@powered
+    if @@quick
+      # Quick reset (PDi Wide_Large waits); the supply never went off.
+      LibIDF.gpio_set_level(RST, 1_u32)
+      delay_ms(2)
+      LibIDF.gpio_set_level(RST, 0_u32)
+      delay_ms(4)
+      LibIDF.gpio_set_level(RST, 1_u32)
+      delay_ms(20)
+      cs_hi
+      delay_ms(5)
+    else
+      power_on
+      delay_ms(T_RST_PWR)
+      second_reset
+    end
+    # B1 booster setting after EVERY reset: without it a refresh draws ~2 A
+    # (badge team errata 9, via supercon26-badge-os DEVICE_INFO.md).
+    cmd(BOTH, 0x70_u8, 2, 0x71_u8, 0x36_u8) if @@driver_b
   end
 
+  # Closes the session (DC-DC soft shutdown). After a quick (fast) session
+  # the panel supply stays on, so the next fast session can open quickly;
+  # otherwise (slow sessions, errors) the supply is cut as epd97.cpp does.
+  # Never called while BUSY is low (see finish_aborted).
   def self.cog_stop : Nil
     @@red_zero = false
+    keep_power = @@quick && QUICK_OPEN && !@@spi_fail
     cmd1(0x09_u8, 0x7F_u8)
     delay_ms(20)
     cmd1(0x05_u8, 0x7D_u8)
     cmd1(0x09_u8, 0x00_u8)
     delay_ms(200)
-    LibIDF.gpio_set_level(DC, 0_u32)
-    cs_lo(BOTH)
-    delay_ms(150)
-    LibIDF.gpio_set_level(RST, 0_u32)
-    power_off
-    delay_ms(T_DISCHARGE)
-    cs_hi
-    LibIDF.gpio_set_level(RST, 1_u32)
+    if keep_power
+      wait_busy(true, 2000)
+      LibIDF.gpio_set_level(DC, 0_u32)
+      cs_lo(BOTH)
+      LibIDF.gpio_set_level(RST, 0_u32)
+      cs_hi
+      LibIDF.gpio_set_level(RST, 1_u32)
+    else
+      LibIDF.gpio_set_level(DC, 0_u32)
+      cs_lo(BOTH)
+      delay_ms(150)
+      LibIDF.gpio_set_level(RST, 0_u32)
+      power_off
+      delay_ms(T_DISCHARGE)
+      cs_hi
+      LibIDF.gpio_set_level(RST, 1_u32)
+    end
     @@session_open = false
     @@lut_latched = false
+    @@quick = false
+  end
+
+  # After an aborted refresh the COG is still running its waveform: no
+  # command may be sent while BUSY is low. Wait for it, then close.
+  def self.finish_aborted : Nil
+    return unless @@stop_pending
+    @@stop_pending = false
+    t0 = millis
+    wait_busy(true, SLOW_TIMEOUT_MS)
+    log("EPD: aborted waveform finished, waited ms", millis &- t0)
+    cog_stop
   end
 
   # ---- waveform tables ---------------------------------------------------------
@@ -1099,6 +1153,7 @@ module EPD
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
                            wmode : Int32 = WIN_MODE) : Int32
+    finish_aborted
     @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
       @@raw = true
@@ -1337,22 +1392,25 @@ module EPD
   # The vendor update register sequence (k_upd in epd97.cpp).
   def self.update_registers : Nil
     b = @@driver_b
-    cmd1(0x05_u8, 0x7D_u8); delay_ms(200)
-    cmd1(0x05_u8, 0x00_u8); delay_ms(10)
+    q = @@quick
+    hi = q ? 2 : 100 # load strobe waits (quick: PDi Wide_Large)
+    lo = q ? 10 : 100
+    cmd1(0x05_u8, 0x7D_u8); delay_ms(q ? 50 : 200)
+    cmd1(0x05_u8, 0x00_u8); delay_ms(q ? 1 : 10)
     cmd1(0xC2_u8, 0x3F_u8) unless b
     cmd1(0xD8_u8, @@otp[0x1D])
     cmd1(0xD6_u8, @@otp[0x1E])
-    cmd1(0xA7_u8, 0x10_u8); delay_ms(100)
-    cmd1(0xA7_u8, 0x00_u8); delay_ms(100)
+    cmd1(0xA7_u8, 0x10_u8); delay_ms(hi)
+    cmd1(0xA7_u8, 0x00_u8); delay_ms(lo)
     cmd(BOTH, 0x03_u8, 2, 0x00_u8, @@otp[0x12]) unless b # OSC, driver 8 only
     cmd1(0x44_u8, 0x00_u8)
     cmd1(0x45_u8, 0x80_u8)
-    cmd1(0xA7_u8, 0x10_u8); delay_ms(100)
-    cmd1(0xA7_u8, 0x00_u8); delay_ms(100)
+    cmd1(0xA7_u8, 0x10_u8); delay_ms(hi)
+    cmd1(0xA7_u8, 0x00_u8); delay_ms(lo)
     cmd1(0x44_u8, 0x06_u8)
-    cmd1(0x45_u8, b ? REG45_B1 : REG45_084) # waveform bank
-    cmd1(0xA7_u8, 0x10_u8); delay_ms(100)
-    cmd1(0xA7_u8, 0x00_u8); delay_ms(T_PRE_SS)
+    cmd1(0x45_u8, b ? REG45_B1 : REG45_084) # temperature: 0x50 + 2 x degC (0x84 = 26 C)
+    cmd1(0xA7_u8, 0x10_u8); delay_ms(hi)
+    cmd1(0xA7_u8, 0x00_u8); delay_ms(q ? lo : T_PRE_SS) # 0xB0 latches ~10 ms after this strobe
     cmd1(0x60_u8, @@otp[0x0B]) # TCON
     cmd1(0x61_u8, @@otp[0x1C]) # STV_DIR
     cmd1(0x01_u8, @@otp[0x10]) unless b # DCTL
@@ -1391,7 +1449,7 @@ module EPD
 
   # Full sequence for the first image of a session; returns panel ms or -1.
   def self.do_refresh(fast : Bool) : Int32
-    delay_ms(T_PRE_UPD)
+    delay_ms(T_PRE_UPD) unless @@quick
     update_registers
     return -1 if @@spi_fail
     if fast
@@ -1424,6 +1482,7 @@ module EPD
   # ink). Returns true on success; logs the phase timings.
   # clean = false uses the no-shake fast LUT (driver B), for game frames.
   def self.refresh(fast_req : Bool, kind : Int32 = LUT_BASE) : Bool
+    finish_aborted
     @@lut_kind = @@driver_b ? kind : LUT_BASE
     t_start = millis
     have_red = has_red?
@@ -1448,7 +1507,7 @@ module EPD
     end
     t_init = millis
     if !@@session_open
-      cog_initial
+      cog_initial(fast && QUICK_OPEN)
       @@session_open = true
       @@lut_latched = false
     end
@@ -1488,7 +1547,14 @@ module EPD
     # number of images so the COG is re-initialised regularly.
     @@session_images = @@session_images &+ 1
     keep = @@keep_awake && @@lut_latched && @@session_images < SESSION_IMAGES
-    cog_stop unless keep
+    if @@abort
+      # Aborted (Menu): the waveform is still running. Leave the COG alone
+      # (no commands while BUSY is low); the next refresh closes it first.
+      @@stop_pending = true
+      @@lut_latched = false
+    else
+      cog_stop unless keep
+    end
     t_end = millis
 
     log2("EPD: refresh fast? / first-of-session?", fast ? 1 : 0, first ? 1 : 0)
