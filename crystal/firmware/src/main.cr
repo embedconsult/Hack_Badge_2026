@@ -826,63 +826,101 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration v2 (DIAG, User B). From a white screen, each step
-# adds a marker to the planes and refreshes it only through the window path
-# (both COGs share the window rows; see EPD.refresh_window2):
-#   1 left   x200 y200  1 pull       2 right  x650 y400  1 pull
-#   3 across x420 y420  1 pull (box on both COGs)
-#   4 left   x200 y520  3 pulls      5 right  x700 y120  3 pulls
-# Holds 12 s for a photo, then a full refresh shows the intended positions,
-# numbered, with each step's panel busy ms.
-def wt_pos(i : Int32, x : Bool) : Int32
-  if x
-    i == 0 ? 200 : (i == 1 ? 650 : (i == 2 ? 420 : (i == 3 ? 200 : 700)))
+# Window calibration v3 (DIAG, User B). From a white screen; each step adds
+# content to the planes and refreshes it only through the window path
+# (EPD.refresh_window2, both COGs on the same rows):
+#   S1 rows 100..299, x 100..859 (both COGs), 1 pull: black bars at
+#      x 100..199 and x 760..859, ruler ticks (4 rows every 16) x 400..559
+#   S2 the same at rows 320..519, 3 pulls
+#   S3 full height, x 296..359 (left COG only), 1 pull: ticks every 32 rows
+#   S4 full width, rows 560..591, 1 pull: 32 px black/white blocks
+#   hold 12 s (photo A)
+#   S5 window = the whole screen, 1 pull: 8 px border (photo B, 8 s)
+# then a normal full refresh as the reference, with each step's panel ms.
+def wt_block(x0 : Int32, y0 : Int32, x1 : Int32, y1 : Int32) : Nil
+  EPD.fill_rect(x0, y0, x1 &- x0 &+ 1, y1 &- y0 &+ 1, EPD::BLACK)
+end
+
+def wt_ticks(x0 : Int32, x1 : Int32, y0 : Int32, y1 : Int32, every : Int32) : Nil
+  y = y0
+  while y <= y1
+    wt_block(x0, y, x1, y &+ 3)
+    y = y &+ every
+  end
+end
+
+def wt_content(step : Int32) : Nil
+  if step == 0 || step == 1
+    r0 = step == 0 ? 100 : 320
+    wt_block(100, r0, 199, r0 &+ 199)
+    wt_block(760, r0, 859, r0 &+ 199)
+    wt_ticks(400, 559, r0, r0 &+ 199, 16)
+  elsif step == 2
+    wt_ticks(296, 359, 0, EPD::HEIGHT &- 4, 32)
+  elsif step == 3
+    x = 0
+    while x < EPD::WIDTH
+      wt_block(x, 560, x &+ 31, 591)
+      x = x &+ 64
+    end
   else
-    i == 0 ? 200 : (i == 1 ? 400 : (i == 2 ? 420 : (i == 3 ? 520 : 120)))
+    wt_block(0, 0, EPD::WIDTH &- 1, 7)
+    wt_block(0, EPD::HEIGHT &- 8, EPD::WIDTH &- 1, EPD::HEIGHT &- 1)
+    wt_block(0, 0, 7, EPD::HEIGHT &- 1)
+    wt_block(EPD::WIDTH &- 8, 0, EPD::WIDTH &- 1, EPD::HEIGHT &- 1)
+  end
+end
+
+def wt_refresh(step : Int32) : Nil
+  EPD.fast_pulls = step == 1 ? 3 : 1
+  if step == 0
+    EPD.refresh_window2(100, 299, 12, 107, 100, 299, 12, 107, GAME_LUT)
+  elsif step == 1
+    EPD.refresh_window2(320, 519, 12, 107, 320, 519, 12, 107, GAME_LUT)
+  elsif step == 2
+    EPD.refresh_window2(0, EPD::HEIGHT &- 1, 37, 44, 1, 0, 120, -1, GAME_LUT)
+  elsif step == 3
+    EPD.refresh_window2(560, 591, 0, 119, 560, 591, 0, 119, GAME_LUT)
+  else
+    EPD.refresh_window2(0, EPD::HEIGHT &- 1, 0, 119, 0, EPD::HEIGHT &- 1, 0, 119, GAME_LUT)
   end
 end
 
 WT_STEPS = 5
 
 def window_test : Nil
-  log("wtest: white base", 0)
+  log("wtest v3: white base", 0)
   EPD.fill(EPD::WHITE)
   fast_bw(3, GAME_LUT)
   times = Shared.times_buf
   i = 0
   while i < WT_STEPS
-    x = wt_pos(i, true)
-    y = wt_pos(i, false)
-    window_marker(x, y)
-    c0 = x.unsafe_shr(3)
-    c1 = (x &+ 119).unsafe_shr(3)
-    EPD.fast_pulls = i >= 3 ? 3 : 1
-    log2("wtest: step / pulls", i &+ 1, i >= 3 ? 3 : 1)
-    if i == 2 # across the COG boundary: each COG gets its part
-      EPD.refresh_window2(y, y &+ 79, c0, c1, y, y &+ 79, c0, c1, GAME_LUT)
-    elsif c1 < EPD::HALF_BYTES
-      EPD.refresh_window2(y, y &+ 79, c0, c1, 1, 0, 120, -1, GAME_LUT)
-    else
-      EPD.refresh_window2(1, 0, 120, -1, y, y &+ 79, c0, c1, GAME_LUT)
+    if i == 4
+      log("wtest: hold 12 s for photo A", 0)
+      delay_ms(12_000)
     end
+    wt_content(i)
+    log2("wtest: step", i &+ 1, 0)
+    wt_refresh(i)
     times[i] = EPD.panel_ms
     delay_ms(1500)
     i = i &+ 1
   end
-  log("wtest: hold 12 s for a photo", 0)
-  delay_ms(12_000)
+  log("wtest: hold 8 s for photo B", 0)
+  delay_ms(8000)
   buf = Shared.label_buf
   i = 0
   while i < WT_STEPS
-    buf[0] = (0x31 &+ i).to_u8!
-    buf[1] = 0x20_u8
-    n = 2 &+ put_decimal(buf + 2_i64, times[i])
+    buf[0] = 0x53_u8 # S
+    buf[1] = (0x31 &+ i).to_u8!
+    buf[2] = 0x20_u8
+    n = 3 &+ put_decimal(buf + 3_i64, times[i])
     buf[n] = 0x4D_u8
     buf[n &+ 1] = 0x53_u8
-    draw_bytes(wt_pos(i, true), wt_pos(i, false) &+ 84, buf, n &+ 2, EPD::BLACK, 2)
+    draw_bytes(600, 16 &+ i &* 22, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 620, "REF v2: 1,2,3 1 PULL  4,5 3 PULLS  (STEP PANEL MS)", EPD::BLACK, 2)
+  draw_text(40, 620, "REF v3: S1,S3,S4,S5 1 PULL  S2 3 PULLS", EPD::BLACK, 2)
   fast_bw(3, GAME_LUT)
 end
 
@@ -891,10 +929,10 @@ def show_diag : Nil
   EPD.fill(EPD::WHITE)
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_text(40, 200, "A: LUT TIMING (1 PULL EACH)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: WINDOW TEST v3 (~45 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
-  draw_text(40, 420, "WINDOW TEST: PHOTO DURING THE 12 S", EPD::BLACK, 3)
-  draw_text(40, 460, "HOLD, THEN THE NUMBERED REFERENCE", EPD::BLACK, 3)
+  draw_text(40, 420, "WINDOW TEST: PHOTO A AT THE 12 S HOLD,", EPD::BLACK, 3)
+  draw_text(40, 460, "PHOTO B AFTER THE BORDER, THEN REFERENCE", EPD::BLACK, 3)
   EPD.fast_pulls = 3
   EPD.refresh(true, EPD::LUT_BASE)
 end
