@@ -345,6 +345,10 @@ module EPD
     end
 
     out_pin(PWR, 1_u32) # panel supply off first; the gate has no pull resistor
+    # The gate floats during the ESP32 reset, so the COG may have stayed
+    # powered (and kept register state) across the reboot. Hold the supply
+    # off long enough for the rails to bleed (EPD_T_OFF_MIN) before the probe.
+    delay_ms(T_OFF_MIN &+ 500)
     out_pin(DC, 1_u32)
     out_pin(RST, 1_u32)
     out_pin(CS1, 1_u32)
@@ -396,6 +400,7 @@ module EPD
     cmd(BOTH, 0x70_u8, 2, 0x71_u8, 0x36_u8) if @@driver_b # after every reset (errata 9)
     @@session_open = true
     @@lut_latched = false
+    @@quick = QUICK_OPEN # the supply is settled: closing this session keeps it on
     true
   end
 
@@ -1042,6 +1047,11 @@ module EPD
   WIN_MODE = 5
   # Right COG's DRFW x counted from the other end (test hypothesis, v4).
   @@mirror_right = false
+  @@send91 = false
+
+  def self.send91=(v : Bool) : Nil
+    @@send91 = v
+  end
 
   def self.mirror_right=(v : Bool) : Nil
     @@mirror_right = v
@@ -1118,6 +1128,18 @@ module EPD
     refresh_window2(r0, r1, c0, c1, r0, r1, c0, c1, kind)
   end
 
+  # RAM_RW (0x12) before a window upload: the OTP value (modes 0/1/3), or
+  # a guess at "start of window" (modes 6/7; DIAG experiments).
+  def self.ram_rw(t : Int32, wmode : Int32, x0 : Int32, y0 : Int32) : Nil
+    if wmode == 6
+      cmd(t, 0x12_u8, 3, x0.to_u8!, (y0 & 0xFF).to_u8!, @@otp[0x15])
+    elsif wmode == 7
+      cmd(t, 0x12_u8, 3, x0.to_u8!, y0.unsafe_div(4).to_u8!, @@otp[0x15])
+    else
+      send_otp_to(t, 0x12_u8, 0x13, 3)
+    end
+  end
+
   # x part of one COG's window: frame bytes b0..b1 padded and clipped to
   # half `t`, written to w[0], w[1] (bytes within the half). A COG with
   # nothing in its box gets a 1-byte slice at its left edge: it re-drives
@@ -1149,7 +1171,10 @@ module EPD
   #     row count affects the waveform time);
   # 4 = DUW full + full upload, DRFW full width x the box rows;
   # 5 = DUW full + full upload, THEN DUW and DRFW set to full width x the
-  #     box rows with no further writes (DUW sets where the scan starts).
+  #     box rows with no further writes (DUW sets where the scan starts);
+  # 6 = like 0, with RAM_RW = [x0, y0 & 0xFF, OTP byte 3] (start of window);
+  # 7 = like 0, with RAM_RW = [x0, y0 / 4, OTP byte 3].
+  # @@send91: also send 0x91 <- 0x12 after DUW/DRFW (Pervasive_Wide_Large).
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
                            wmode : Int32 = WIN_MODE) : Int32
@@ -1201,7 +1226,7 @@ module EPD
       end
       x0 = w[0]
       x1 = w[1]
-      if wmode >= 3 # rows only (3, 4, 5): full width on every COG
+      if wmode >= 3 && wmode <= 5 # rows only (3, 4, 5): full width on every COG
         x0 = 0
         x1 = HALF_BYTES &- 1
       end
@@ -1229,6 +1254,7 @@ module EPD
         end
         cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
       end
+      cmd(t, 0x91_u8, 1, 0x12_u8) if @@send91
       if wmode == 2 || wmode == 4 || wmode == 5
         send_otp_to(t, 0x12_u8, 0x13, 3)
         send_plane(t, 0x10_u8, @@black, Pointer(UInt8).null)
@@ -1243,11 +1269,11 @@ module EPD
           cmd(t, 0x90_u8, 4, 0_u8, (HALF_BYTES &- 1).to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
         end
       else
-        send_otp_to(t, 0x12_u8, 0x13, 3)
+        ram_rw(t, wmode, x0, y0)
         send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
         zero_box = red_box_zero?(t == LEFT ? 0 : 1, x0, x1, y0, y1)
         unless SKIP_ZERO_RED && zero_box && @@red_zero
-          send_otp_to(t, 0x12_u8, 0x13, 3)
+          ram_rw(t, wmode, x0, y0)
           send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
           @@red_zero = false unless zero_box
         end

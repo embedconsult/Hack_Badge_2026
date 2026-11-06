@@ -67,7 +67,15 @@ end
 require "./epd"
 require "./png"
 require "./leds"
-require "./games/badge"
+# Our own game_alloc (instead of games/badge.cr's newlib malloc): every
+# large buffer comes from the same heap_caps allocator (PSRAM, 8-bit), so
+# allocations can be audited together (see SkState.check_overlap).
+def game_alloc(n : Int32) : UInt8*
+  p = LibIDF.heap_caps_malloc(n.to_u32!, 0x404_u32).as(UInt8*) # SPIRAM | 8BIT
+  p = LibIDF.heap_caps_malloc(n.to_u32!, 0x4_u32).as(UInt8*) if p.null?
+  log2("game_alloc: bytes / addr low 24 bits", n, (p.address & 0xFFFFFF_u64).to_i32!)
+  p
+end
 require "./games/menu"
 
 STATUS_LED       = 1
@@ -168,7 +176,7 @@ module Shared
   end
 
   def self.label_buf : UInt8*
-    @@label = EPD.dma_alloc(64) if @@label.null?
+    @@label = EPD.dma_alloc(128) if @@label.null?
     @@label
   end
 
@@ -925,10 +933,54 @@ def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : 
   m = put_field(buf, m, SkState.e_up, false)
   m = put_field(buf, m, SkState.e_pan, false)
   m = put_field(buf, m, SkState.e_rst, false)
+  # Plane check (row-repeat corruption hunt): non-zero red-plane bytes
+  # (0 expected in B/W mode) and an additive checksum of the black plane's
+  # rows 560..671, as "R<count> B<sum>".
+  red_nz = 0
+  rd = EPD.red
+  i = 0
+  while i < EPD::PLANE
+    red_nz = red_nz &+ 1 if rd[i] != 0_u8
+    i = i &+ 1
+  end
+  bsum = 0
+  bk = EPD.black
+  i = 560 &* EPD::ROW_BYTES
+  while i < EPD::PLANE
+    bsum = bsum &+ bk[i].to_i32!
+    i = i &+ 1
+  end
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x52_u8 # R
+  m = m &+ 2
+  m = m &+ put_decimal(buf + m.to_i64!, red_nz)
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x42_u8 # B
+  m = m &+ 2
+  m = m &+ put_decimal(buf + m.to_i64!, bsum)
+  off = SkState.check_overlap
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x4F_u8 # O = canvas - red
+  m = m &+ 2
+  if off < 0
+    buf[m] = 0x2D_u8 # '-'
+    m = m &+ 1
+    off = 0 &- off
+  end
+  m = m &+ put_decimal(buf + m.to_i64!, off)
+  log2("sketch: plane check red nonzero / black rows 560+ sum", red_nz, bsum)
   w = (n > m &- e ? n : m &- e) &* 12 &+ 6
-  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, w, 2 &* 7 &* 2 &+ 10, EPD::WHITE)
+  w = 260 if w < 260
+  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, w, 3 &* 7 &* 2 &+ 14, EPD::WHITE)
   draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 2)
   draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3 &+ 18, buf + e.to_i64!, m &- e, EPD::BLACK, 2)
+  # Third line: the firmware version.
+  v = LibIDF.cr_version
+  k = 0
+  while k < 40 && v[k] != 0_u8
+    k = k &+ 1
+  end
+  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3 &+ 36, v, k, EPD::BLACK, 2)
 end
 
 # Asymmetric marker for the window test: 120x80 outline (6 px), a solid
@@ -940,43 +992,38 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration v6 (DIAG, User B): does a window refresh show a copy
-# of the top rows (v6 game label duplicate)? HALF60, 1 pull. From a white
-# screen with a "TOP ROWS" label at rows 8..43 (refreshed normally), each
-# step adds a marker and refreshes only its rows:
-#   W1 right x650 y400  mode 4 (DUW full, DRFW rows)
-#   W2 left  x200 y300  mode 5 (upload, then DUW + DRFW rows)
-#   W3 right x650 y520  mode 5
-#   W4 left  x200 y160  mode 4
-# Holds 12 s (photo: any extra "TOP ROWS" copies, and which markers drew),
-# then the reference with each step's panel ms.
-def wt_pos(i : Int32, x : Bool) : Int32
-  if x
-    (i & 1) == 0 ? 650 : 200
-  else
-    i == 0 ? 400 : (i == 1 ? 300 : (i == 2 ? 520 : 160))
-  end
-end
-
+# Window calibration v7 (DIAG, User B): RAM_RW per window and 0x91 12.
+# HALF60, 1 pull. White base, then each step adds TWO markers on the same
+# rows (left x200 and right x650) and refreshes them through one window
+# (each COG gets its own box):
+#   R1 y120  mode 6: DUW box, RAM_RW [x0, y0 & FF, otp], box upload, DRFW box
+#   R2 y260  mode 7: same with RAM_RW y = y0 / 4
+#   R3 y400  mode 6 + 0x91 12
+#   R4 y540  mode 5 (upload, then DUW + DRFW rows) + 0x91 12
+# Holds 12 s (photo), then the reference with each step's panel ms.
 WT_STEPS = 4
 
+def wt_y(i : Int32) : Int32
+  i == 0 ? 120 : (i == 1 ? 260 : (i == 2 ? 400 : 540))
+end
+
 def window_test : Nil
-  log("wtest v6: white base + top label", 0)
+  log("wtest v7: white base", 0)
   EPD.fill(EPD::WHITE)
-  draw_text(8, 8, "TOP ROWS 0-43", EPD::BLACK, 4)
   fast_bw(3, EPD::LUT_HALF60)
   times = Shared.times_buf
   i = 0
   while i < WT_STEPS
-    x = wt_pos(i, true)
-    y = wt_pos(i, false)
-    window_marker(x, y)
-    c0 = x.unsafe_shr(3)
-    c1 = (x &+ 119).unsafe_shr(3)
+    y = wt_y(i)
+    window_marker(200, y)
+    window_marker(650, y)
+    mode = i == 0 ? 6 : (i == 1 ? 7 : (i == 2 ? 6 : 5))
+    EPD.send91 = i >= 2
     EPD.fast_pulls = 1
-    mode = (i == 1 || i == 2) ? 5 : 4
     log2("wtest: step / mode", i &+ 1, mode)
-    EPD.refresh_window2(y, y &+ 79, c0, c1, y, y &+ 79, c0, c1, EPD::LUT_HALF60, mode)
+    # left COG box x200..319 (bytes 25..39), right x650..769 (bytes 81..96)
+    EPD.refresh_window2(y, y &+ 79, 25, 39, y, y &+ 79, 81, 96, EPD::LUT_HALF60, mode)
+    EPD.send91 = false
     times[i] = EPD.panel_ms
     delay_ms(1500)
     i = i &+ 1
@@ -986,16 +1033,16 @@ def window_test : Nil
   buf = Shared.label_buf
   i = 0
   while i < WT_STEPS
-    buf[0] = 0x57_u8 # W
+    buf[0] = 0x52_u8 # R
     buf[1] = (0x31 &+ i).to_u8!
     buf[2] = 0x20_u8
     n = 3 &+ put_decimal(buf + 3_i64, times[i])
     buf[n] = 0x4D_u8
     buf[n &+ 1] = 0x53_u8
-    draw_bytes(wt_pos(i, true), wt_pos(i, false) &+ 84, buf, n &+ 2, EPD::BLACK, 2)
+    draw_bytes(380, wt_y(i) &+ 30, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 620, "REF v6: W1,W4 MODE 4   W2,W3 MODE 5", EPD::BLACK, 2)
+  draw_text(40, 640, "REF v7: R1 RAMRW Y  R2 RAMRW Y/4  R3 R1+91  R4 MODE5+91", EPD::BLACK, 2)
   fast_bw(3, EPD::LUT_HALF60)
   EPD.cog_stop # full COG re-init on the next refresh: nothing of the test survives
 end
@@ -1279,6 +1326,29 @@ module SkState
   def self.box : Int32*
     @@box = EPD.dma_alloc(48).as(Int32*) if @@box.null?
     @@box
+  end
+
+  # Does [a, a+n) overlap [b, b+n)? Logged with the offset.
+  def self.overlap?(what : String, a : UInt8*, b : UInt8*, n : Int32) : Bool
+    return false if a.null? || b.null?
+    d = a.address.to_i64! &- b.address.to_i64!
+    hit = d > 0_i64 &- n.to_i64! && d < n.to_i64!
+    log2(what, hit ? 1 : 0, d.to_i32!)
+    hit
+  end
+
+  # Audit: the Sketch canvas against the EPD planes and our plane copies.
+  # Returns canvas - red (40320 would mean the canvas aliases red row 336).
+  def self.check_overlap : Int32
+    cv = Sketch.canvas
+    n = EPD::PLANE
+    overlap?("alloc: canvas vs red (overlap, offset)", cv, EPD.red, n)
+    overlap?("alloc: canvas vs black (overlap, offset)", cv, EPD.black, n)
+    overlap?("alloc: canvas vs shown (overlap, offset)", cv, shown, n)
+    overlap?("alloc: canvas vs save (overlap, offset)", cv, SketchFx.save_buf, n)
+    overlap?("alloc: red vs black (overlap, offset)", EPD.red, EPD.black, n)
+    overlap?("alloc: shown vs red (overlap, offset)", shown, EPD.red, n)
+    (cv.address.to_i64! &- EPD.red.address.to_i64!).to_i32!
   end
 
   # Remember the planes as shown (after any full refresh).
