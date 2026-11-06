@@ -889,7 +889,7 @@ def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : 
     sketch_background
   end
   Menu.render(EPD.black, EPD.red)
-  draw_sketch_label(wait, up, panel, total)
+  draw_sketch_label(wait, up, panel, total, true)
   Shared.led_mode = LED_CYAN
   if entry
     EPD.raw = false
@@ -907,7 +907,45 @@ def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : 
 end
 
 # "SK wait/upload/panel/total" inside the screen area (top-left), x3.
-def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
+# Exact red-plane check: the red plane must equal the Etch background's red
+# with the canvas ink cleared (colour frames), or be all zero (B/W frames).
+# Returns the number of mismatching bytes; @@first_row gets the first one.
+module RedCheck
+  @@sb = Pointer(UInt8).null
+  @@sr = Pointer(UInt8).null
+  @@first_row = -1
+
+  def self.first_row : Int32
+    @@first_row
+  end
+
+  def self.run(colour : Bool) : Int32
+    rd = EPD.red
+    cv = Sketch.canvas
+    @@first_row = -1
+    if colour
+      @@sb = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*) if @@sb.null?
+      @@sr = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*) if @@sr.null?
+      return -1 if @@sb.null? || @@sr.null?
+      Sketch.prep_background(@@sb, @@sr)
+      PNG.draw(LibIDF.cr_etch_png, LibIDF.cr_etch_png_size, @@sb, @@sr, 0, 0, false)
+    end
+    bad = 0
+    i = 0
+    while i < EPD::PLANE
+      want = colour ? (@@sr[i] & (cv[i] ^ 0xFF_u8)) : 0_u8
+      if rd[i] != want
+        bad = bad &+ 1
+        @@first_row = i.unsafe_div(EPD::ROW_BYTES) if @@first_row < 0
+      end
+      i = i &+ 1
+    end
+    log2("redcheck: mismatching red bytes / first row", bad, @@first_row)
+    bad
+  end
+end
+
+def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32, colour : Bool = false) : Nil
   buf = Shared.label_buf
   buf[0] = 0x53_u8 # S
   buf[1] = 0x4B_u8 # K
@@ -1007,6 +1045,21 @@ def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : 
   buf[m &+ 1] = 0x57_u8 # W
   m = m &+ 2
   m = m &+ put_decimal(buf + m.to_i64!, wr)
+  mism = RedCheck.run(colour)
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x4D_u8 # M = red bytes differing from the expected red plane
+  m = m &+ 2
+  if mism < 0
+    buf[m] = 0x3F_u8
+    m = m &+ 1
+  else
+    m = m &+ put_decimal(buf + m.to_i64!, mism)
+    if mism > 0
+      buf[m] = 0x40_u8 # '@' first row
+      m = m &+ 1
+      m = m &+ put_decimal(buf + m.to_i64!, RedCheck.first_row)
+    end
+  end
   off = SkState.check_overlap
   buf[m] = 0x20_u8
   buf[m &+ 1] = 0x4F_u8 # O = canvas - red
@@ -1544,7 +1597,7 @@ def sketch_colour : Nil
   draw_sketch_hint(false)
   # Label with the R/B/O plane check + version also on the colour frame
   # (and logged), so the colour render can be diagnosed from a photo.
-  draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
+  draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0, true)
   ok = colour_refresh
   SkState.colour = ok
   SkState.red_frame = ok # stays on the panel until another screen replaces it
@@ -1592,7 +1645,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
       sketch_background
       SkState.entry_decode = millis &- t_dec
       Menu.render(EPD.black, EPD.red)
-      draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
+      draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0, true)
       EPD.raw = true
       save = SketchFx.save_buf
       i = 0

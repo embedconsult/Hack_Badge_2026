@@ -974,7 +974,19 @@ module EPD
       while g < 10
         q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
         red_level = g <= 1 ? 0xAA_u8 : 0xFF_u8
-        if t == 4 || (keepred && (t == 2 || t == 3))
+        if keepred && (t == 2 || t == 3)
+          # Ground (red pixels get no drive) but with table 1's timing for
+          # this group: a group only lasts as long as its shortest table, so
+          # minimal 1/1/1 x1 groups here collapsed every keep-red pull to
+          # ~86 ms (measured), which barely moved the ink.
+          src = @@lut + ((1 &* 10 &+ g) &* 8).to_i64!
+          k = 0
+          while k < 8
+            q[k] = src[k]
+            k = k &+ 1
+          end
+          q[0] = 0x00_u8
+        elsif t == 4
           put_group_b(q, 0x00_u8, 1_u8, 1_u8, 1_u8)
         elsif g < 1 && !shake
           # No shake. The freed group gives paper (table 0) one extra white
