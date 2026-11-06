@@ -11,8 +11,9 @@
 #             PNG.draw(etch_png, ..., EPD.black, EPD.red, ...)
 #           if Menu.render(EPD.black, EPD.red)   # false => Nametag
 #             Menu.want_clean? ? fast refresh with cleaning flash
-#             : Sketch.dirty_box(...) (Sketch mode) ? partial B/W window
+#             : Menu.dirty_box(...) ? partial B/W window of that box
 #             : fast 1-pass B/W refresh
+#   (Menu.dirty_rects(r, max) gives up to 4 smaller rects instead; 0 = full.)
 #           else draw the nametag and do a full colour refresh
 
 require "./common"
@@ -30,6 +31,7 @@ module Menu
   @@mode = NAMETAG
   @@inited = 0 # bit per mode
   @@failed = 0 # bit per mode whose init failed
+  @@switched = true # the last tick() true was a mode switch (full refresh)
 
   def self.mode : Int32
     @@mode
@@ -80,6 +82,7 @@ module Menu
 
   # true = the panel needs a refresh (mode switch or game update).
   def self.tick(now : Int32, inp : LibGames::Input) : Bool
+    @@switched = true
     if Games.pressed?(inp, Games::BTN_PLUS)
       enter(@@mode &+ 1 == COUNT ? 0 : @@mode &+ 1)
       return true
@@ -89,6 +92,7 @@ module Menu
       return true
     end
     return false unless ok?
+    @@switched = false
     if @@mode == SKETCH
       Sketch.tick(now, inp)
     elsif @@mode == LIFE
@@ -113,5 +117,35 @@ module Menu
       return false
     end
     true
+  end
+
+  # Partial window (inclusive pixels) for the refresh tick() just requested;
+  # false = full refresh (mode switch, Nametag, restart/reseed/game over...).
+  def self.dirty_box(x0 : Int32*, y0 : Int32*, x1 : Int32*, y1 : Int32*) : Bool
+    return false if @@switched || !ok?
+    if @@mode == SKETCH
+      Sketch.dirty_box(x0, y0, x1, y1)
+    elsif @@mode == LIFE
+      Life.dirty_box(x0, y0, x1, y1)
+    elsif @@mode == SNAKE
+      Snake.dirty_box(x0, y0, x1, y1)
+    else
+      false
+    end
+  end
+
+  # Up to `max` rects {x0, y0, x1, y1} into dst[4*i..]; 0 = full refresh.
+  # Sketch always gives its single box.
+  def self.dirty_rects(dst : Int32*, max : Int32) : Int32
+    return 0 if @@switched || !ok? || max < 1
+    if @@mode == SKETCH
+      Sketch.dirty_box(dst, dst + 1_i64, dst + 2_i64, dst + 3_i64) ? 1 : 0
+    elsif @@mode == LIFE
+      Life.dirty_rects(dst, max)
+    elsif @@mode == SNAKE
+      Snake.dirty_rects(dst, max)
+    else
+      0
+    end
   end
 end

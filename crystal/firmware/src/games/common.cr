@@ -165,3 +165,57 @@ module Games
     fill_rect(p, x0 &+ w &- t, y0, t, h)
   end
 end
+
+module Games
+  # ---- partial-refresh rects -----------------------------------------------
+  # Rects are 4 Int32s {x0, y0, x1, y1}, inclusive pixel bounds.
+
+  def self.rect_area(x0 : Int32, y0 : Int32, x1 : Int32, y1 : Int32) : Int32
+    (x1 &- x0 &+ 1) &* (y1 &- y0 &+ 1)
+  end
+
+  # Merges rects (r[4*i..]) pairwise, smallest added area first, until at
+  # most `max` (>= 1) remain; order of the survivors is kept. Returns count.
+  def self.merge_rects(r : Int32*, n : Int32, max : Int32) : Int32
+    max = 1 if max < 1
+    while n > max
+      bi = 0
+      bj = 1
+      best = 0x7FFFFFFF
+      i = 0
+      while i < n
+        j = i &+ 1
+        while j < n
+          a = r + (i &* 4).to_i64!
+          b = r + (j &* 4).to_i64!
+          ux0 = a[0] < b[0] ? a[0] : b[0]
+          uy0 = a[1] < b[1] ? a[1] : b[1]
+          ux1 = a[2] > b[2] ? a[2] : b[2]
+          uy1 = a[3] > b[3] ? a[3] : b[3]
+          cost = rect_area(ux0, uy0, ux1, uy1) &- rect_area(a[0], a[1], a[2], a[3]) &-
+                 rect_area(b[0], b[1], b[2], b[3])
+          if cost < best
+            best = cost
+            bi = i
+            bj = j
+          end
+          j = j &+ 1
+        end
+        i = i &+ 1
+      end
+      a = r + (bi &* 4).to_i64!
+      b = r + (bj &* 4).to_i64!
+      a[0] = b[0] if b[0] < a[0]
+      a[1] = b[1] if b[1] < a[1]
+      a[2] = b[2] if b[2] > a[2]
+      a[3] = b[3] if b[3] > a[3]
+      k = bj &* 4
+      while k < (n &- 1) &* 4
+        r[k] = r[k &+ 4]
+        k = k &+ 1
+      end
+      n = n &- 1
+    end
+    n
+  end
+end

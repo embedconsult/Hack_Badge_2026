@@ -9,6 +9,12 @@
 #
 # Rendering is black-only (fast refresh): body cells filled, food a hollow
 # square, game over = thick frame around the panel and an X on the head.
+#
+# Partial refresh: a step only changes the new head cell, the vacated tail
+# cell and (after eating) the new food cell. Those cells are collected until
+# tick returns true, then reported by dirty_box / dirty_rects (whole 24 px
+# cells, inclusive pixel bounds). Restart and game over report false = full
+# refresh.
 
 require "./common"
 
@@ -27,6 +33,7 @@ module Snake
   MIN_INTERVAL = 300  # ms per step, right knob at 1
   MAX_INTERVAL = 1500 # right knob at 0
   KNOB_HYST    =  128 # Q12 margin into a quadrant before it counts
+  MAX_PEND     =    8 # changed cells kept before falling back to full
 
   @@body = Pointer(UInt16).null
   @@occ = Pointer(UInt8).null
@@ -41,6 +48,12 @@ module Snake
   @@last = 0
   @@started = false
   @@quad = -1
+  # MAX_PEND pending cells, MAX_PEND reported cells, MAX_PEND scratch rects
+  @@pend = Pointer(Int32).null
+  @@npend = 0
+  @@nrep = 0
+  @@full = true
+  @@r_full = true
 
   def self.score : Int32
     @@score
@@ -90,15 +103,20 @@ module Snake
     if @@body.null?
       @@body = game_alloc(MAX &* 2).as(UInt16*)
       @@occ = game_alloc(MAX)
-      return false if @@body.null? || @@occ.null?
+      @@pend = game_alloc(MAX_PEND &* 6 &* 4).as(Int32*)
+      return false if @@body.null? || @@occ.null? || @@pend.null?
     end
     restart
     true
   end
 
+  # Mode entry: the caller does a full refresh of the current state.
   def self.resync : Nil
     @@started = false
     @@quad = -1
+    @@npend = 0
+    @@full = false
+    @@r_full = true
   end
 
   def self.restart : Nil
@@ -109,6 +127,8 @@ module Snake
     @@over = false
     @@won = false
     @@score = 0
+    @@npend = 0
+    @@full = true
     y = ROWS.unsafe_div(2)
     x = COLS.unsafe_div(2) &- START
     i = 0
@@ -178,6 +198,7 @@ module Snake
     if x < 0 || y < 0 || x >= COLS || y >= ROWS
       unless @@wrap
         @@over = true
+        @@full = true
         return false
       end
       x = COLS &- 1 if x < 0
@@ -191,21 +212,26 @@ module Snake
     # Moving into the tail's cell is fine unless growing (it moves away).
     if @@occ[n] != 0_u8 && (grow || n != tail)
       @@over = true
+      @@full = true
       return false
     end
     unless grow
       @@occ[tail] = 0_u8
       @@len = @@len &- 1
+      mark(tail)
     end
     push(n)
+    mark(n)
     if grow
       @@score = @@score &+ 1
       place_food
       if @@food < 0
         @@won = true
         @@over = true
+        @@full = true
         return false
       end
+      mark(@@food)
     end
     true
   end
@@ -221,6 +247,7 @@ module Snake
       if Games.pressed?(inp, Games::BTN_A | Games::BTN_B)
         restart
         @@last = now
+        flush
         return true
       end
       return false
@@ -244,7 +271,87 @@ module Snake
     return false if now &- @@last < interval
     @@last = now
     step
+    flush
     true
+  end
+
+  # ---- partial-update windows ---------------------------------------------
+
+  # Cell c will look different on the next refresh.
+  def self.mark(c : Int32) : Nil
+    return if @@full || c < 0 || @@pend.null?
+    i = 0
+    while i < @@npend
+      return if @@pend[i] == c
+      i = i &+ 1
+    end
+    if @@npend == MAX_PEND
+      @@full = true
+      return
+    end
+    @@pend[@@npend] = c
+    @@npend = @@npend &+ 1
+  end
+
+  # The caller is about to refresh: report the cells marked since the last
+  # flush (or a full refresh) and start collecting afresh. tick() calls this.
+  def self.flush : Nil
+    rep = @@pend + MAX_PEND.to_i64!
+    i = 0
+    while i < @@npend
+      rep[i] = @@pend[i]
+      i = i &+ 1
+    end
+    @@nrep = @@npend
+    @@r_full = @@full
+    @@npend = 0
+    @@full = false
+  end
+
+  # Reported cells as whole-cell pixel rects in the scratch area.
+  def self.rep_rects : Int32*
+    rep = @@pend + MAX_PEND.to_i64!
+    r = @@pend + (MAX_PEND &* 2).to_i64!
+    i = 0
+    while i < @@nrep
+      c = rep[i]
+      x = c.unsafe_mod(COLS) &* CELL
+      y = c.unsafe_div(COLS) &* CELL
+      r[i &* 4] = x
+      r[i &* 4 &+ 1] = y
+      r[i &* 4 &+ 2] = x &+ CELL &- 1
+      r[i &* 4 &+ 3] = y &+ CELL &- 1
+      i = i &+ 1
+    end
+    r
+  end
+
+  # Inclusive pixel box of the cells changed for the refresh tick() just
+  # requested. false = full refresh (restart, game over, mode entry).
+  def self.dirty_box(x0 : Int32*, y0 : Int32*, x1 : Int32*, y1 : Int32*) : Bool
+    return false if @@r_full || @@nrep == 0
+    r = rep_rects
+    Games.merge_rects(r, @@nrep, 1)
+    x0.value = r[0]
+    y0.value = r[1]
+    x1.value = r[2]
+    y1.value = r[3]
+    true
+  end
+
+  # Up to `max` inclusive pixel rects {x0, y0, x1, y1} into dst[4*i..]: one
+  # per changed cell (normally head, vacated tail, new food: <= 3), merged
+  # least-added-area first while more than `max`. 0 = full refresh.
+  def self.dirty_rects(dst : Int32*, max : Int32) : Int32
+    return 0 if @@r_full || @@nrep == 0 || max < 1
+    r = rep_rects
+    n = Games.merge_rects(r, @@nrep, max)
+    i = 0
+    while i < n &* 4
+      dst[i] = r[i]
+      i = i &+ 1
+    end
+    n
   end
 
   def self.render(black : UInt8*, red : UInt8*) : Nil

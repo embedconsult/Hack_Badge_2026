@@ -106,10 +106,10 @@ describe Life do
   it "reseeds after STABLE_RESEED stable generations" do
     life_clear
     3.times { |i| Life.set_cell(10 + i, 10, true) }
-    i0 = inp
+    i0 = inp(0, 1200) # one generation per refresh
     t = 1000
     Life.tick(t, i0) # sync
-    results = (1..Life::STABLE_RESEED + 1).map { t += 250; Life.tick(t, i0) }
+    results = (1..Life::STABLE_RESEED + 1).map { t += Life::MAX_INTERVAL; Life.tick(t, i0) }
     results[0].should be_true                    # first step changes
     results[1...Life::STABLE_RESEED].all? { |r| !r }.should be_true
     results.last.should be_true                  # reseeded
@@ -124,6 +124,69 @@ describe Life do
     Life.tick(10, press(Games::BTN_A, 4096))
     hi = Life.population
     hi.should be > lo * 4
+  end
+
+  it "reports exactly the flipped cells of a glider step as the dirty box" do
+    life_clear
+    glider = [{1, 0}, {2, 1}, {0, 2}, {1, 2}, {2, 2}]
+    glider.each { |(x, y)| Life.set_cell(x + 20, y + 10, true) }
+    Life.flush # panel now shows the seeded board (full refresh)
+    x0 = y0 = x1 = y1 = 0
+    Life.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false
+    before = life_cells
+    Life.step
+    Life.flush
+    flipped = (before - life_cells) + (life_cells - before)
+    flipped.size.should be > 0
+    Life.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
+    cx0, cx1 = flipped.min_of(&.[0]), flipped.max_of(&.[0])
+    cy0, cy1 = flipped.min_of(&.[1]), flipped.max_of(&.[1])
+    {x0, y0, x1, y1}.should eq({cx0 * 20, 6 + cy0 * 20, (cx1 + 1) * 20 - 1, 6 + (cy1 + 1) * 20 - 1})
+    r = Pointer(Int32).malloc(16)
+    Life.dirty_rects(r, 4).should eq 1 # all in band 1 (cols 12..23)
+    {r[0], r[1], r[2], r[3]}.should eq({x0, y0, x1, y1})
+  end
+
+  it "splits flips into vertical bands and merges down to max" do
+    life_clear
+    Life.flush
+    3.times { |i| Life.set_cell(2 + i, 5, true) }   # blinker, band 0
+    3.times { |i| Life.set_cell(40 + i, 20, true) } # blinker, band 3
+    Life.step
+    Life.flush
+    r = Pointer(Int32).malloc(16)
+    Life.dirty_rects(r, 4).should eq 2
+    {r[0], r[1], r[2], r[3]}.should eq({40, 6 + 4 * 20, 100 - 1, 6 + 7 * 20 - 1})
+    {r[4], r[5], r[6], r[7]}.should eq({800, 6 + 19 * 20, 860 - 1, 6 + 22 * 20 - 1})
+    Life.dirty_rects(r, 1).should eq 1
+    {r[0], r[1], r[2], r[3]}.should eq({40, 6 + 4 * 20, 860 - 1, 6 + 22 * 20 - 1})
+    # a blinker's two phases cancel: nothing to refresh after 2 generations
+    Life.step; Life.step
+    Life.pending?.should be_false
+  end
+
+  it "runs several generations per refresh at the fast end of the right knob" do
+    Life.gens_for(0).should eq Life::MAX_GENS
+    Life.gens_for(Life::FAST_ZONE - 1).should eq 1
+    Life.gens_for(4096).should eq 1
+    Life.interval_for(Life::FAST_ZONE).should eq Life::MIN_INTERVAL
+    Life.interval_for(4096).should eq Life::MAX_INTERVAL
+    life_clear
+    glider = [{1, 0}, {2, 1}, {0, 2}, {1, 2}, {2, 2}]
+    glider.each { |(x, y)| Life.set_cell(x + 20, y + 10, true) }
+    Life.tick(0, inp(0, 0)) # sync
+    Life.tick(Life::MIN_INTERVAL, inp(0, 0)).should be_true
+    Life.gens_per_frame.should eq 4
+    Life.gen.should eq 4
+    life_cells.sort.should eq glider.map { |(x, y)| {x + 21, y + 11} }.sort
+  end
+
+  it "reseed forces a full refresh" do
+    Life.init(20)
+    Life.tick(0, press(Games::BTN_A)).should be_true
+    x0 = y0 = x1 = y1 = 0
+    Life.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false
+    Life.dirty_rects(Pointer(Int32).malloc(16), 4).should eq 0
   end
 
   it "renders cells as squares with a 2 px gap" do
@@ -213,6 +276,58 @@ describe Snake do
     Snake.dir.should eq Snake::DOWN
     Snake.tick(30, inp(3600))   # left
     Snake.dir.should eq Snake::LEFT
+  end
+
+  it "reports the new head and vacated tail cells per step" do
+    Snake.init(true)
+    Snake.resync
+    Snake.set_food(0)
+    Snake.tick(0, inp(1536, 0)) # sync (right knob 0 = slowest)
+    tail = Snake.segment(Snake.length - 1)
+    Snake.tick(Snake::MAX_INTERVAL, inp(1536, 0)).should be_true
+    h = Snake.head
+    x0 = y0 = x1 = y1 = 0
+    Snake.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
+    tx, ty, hx, hy = (tail % 40) * 24, (tail // 40) * 24, (h % 40) * 24, (h // 40) * 24
+    {x0, y0, x1, y1}.should eq({tx, ty, hx + 23, hy + 23})
+    r = Pointer(Int32).malloc(12)
+    Snake.dirty_rects(r, 3).should eq 2
+    rects = [{r[0], r[1], r[2], r[3]}, {r[4], r[5], r[6], r[7]}].sort
+    rects.should eq [{tx, ty, tx + 23, ty + 23}, {hx, hy, hx + 23, hy + 23}].sort
+  end
+
+  it "reports head and new food after eating (tail stays)" do
+    Snake.init(true)
+    Snake.resync
+    Snake.tick(0, inp(1536, 0))
+    Snake.set_food(Snake.head + 1)
+    Snake.tick(Snake::MAX_INTERVAL, inp(1536, 0)).should be_true
+    f, h = Snake.food, Snake.head
+    r = Pointer(Int32).malloc(12)
+    Snake.dirty_rects(r, 3).should eq 2
+    rects = [{r[0], r[1]}, {r[4], r[5]}].sort
+    rects.should eq [{(h % 40) * 24, (h // 40) * 24}, {(f % 40) * 24, (f // 40) * 24}].sort
+  end
+
+  it "forces a full refresh on game over and restart" do
+    Snake.init(false)
+    Snake.resync
+    Snake.set_food(-1)
+    Snake.tick(0, inp(1536, 0))
+    t = 0
+    x0 = y0 = x1 = y1 = 0
+    20.times do
+      t += Snake::MAX_INTERVAL
+      Snake.tick(t, inp(1536, 0)).should be_true
+      Snake.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
+    end
+    t += Snake::MAX_INTERVAL
+    Snake.tick(t, inp(1536, 0)).should be_true # hits the wall
+    Snake.over?.should be_true
+    Snake.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false
+    Snake.dirty_rects(Pointer(Int32).malloc(12), 3).should eq 0
+    Snake.tick(t + 10, press(Games::BTN_A, 1536)).should be_true # restart
+    Snake.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false
   end
 
   it "renders body filled and food hollow" do
@@ -471,5 +586,19 @@ describe Menu do
     Menu.mode.should eq Menu::SNAKE
     Menu.ok?.should be_true
     Menu.full_color?.should be_false
+  end
+
+  it "passes dirty boxes through, full after a mode switch" do
+    Menu.init(Menu::NAMETAG)
+    Menu.tick(0, press(Games::BTN_MINUS)).should be_true # -> Snake
+    x0 = y0 = x1 = y1 = 0
+    rr = Pointer(Int32).malloc(16)
+    Menu.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false
+    Menu.dirty_rects(rr, 4).should eq 0
+    Snake.set_food(-1)
+    Menu.tick(1, inp(1536, 0))
+    Menu.tick(1 + Snake::MAX_INTERVAL, inp(1536, 0)).should be_true
+    Menu.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
+    Menu.dirty_rects(rr, 3).should eq 2
   end
 end

@@ -6,7 +6,17 @@
 # STABLE_RESEED such generations the board is reseeded.
 #
 # Controls: User A = reseed (density from the left knob, 5..60 %),
-#           User B = pause / resume; right knob = generation interval.
+#           User B = pause / resume; right knob = speed: the first quarter
+#           (FAST_ZONE) runs MIN_INTERVAL with MAX_GENS..1 generations per
+#           refresh (fully counter-clockwise = MAX_GENS), the rest maps onto
+#           one generation every MIN_INTERVAL..MAX_INTERVAL ms.
+#
+# Partial refresh: every step XORs the flipped cells into @@d, so @@d is
+# exactly "panel vs board" since the last reported refresh (a cell that
+# flips back cancels out). When tick returns true it snapshots @@d (flush),
+# and dirty_box / dirty_rects describe that snapshot in pixels (whole cells
+# including their 2 px gaps, inclusive bounds). Reseeds report false
+# (full refresh).
 
 require "./common"
 
@@ -16,9 +26,18 @@ module Life
   STABLE_RESEED = 8
   MIN_INTERVAL  = 200  # ms between generations, right knob at 0
   MAX_INTERVAL  = 4000 # right knob at 1
+  FAST_ZONE     = 1024 # Q12 knob range that adds generations per refresh
+  MAX_GENS      =    4 # generations per refresh, right knob at 0
+  BANDS         =    4 # vertical bands for dirty_rects (2 per COG half)
 
   @@a = Pointer(UInt64).null # current generation
   @@b = Pointer(UInt64).null # previous generation, then scratch
+  @@d = Pointer(UInt64).null # cells flipped since the last flush (XOR)
+  @@r = Pointer(UInt64).null # flipped cells reported by dirty_box/rects
+  @@rb = Pointer(Int32).null # scratch rects for dirty_rects
+  @@full = true              # board replaced since the last flush
+  @@r_full = true            # reported refresh must be full
+  @@gens = 1
   @@cell = 20
   @@cols = 48
   @@rows = 33
@@ -67,6 +86,24 @@ module Life
     @@stable
   end
 
+  # Generations advanced per refresh at the current right-knob setting.
+  def self.gens_per_frame : Int32
+    @@gens
+  end
+
+  # Right knob (Q12) -> generations per refresh.
+  def self.gens_for(k : Int32) : Int32
+    return 1 if k >= FAST_ZONE
+    k = 0 if k < 0
+    1 &+ ((FAST_ZONE &- k) &* (MAX_GENS &- 1)).unsafe_div(FAST_ZONE &- 1)
+  end
+
+  # Right knob (Q12) -> ms between generation batches.
+  def self.interval_for(k : Int32) : Int32
+    return MIN_INTERVAL if k <= FAST_ZONE
+    MIN_INTERVAL &+ ((MAX_INTERVAL &- MIN_INTERVAL) &* (k &- FAST_ZONE)).unsafe_div(Games::KNOB_ONE &- FAST_ZONE)
+  end
+
   # cell >= 15 (64 columns max). Returns false if allocation failed.
   def self.init(cell : Int32 = 20) : Bool
     cell = 15 if cell < 15
@@ -80,7 +117,10 @@ module Life
     if @@a.null?
       @@a = game_alloc(MAX_ROWS &* 8).as(UInt64*)
       @@b = game_alloc(MAX_ROWS &* 8).as(UInt64*)
-      return false if @@a.null? || @@b.null?
+      @@d = game_alloc(MAX_ROWS &* 8).as(UInt64*)
+      @@r = game_alloc(MAX_ROWS &* 8).as(UInt64*)
+      @@rb = game_alloc(BANDS &* 16).as(Int32*)
+      return false if @@a.null? || @@b.null? || @@d.null? || @@r.null? || @@rb.null?
     end
     @@paused = false
     @@started = false
@@ -88,8 +128,20 @@ module Life
     true
   end
 
+  # Mode entry: the caller does a full refresh of the current board.
   def self.resync : Nil
     @@started = false
+    zero_rows(@@d)
+    @@full = false
+    @@r_full = true
+  end
+
+  def self.zero_rows(p : UInt64*) : Nil
+    i = 0
+    while i < MAX_ROWS
+      p[i] = 0_u64
+      i = i &+ 1
+    end
   end
 
   def self.clear : Nil
@@ -97,8 +149,10 @@ module Life
     while i < MAX_ROWS
       @@a[i] = 0_u64
       @@b[i] = 0_u64
+      @@d[i] = 0_u64
       i = i &+ 1
     end
+    @@full = true
     @@prev_valid = false
     @@changed = true
     @@static = false
@@ -163,7 +217,7 @@ module Life
       up = @@a[y == 0 ? rows &- 1 : y &- 1]
       mid = @@a[y]
       dn = @@a[y &+ 1 == rows ? 0 : y &+ 1]
-      out = 0_u64
+      nxt = 0_u64
       x = 0
       while x < cols
         xl = x == 0 ? cols &- 1 : x &- 1
@@ -172,13 +226,14 @@ module Life
             bit(mid, xl) &+ bit(mid, xr) &+
             bit(dn, xl) &+ bit(dn, x) &+ bit(dn, xr)
         if n == 3 || (n == 2 && bit(mid, x) == 1)
-          out = out | 1_u64.unsafe_shl(x.to_u64!)
+          nxt = nxt | 1_u64.unsafe_shl(x.to_u64!)
         end
         x = x &+ 1
       end
-      same1 = false if out != mid
-      same2 = false if out != @@b[y]
-      @@b[y] = out
+      same1 = false if nxt != mid
+      same2 = false if nxt != @@b[y]
+      @@d[y] = @@d[y] ^ nxt ^ mid
+      @@b[y] = nxt
       y = y &+ 1
     end
     t = @@a
@@ -192,7 +247,8 @@ module Life
     @@stable = @@changed ? 0 : @@stable &+ 1
   end
 
-  # true = the board changed and needs a refresh.
+  # true = the board changed and needs a refresh (dirty_box / dirty_rects
+  # then describe it).
   def self.tick(now : Int32, inp : LibGames::Input) : Bool
     unless @@started
       @@started = true
@@ -202,19 +258,132 @@ module Life
       Games.seed(Games.rand ^ now.to_u32!)
       seed(205 &+ (Games.knob_left(inp) &* 2253).unsafe_div(Games::KNOB_ONE))
       @@last = now
+      flush
       return true
     end
     @@paused = !@@paused if Games.pressed?(inp, Games::BTN_B)
     return false if @@paused
-    interval = MIN_INTERVAL &+ ((MAX_INTERVAL &- MIN_INTERVAL) &* Games.knob_right(inp)).unsafe_div(Games::KNOB_ONE)
-    return false if now &- @@last < interval
+    k = Games.knob_right(inp)
+    @@gens = gens_for(k)
+    return false if now &- @@last < interval_for(k)
     @@last = now
-    step
-    if @@stable >= STABLE_RESEED
-      seed(@@density)
-      return true
+    any = false
+    g = 0
+    while g < @@gens
+      step
+      if @@stable >= STABLE_RESEED
+        seed(@@density)
+        flush
+        return true
+      end
+      any = true if @@changed
+      g = g &+ 1
     end
-    @@changed
+    return false unless any && (@@full || pending?)
+    flush
+    true
+  end
+
+  # Some cell differs from what the last flushed refresh showed.
+  def self.pending? : Bool
+    y = 0
+    while y < @@rows
+      return true if @@d[y] != 0_u64
+      y = y &+ 1
+    end
+    false
+  end
+
+  # The caller is about to refresh: report the accumulated flips (or a full
+  # refresh) and start accumulating afresh. tick() calls this itself.
+  def self.flush : Nil
+    i = 0
+    while i < MAX_ROWS
+      @@r[i] = @@d[i]
+      @@d[i] = 0_u64
+      i = i &+ 1
+    end
+    @@r_full = @@full
+    @@full = false
+  end
+
+  # ---- partial-update windows ---------------------------------------------
+
+  # Pixel box (inclusive) of the reported flipped cells in columns
+  # cx_lo..cx_hi-1, written to dst[0..3]. false = none there.
+  def self.band_box(cx_lo : Int32, cx_hi : Int32, dst : Int32*) : Bool
+    mask = 0_u64
+    x = cx_lo
+    while x < cx_hi
+      mask = mask | 1_u64.unsafe_shl(x.to_u64!)
+      x = x &+ 1
+    end
+    y_lo = -1
+    y_hi = -1
+    cols = 0_u64
+    y = 0
+    while y < @@rows
+      m = @@r[y] & mask
+      if m != 0_u64
+        y_lo = y if y_lo < 0
+        y_hi = y
+        cols = cols | m
+      end
+      y = y &+ 1
+    end
+    return false if y_lo < 0
+    x_lo = -1
+    x_hi = -1
+    x = cx_lo
+    while x < cx_hi
+      if bit(cols, x) == 1
+        x_lo = x if x_lo < 0
+        x_hi = x
+      end
+      x = x &+ 1
+    end
+    c = @@cell
+    dst[0] = @@x0 &+ x_lo &* c
+    dst[1] = @@y0 &+ y_lo &* c
+    dst[2] = @@x0 &+ (x_hi &+ 1) &* c &- 1
+    dst[3] = @@y0 &+ (y_hi &+ 1) &* c &- 1
+    true
+  end
+
+  # Inclusive pixel box of all cells flipped for the refresh tick() just
+  # requested. false = full refresh (reseed / mode entry) or nothing.
+  def self.dirty_box(x0 : Int32*, y0 : Int32*, x1 : Int32*, y1 : Int32*) : Bool
+    return false if @@r_full || @@rb.null?
+    return false unless band_box(0, @@cols, @@rb)
+    x0.value = @@rb[0]
+    y0.value = @@rb[1]
+    x1.value = @@rb[2]
+    y1.value = @@rb[3]
+    true
+  end
+
+  # Up to `max` (<= BANDS) inclusive pixel rects {x0, y0, x1, y1} into
+  # dst[4*i..]: one per vertical band of cols/BANDS columns that has flipped
+  # cells (bands 0-1 = left COG, 2-3 = right COG at the default 20 px cell),
+  # neighbouring rects merged (least added area first) while there are more
+  # than `max`. Returns the count; 0 = full refresh or nothing.
+  def self.dirty_rects(dst : Int32*, max : Int32) : Int32
+    return 0 if @@r_full || @@rb.null? || max < 1
+    n = 0
+    b = 0
+    while b < BANDS
+      lo = (@@cols &* b).unsafe_div(BANDS)
+      hi = (@@cols &* (b &+ 1)).unsafe_div(BANDS)
+      n = n &+ 1 if band_box(lo, hi, @@rb + (n &* 4).to_i64!)
+      b = b &+ 1
+    end
+    n = Games.merge_rects(@@rb, n, max)
+    i = 0
+    while i < n &* 4
+      dst[i] = @@rb[i]
+      i = i &+ 1
+    end
+    n
   end
 
   # Live cells as filled squares with a 2 px gap; black plane only.
