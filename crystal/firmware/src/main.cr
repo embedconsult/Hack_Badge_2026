@@ -953,6 +953,60 @@ def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : 
   buf[m &+ 1] = 0x42_u8 # B
   m = m &+ 2
   m = m &+ put_decimal(buf + m.to_i64!, bsum)
+  # Copy test: canvas ink at row r (< 336) also present 336 rows lower in
+  # the ESP planes? CR = red-plane copies, CB = black-plane copies;
+  # W = non-zero red bytes inside the white screen box (should be 0).
+  cv = Sketch.canvas
+  cr = 0
+  cb = 0
+  i = 0
+  while i < 336 &* EPD::ROW_BYTES
+    v = cv[i]
+    if v != 0_u8
+      cr = cr &+ 1 if (rd[i &+ 40320] & v) != 0_u8
+      cb = cb &+ 1 if (bk[i &+ 40320] & v) == v
+    end
+    i = i &+ 1
+  end
+  wr = 0
+  row = Sketch::Y_MIN
+  while row <= Sketch::Y_MAX
+    c = Sketch::X_MIN.unsafe_shr(3) &+ 1
+    while c < Sketch::X_MAX.unsafe_shr(3)
+      wr = wr &+ 1 if rd[row &* EPD::ROW_BYTES &+ c] != 0_u8
+      c = c &+ 1
+    end
+    row = row &+ 1
+  end
+  band = 0
+  while band < 11
+    nz = 0
+    j = band &* 64 &* EPD::ROW_BYTES
+    e2 = j &+ 64 &* EPD::ROW_BYTES
+    e2 = EPD::PLANE if e2 > EPD::PLANE
+    while j < e2
+      nz = nz &+ 1 if rd[j] != 0_u8
+      j = j &+ 1
+    end
+    log2("sketch: red plane band (64 rows) / non-zero bytes", band, nz)
+    band = band &+ 1
+  end
+  log2("sketch: copy test CR (red copies) / CB (black copies)", cr, cb)
+  log("sketch: red bytes inside the white screen (W)", wr)
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x43_u8 # C
+  buf[m &+ 2] = 0x52_u8 # R
+  m = m &+ 3
+  m = m &+ put_decimal(buf + m.to_i64!, cr)
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x43_u8 # C
+  buf[m &+ 2] = 0x42_u8 # B
+  m = m &+ 3
+  m = m &+ put_decimal(buf + m.to_i64!, cb)
+  buf[m] = 0x20_u8
+  buf[m &+ 1] = 0x57_u8 # W
+  m = m &+ 2
+  m = m &+ put_decimal(buf + m.to_i64!, wr)
   off = SkState.check_overlap
   buf[m] = 0x20_u8
   buf[m &+ 1] = 0x4F_u8 # O = canvas - red
