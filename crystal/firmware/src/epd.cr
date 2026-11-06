@@ -162,7 +162,7 @@ module EPD
   T_PRE_SS    =  500 # EPD_T_PRE_SS (50) is in 10 ms units in k_upd
   REG45_084   = 0x86_u8
   REG45_B1    = 0x84_u8
-  B_REFRESH_PULLS = 3
+  B_REFRESH_PULLS = 3 # epd97.cpp default for driver B fast refresh
 
   @@dev = uninitialized Void*
   @@black = uninitialized UInt8*
@@ -189,6 +189,7 @@ module EPD
   @@prev_has_red = true # unknown at cold boot: assume red, so the first fast refresh runs slow
   @@keep_awake = false
   @@panel_ms = 0
+  @@fast_pulls = B_REFRESH_PULLS
 
   def self.black : UInt8*
     @@black
@@ -216,6 +217,12 @@ module EPD
 
   def self.panel_ms : Int32
     @@panel_ms
+  end
+
+  # Waveform pulls per fast refresh on driver B (1..n). Fewer pulls = faster,
+  # but less drive per image, so more ghosting.
+  def self.fast_pulls=(n : Int32) : Nil
+    @@fast_pulls = n < 1 ? 1 : n
   end
 
   # ---- setup -----------------------------------------------------------
@@ -972,7 +979,7 @@ module EPD
     t_ref_end = millis
     pulls = 1
     if rc >= 0 && fast && @@driver_b
-      while rc >= 0 && pulls < B_REFRESH_PULLS
+      while rc >= 0 && pulls < @@fast_pulls
         r = trigger(false)
         rc = r < 0 ? r : rc &+ r
         pulls = pulls &+ 1

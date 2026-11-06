@@ -54,6 +54,9 @@ end
 
 require "./epd"
 require "./png"
+require "./leds"
+require "./games/badge"
+require "./games/menu"
 
 STATUS_LED       = 1
 GPIO_MODE_OUTPUT = 2 # GPIO_MODE_DEF_OUTPUT (BIT1)
@@ -91,6 +94,105 @@ def knob_mv(cal : Void*, raw : Int32) : Int32
   mv
 end
 
+# Knob ranges measured on the badge (calibrated mV).
+LEFT_MV_LO  =  769
+LEFT_MV_HI  = 2963
+RIGHT_MV_LO =   70
+RIGHT_MV_HI = 2703
+LED_LEFT    =   42 # SAO1 GPIO2: WS2812 on the left knob
+LED_RIGHT   =    6 # SAO2 GPIO2: WS2812 on the right knob
+LED_LEVEL   =   64 # brightness, 0..255
+LOOP_MS     =   50 # 20 Hz
+
+# State shared between the main task and the knob task (word-sized fields).
+module Shared
+  @@mv_l = 0
+  @@mv_r = 0
+  @@held = 0_u32    # buttons held at the last poll
+  @@latched = 0_u32 # buttons seen held since the main loop last took them
+  @@leds_ready = false
+  @@ch_l = Pointer(Void).null
+  @@enc_l = Pointer(Void).null
+  @@ch_r = Pointer(Void).null
+  @@enc_r = Pointer(Void).null
+
+  def self.mv_l : Int32
+    @@mv_l
+  end
+
+  def self.mv_r : Int32
+    @@mv_r
+  end
+
+  def self.set_knobs(l : Int32, r : Int32, held : UInt32) : Nil
+    @@mv_l = l
+    @@mv_r = r
+    @@held = held
+    @@latched = @@latched | held
+  end
+
+  # Buttons held now or at any poll since the last call.
+  def self.take_buttons : UInt32
+    b = @@latched | @@held
+    @@latched = 0_u32
+    b
+  end
+
+  def self.leds_ready? : Bool
+    @@leds_ready
+  end
+
+  def self.set_leds(cl : Void*, el : Void*, cr : Void*, er : Void*) : Nil
+    @@ch_l = cl
+    @@enc_l = el
+    @@ch_r = cr
+    @@enc_r = er
+    @@leds_ready = true
+  end
+
+  def self.ch_l : Void*
+    @@ch_l
+  end
+
+  def self.enc_l : Void*
+    @@enc_l
+  end
+
+  def self.ch_r : Void*
+    @@ch_r
+  end
+
+  def self.enc_r : Void*
+    @@enc_r
+  end
+end
+
+# Buttons: active low with pull-ups. (The Menu +/- silkscreen is swapped.)
+BTN_A_GPIO     = 39
+BTN_B_GPIO     = 16
+BTN_PLUS_GPIO  = 15
+BTN_MINUS_GPIO = 40
+
+def read_buttons : UInt32
+  b = 0_u32
+  b = b | Games::BTN_A if LibIDF.gpio_get_level(BTN_A_GPIO) == 0
+  b = b | Games::BTN_B if LibIDF.gpio_get_level(BTN_B_GPIO) == 0
+  b = b | Games::BTN_PLUS if LibIDF.gpio_get_level(BTN_PLUS_GPIO) == 0
+  b = b | Games::BTN_MINUS if LibIDF.gpio_get_level(BTN_MINUS_GPIO) == 0
+  b
+end
+
+# mV in [lo, hi] -> hue 0..1535
+def mv_to_hue(mv : Int32, lo : Int32, hi : Int32) : Int32
+  mv = lo if mv < lo
+  mv = hi if mv > hi
+  ((mv &- lo) &* 1535).unsafe_div(hi &- lo)
+end
+
+# Knob task (started from main.c): every 50 ms read both knobs and set each
+# knob's WS2812 to a hue from its position; blink the status LED at a rate
+# set by the left knob; log both knobs once a second. Runs independently of
+# the e-paper refresh on the main task.
 fun crystal_knob_task(arg : Void*) : Void
   LibIDF.gpio_reset_pin(STATUS_LED)
   LibIDF.gpio_set_direction(STATUS_LED, GPIO_MODE_OUTPUT)
@@ -102,23 +204,52 @@ fun crystal_knob_task(arg : Void*) : Void
   cal_l = knob_channel(adc, KNOB_LEFT_CH)
   cal_r = knob_channel(adc, KNOB_RIGHT_CH)
 
+  EPD.in_pin(BTN_A_GPIO)
+  EPD.in_pin(BTN_B_GPIO)
+  EPD.in_pin(BTN_PLUS_GPIO)
+  EPD.in_pin(BTN_MINUS_GPIO)
+  buf_l = EPD.dma_alloc(4)
+  buf_r = EPD.dma_alloc(4)
+  rgb = EPD.dma_alloc(4)
+
+  log("knob: loop starting", 0)
   on = false
-  raw = 0
+  raw_l = 0
   raw_r = 0
-  last_log = millis
+  now = millis
+  last_log = now
+  last_blink = now
   while true
-    on = !on
-    LibIDF.gpio_set_level(STATUS_LED, on ? 0_u32 : 1_u32) # active low
-    LibIDF.adc_oneshot_read(adc, KNOB_LEFT_CH, pointerof(raw))
-    raw = 0 if raw < 0
-    if millis &- last_log >= 1000
-      last_log = millis
-      LibIDF.adc_oneshot_read(adc, KNOB_RIGHT_CH, pointerof(raw_r))
-      log2("knob: left GPIO2 raw / mV", raw, knob_mv(cal_l, raw))
-      log2("knob: right GPIO7 raw / mV", raw_r, knob_mv(cal_r, raw_r))
+    LibIDF.adc_oneshot_read(adc, KNOB_LEFT_CH, pointerof(raw_l))
+    LibIDF.adc_oneshot_read(adc, KNOB_RIGHT_CH, pointerof(raw_r))
+    raw_l = 0 if raw_l < 0
+    raw_r = 0 if raw_r < 0
+    mv_l = knob_mv(cal_l, raw_l)
+    mv_r = knob_mv(cal_r, raw_r)
+    hue_l = mv_to_hue(mv_l, LEFT_MV_LO, LEFT_MV_HI)
+    hue_r = mv_to_hue(mv_r, RIGHT_MV_LO, RIGHT_MV_HI)
+    Shared.set_knobs(mv_l, mv_r, read_buttons)
+    if Shared.leds_ready?
+      Pixel.hue(hue_l, LED_LEVEL, rgb)
+      Pixel.show(Shared.ch_l, Shared.enc_l, buf_l, rgb[0], rgb[1], rgb[2])
+      Pixel.hue(hue_r, LED_LEVEL, rgb)
+      Pixel.show(Shared.ch_r, Shared.enc_r, buf_r, rgb[0], rgb[1], rgb[2])
     end
-    half_period = MIN_MS &+ (raw.to_u32! &* 950_u32).unsafe_div(4095_u32)
-    LibIDF.vTaskDelay(ms_to_ticks(half_period))
+
+    now = millis
+    half_period = 50 &+ (raw_l &* 950).unsafe_div(4095)
+    if now &- last_blink >= half_period
+      last_blink = now
+      on = !on
+      LibIDF.gpio_set_level(STATUS_LED, on ? 0_u32 : 1_u32) # active low
+    end
+    if now &- last_log >= 1000
+      last_log = now
+      log2("knob: left GPIO2 raw / mV", raw_l, mv_l)
+      log2("knob: right GPIO7 raw / mV", raw_r, mv_r)
+      log2("knob: hue left / right (0..1535)", hue_l, hue_r)
+    end
+    LibIDF.vTaskDelay(ms_to_ticks(LOOP_MS.to_u32!))
   end
 end
 
@@ -194,10 +325,77 @@ def draw_name(first : String, last : String) : Nil
   draw_text((EPD::WIDTH &- text_width(last, NAME_SCALE)).unsafe_div(2), top &+ line_h &+ gap, last, EPD::BLACK, NAME_SCALE)
 end
 
-SPI_HZ = 20_000_000
+SPI_HZ      = 20_000_000
+SPEED_TEST  = true # boot-time 1-pull vs 3-pull fast refresh comparison
+GAME_PULLS  = 1    # waveform pulls per fast refresh in the game modes
+
+# Bring-up test for the knob WS2812s: left red, right blue for 10 s, then
+# off, with blocking transmits and a log line around every call. On success
+# the handles go to the knob task for the live hue display.
+def led_test : Nil
+  ch_l = Pointer(Void).null
+  enc_l = Pointer(Void).null
+  ch_r = Pointer(Void).null
+  enc_r = Pointer(Void).null
+  buf = EPD.dma_alloc(4)
+  log("led: opening left pixel (GPIO42)", 0)
+  ok_l = Pixel.open(LED_LEFT, pointerof(ch_l), pointerof(enc_l))
+  log("led: opening right pixel (GPIO6)", 0)
+  ok_r = Pixel.open(LED_RIGHT, pointerof(ch_r), pointerof(enc_r))
+  unless ok_l && ok_r
+    log("led: open failed, LEDs disabled", 0)
+    return
+  end
+  log("led: left = red 50%", 0)
+  Pixel.show_blocking(ch_l, enc_l, buf, 128_u8, 0_u8, 0_u8)
+  log("led: right = blue 50%", 0)
+  Pixel.show_blocking(ch_r, enc_r, buf, 0_u8, 0_u8, 128_u8)
+  log("led: holding 10 s", 0)
+  delay_ms(10_000)
+  log("led: both off", 0)
+  Pixel.show_blocking(ch_l, enc_l, buf, 0_u8, 0_u8, 0_u8)
+  Pixel.show_blocking(ch_r, enc_r, buf, 0_u8, 0_u8, 0_u8)
+  log("led: test done, handing pixels to the knob task", 0)
+  Shared.set_leds(ch_l, enc_l, ch_r, enc_r)
+end
+
+def show_nametag : Nil
+  EPD.fill(EPD::WHITE)
+  t = millis
+  ok = PNG.draw(LibIDF.cr_hello_png, LibIDF.cr_hello_png_size, EPD.black, EPD.red, 0, 0, true)
+  log2("main: png decode ms / err", millis &- t, ok ? 0 : PNG.err)
+  draw_pattern(0, true) unless ok
+  draw_name("Jason", "Kridner")
+  EPD.refresh(false)
+end
+
+# Alternates two black/white frames with 1 pull, then with 3 pulls, so the
+# ghosting can be compared on video. The first fast refresh after red is run
+# slow by the driver (red has to be cleared with the panel's own waveform).
+def speed_test : Nil
+  log("speed: start (first frame clears red, runs slow)", 0)
+  EPD.keep_awake = true
+  draw_pattern(1, false)
+  EPD.refresh(true)
+  pulls = 1
+  while pulls <= 3
+    EPD.fast_pulls = pulls
+    i = 0
+    while i < 4
+      draw_pattern((i & 1) == 0 ? 4 : 1, false)
+      t = millis
+      EPD.refresh(true)
+      log2("speed: pulls / refresh ms", pulls, millis &- t)
+      i = i &+ 1
+    end
+    pulls = pulls &+ 2
+  end
+  log("speed: done", 0)
+end
 
 fun crystal_app_main : Void
-  log("main: EPD demo, SPI Hz", SPI_HZ)
+  led_test
+  log("main: EPD, SPI Hz", SPI_HZ)
   t = millis
   unless EPD.init(SPI_HZ)
     log("main: EPD init failed", 0)
@@ -205,20 +403,29 @@ fun crystal_app_main : Void
   end
   log("main: EPD init (incl. OTP probe) ms", millis &- t)
 
-  # Decode the embedded PNG (960x672, red/white palette) straight into the
-  # planes, then one slow refresh (red needs the panel's own waveform).
-  EPD.fill(EPD::WHITE)
-  t = millis
-  ok = PNG.draw(LibIDF.cr_hello_png, LibIDF.cr_hello_png_size, EPD.black, EPD.red, 0, 0, true)
-  log2("main: png decode ms / bytes", millis &- t, LibIDF.cr_hello_png_size)
-  log2("main: png size", PNG.width, PNG.height)
-  unless ok
-    log("main: png error code", PNG.err)
-    draw_pattern(0, true)
+  speed_test if SPEED_TEST
+  show_nametag
+
+  # Menu loop: Menu +/- cycles Nametag -> Sketch -> Life -> Snake.
+  EPD.keep_awake = true
+  EPD.fast_pulls = GAME_PULLS
+  Menu.init(Menu::NAMETAG)
+  prev = 0_u32
+  while true
+    held = Shared.take_buttons
+    inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
+    prev = held
+    now = millis
+    if Menu.tick(now, inp)
+      log("menu: mode", Menu.mode)
+      t = millis
+      if Menu.render(EPD.black, EPD.red)
+        EPD.refresh(true)
+      else
+        show_nametag
+      end
+      log2("menu: mode / frame ms", Menu.mode, millis &- t)
+    end
+    delay_ms(20)
   end
-  t = millis
-  draw_name("Jason", "Kridner")
-  log("main: name draw ms", millis &- t)
-  EPD.refresh(false)
-  log("main: image on the panel at ms since boot", millis)
 end

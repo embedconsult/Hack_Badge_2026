@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
+#include "driver/rmt_tx.h"
 #include "font5x7.h"  // from 2026-Billboard_Badge/firmware/esp32s3-itc97
 
 // Tick rate exported for Crystal (configTICK_RATE_HZ is a macro).
@@ -36,6 +37,11 @@ _Static_assert(sizeof(spi_transaction_t) == 40, "spi_transaction_t");
 _Static_assert(offsetof(spi_transaction_t, length) == 16, "length");
 _Static_assert(offsetof(spi_transaction_t, tx_buffer) == 28, "tx_buffer");
 
+_Static_assert(sizeof(rmt_tx_channel_config_t) == 28, "rmt_tx_channel_config_t");
+_Static_assert(sizeof(rmt_bytes_encoder_config_t) == 12, "rmt_bytes_encoder_config_t");
+_Static_assert(sizeof(rmt_transmit_config_t) == 8, "rmt_transmit_config_t");
+_Static_assert(RMT_CLK_SRC_DEFAULT == 4, "RMT_CLK_SRC_DEFAULT");
+
 // ...and at run time that Crystal computed the same sizes.
 int32_t cr_check_layout(int32_t bus, int32_t dev, int32_t trans)
 {
@@ -59,6 +65,10 @@ const uint8_t *cr_font5x7(void) { return &k_font5x7[0][0]; }
 
 void app_main(void)
 {
+    // Give the Mac's RFC2217 bridge time to come back after a flash/reset,
+    // so the start-up log is not lost.
+    vTaskDelay(pdMS_TO_TICKS(4000));
+    printf("app_main: starting tasks\n");
     xTaskCreatePinnedToCore(crystal_knob_task, "knob", 4096, NULL, 2, NULL, 1);
     crystal_app_main();
 }
