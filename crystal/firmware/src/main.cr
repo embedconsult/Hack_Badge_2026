@@ -55,6 +55,7 @@ lib LibIDF
   fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
   fun cr_notify_main : Void
   fun cr_wait_notify(ms : UInt32) : UInt32
+  fun cr_stack_free(main_task : Bool) : UInt32 # bytes never used (high-water mark)
   fun cr_portrait_png : UInt8*
   fun cr_portrait_png_size : Int32
   fun cr_sketch_png : UInt8*
@@ -167,7 +168,7 @@ module Shared
   end
 
   def self.label_buf : UInt8*
-    @@label = EPD.dma_alloc(32) if @@label.null?
+    @@label = EPD.dma_alloc(64) if @@label.null?
     @@label
   end
 
@@ -337,6 +338,7 @@ fun crystal_knob_task(arg : Void*) : Void
   now = millis
   last_log = now
   last_blink = now
+  last_stack = now
   while true
     # Average ADC_SAMPLES reads per knob (Sketch's deadband assumes this).
     sum_l = 0
@@ -477,6 +479,10 @@ fun crystal_knob_task(arg : Void*) : Void
       last_blink = now
       on = !on
       LibIDF.gpio_set_level(STATUS_LED, on ? 0_u32 : 1_u32) # active low
+    end
+    if now &- last_stack >= 10_000
+      last_stack = now
+      log2("stack: free bytes knob / main", LibIDF.cr_stack_free(false).to_i32!, LibIDF.cr_stack_free(true).to_i32!)
     end
     if now &- last_log >= 1000
       last_log = now
@@ -905,8 +911,21 @@ def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32) : 
   n = put_field(buf, n, up, false)
   n = put_field(buf, n, panel, false)
   n = put_field(buf, n, total, false)
-  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, n &* 18 &+ 6, 7 &* 3 &+ 6, EPD::WHITE)
-  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 3)
+  # Second line: the last Sketch entry, decode/upload/panel/restart ms.
+  e = n
+  buf[e] = 0x45_u8 # E
+  buf[e &+ 1] = 0x4E_u8 # N
+  buf[e &+ 2] = 0x54_u8 # T
+  buf[e &+ 3] = 0x20_u8
+  m = e &+ 4
+  m = put_field(buf, m, SkState.entry_decode, true)
+  m = put_field(buf, m, SkState.e_up, false)
+  m = put_field(buf, m, SkState.e_pan, false)
+  m = put_field(buf, m, SkState.e_rst, false)
+  w = (n > m &- e ? n : m &- e) &* 12 &+ 6
+  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, w, 2 &* 7 &* 2 &+ 10, EPD::WHITE)
+  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 2)
+  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3 &+ 18, buf + e.to_i64!, m &- e, EPD::BLACK, 2)
 end
 
 # Asymmetric marker for the window test: 120x80 outline (6 px), a solid
@@ -1001,8 +1020,10 @@ def show_diag : Nil
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 420, "WINDOW TEST: PHOTO AT THE 12 S HOLD,", EPD::BLACK, 3)
   draw_text(40, 460, "THEN THE REFERENCE WITH TIMES", EPD::BLACK, 3)
-  EPD.fast_pulls = 3
-  EPD.refresh(true, EPD::LUT_BASE)
+  EPD.fast_pulls = 2
+  EPD.raw = true
+  EPD.refresh(true, WIN_LUT) # same kind as every other preview: no COG restart
+  EPD.raw = false
 end
 
 # One 1-pull refresh with each fast LUT kind on alternating frames; the panel
@@ -1110,6 +1131,22 @@ def red_to_checker : Nil
   end
 end
 
+# Red pixels -> solid black, red plane cleared: Sketch's Etch frame (red and
+# white only) becomes a clean black-and-white design for fast refreshes.
+def red_to_black : Nil
+  bk = EPD.black.as(UInt32*)
+  rd = EPD.red.as(UInt32*)
+  i = 0
+  while i < EPD::PLANE.unsafe_div(4)
+    r = rd[i]
+    if r != 0_u32
+      bk[i] = bk[i] | r
+      rd[i] = 0_u32
+    end
+    i = i &+ 1
+  end
+end
+
 def draw_nametag_planes : Nil
   EPD.fill(EPD::WHITE)
   ok = PNG.draw(LibIDF.cr_hello_png, LibIDF.cr_hello_png_size, EPD.black, EPD.red, 0, 0, true)
@@ -1152,6 +1189,36 @@ module SkState
   @@shown = Pointer(UInt8).null # black plane as last sent to the panel
   @@box = Pointer(Int32).null   # r0, r1, c0, c1 of the last diff
   @@last_lat = 0                # input -> ink on panel, last incremental frame
+  @@e_dec = 0                   # last Sketch entry: background decode,
+  @@e_up = 0                    # upload, panel busy and COG restart ms
+  @@e_pan = 0
+  @@e_rst = 0
+
+  def self.entry_decode : Int32
+    @@e_dec
+  end
+
+  def self.entry_decode=(v : Int32) : Nil
+    @@e_dec = v
+  end
+
+  def self.set_entry(up : Int32, pan : Int32, rst : Int32) : Nil
+    @@e_up = up
+    @@e_pan = pan
+    @@e_rst = rst
+  end
+
+  def self.e_up : Int32
+    @@e_up
+  end
+
+  def self.e_pan : Int32
+    @@e_pan
+  end
+
+  def self.e_rst : Int32
+    @@e_rst
+  end
 
   def self.last_lat : Int32
     @@last_lat
@@ -1289,7 +1356,7 @@ end
 def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
   if Menu.needs_background?
     sketch_background
-    red_to_checker
+    red_to_black
   end
   Menu.render(EPD.black, EPD.red) # only clears red under ink; red plane stays empty
   draw_sketch_label(wait, up, panel, total)
@@ -1314,8 +1381,13 @@ end
 # Shows a screen on entry: always a fast black/white frame.
 def enter_screen(scr : Int32, boot : Bool) : Nil
   Shared.screen = scr
-  pulls = boot ? 3 : 1
-  kind = boot ? EPD::LUT_BASE : GAME_LUT
+  # Every preview uses WIN_LUT (HALF60), the kind game frames and Sketch ink
+  # use too, so the COG session stays latched across screen switches (no ~5 s
+  # restart on the first frame). Static screens get 2 pulls (HALF60 erases
+  # black -> white weakly), game screens 1 so they are usable at once.
+  static_scr = scr == SCR_NAMETAG || scr == SCR_PORTRAIT || scr == SCR_DIAG
+  pulls = boot ? 3 : (static_scr ? 2 : 1)
+  kind = WIN_LUT
   log2("main: screen / boot", scr, boot ? 1 : 0)
   if scr == SCR_NAMETAG
     draw_nametag_planes
@@ -1333,16 +1405,24 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
     Menu.enter(menu_mode_for(scr))
     SkState.colour = false
     if scr == SCR_SKETCH
+      t_dec = millis
       sketch_background
+      SkState.entry_decode = millis &- t_dec
       Menu.render(EPD.black, EPD.red)
-      red_to_checker
+      red_to_black
       draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
+      pulls = 2 # one clean entry frame: the second pull clears the old screen's ghosts
     else
       Menu.render(EPD.black, EPD.red)
       draw_mode_label(Menu.mode, 0, 0, 0, 0)
     end
     fast_bw(pulls, kind)
     SkState.mark_shown
+    if scr == SCR_SKETCH
+      SkState.set_entry(EPD.upload_ms, EPD.panel_ms, EPD.restart_ms)
+      log2("sketch entry: decode / upload ms", SkState.entry_decode, EPD.upload_ms)
+      log2("sketch entry: panel / restart ms", EPD.panel_ms, EPD.restart_ms)
+    end
   end
 end
 

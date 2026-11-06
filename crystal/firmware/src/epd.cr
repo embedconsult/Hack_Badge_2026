@@ -208,6 +208,7 @@ module EPD
   @@lut_kind = 0         # LUT_* kind of the fast waveform (see build_lutb)
   @@latched_kind = 0
   @@upload_ms = 0
+  @@restart_ms = 0 # last refresh: COG power-up + register/soft-start setup (0 = session reused)
   @@probe = -1          # >= 0: probe LUT driving only that table (see build_probe)
   @@latched_probe = -1
   @@raw = false          # send black and red planes as they are (no red-as-ink)
@@ -250,6 +251,10 @@ module EPD
 
   def self.upload_ms : Int32
     @@upload_ms
+  end
+
+  def self.restart_ms : Int32
+    @@restart_ms
   end
 
   def self.panel_ms : Int32
@@ -1450,6 +1455,9 @@ module EPD
     first = !@@lut_latched
     rc = first ? do_refresh(fast) : trigger(false, fast ? FAST_TIMEOUT_MS : SLOW_TIMEOUT_MS)
     t_ref_end = millis
+    # Restart cost: power-up/reset before the upload plus, for the first image
+    # of a session, the register/soft-start time ahead of the first pull.
+    @@restart_ms = (t_up &- t_init) &+ (first && rc >= 0 ? (t_ref_end &- t_up_end) &- rc : 0)
     pulls = 1
     if rc >= 0 && fast && @@driver_b
       while rc >= 0 && pulls < @@fast_pulls

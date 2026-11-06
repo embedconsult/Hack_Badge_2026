@@ -2,6 +2,7 @@
 // Logic lives in Crystal; this file only has what Crystal can't express
 // under --prelude=empty: macros, printf, task creation, layout checks.
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stddef.h>
 #include "freertos/FreeRTOS.h"
@@ -98,6 +99,13 @@ static TaskHandle_t s_main_task;
 void cr_notify_main(void) { if (s_main_task) xTaskNotifyGive(s_main_task); }
 uint32_t cr_wait_notify(uint32_t ms) { return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms)); }
 
+// Stack high-water marks (bytes never used) for the knob task (the caller)
+// and the main task; logged every 10 s by the knob task.
+uint32_t cr_stack_free(bool main_task)
+{
+    return (uint32_t)uxTaskGetStackHighWaterMark(main_task ? s_main_task : NULL);
+}
+
 // "<git describe> <HH:MM>" of this build.
 const char *cr_version(void) { return CR_VERSION; }
 
@@ -109,6 +117,6 @@ void app_main(void)
     // so the start-up log is not lost.
     vTaskDelay(pdMS_TO_TICKS(4000));
     printf("app_main: starting tasks\n");
-    xTaskCreatePinnedToCore(crystal_knob_task, "knob", 8192, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(crystal_knob_task, "knob", 12288, NULL, 2, NULL, 1);
     crystal_app_main();
 }
