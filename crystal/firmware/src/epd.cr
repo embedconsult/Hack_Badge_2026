@@ -196,6 +196,9 @@ module EPD
   @@probe = -1          # >= 0: probe LUT driving only that table (see build_probe)
   @@latched_probe = -1
   @@raw = false          # send black and red planes as they are (no red-as-ink)
+  @@promote = true       # run a fast refresh slow when red is on the panel
+  @@abortable = false    # a long BUSY wait may be cut short by request_abort
+  @@abort = false
 
   def self.black : UInt8*
     @@black
@@ -859,6 +862,32 @@ module EPD
     @@probe = k
   end
 
+  # false: never promote a fast refresh to slow because of red on the panel
+  # (faster browsing; leaves faint red ghosts until the next colour refresh).
+  def self.promote=(v : Bool) : Nil
+    @@promote = v
+  end
+
+  # While abortable, request_abort (e.g. from the button poll) makes the
+  # current BUSY wait return early; the refresh then fails and the COG is
+  # powered down, leaving a partly driven image.
+  def self.abortable=(v : Bool) : Nil
+    @@abortable = v
+    @@abort = false
+  end
+
+  def self.abortable? : Bool
+    @@abortable
+  end
+
+  def self.request_abort : Nil
+    @@abort = true if @@abortable
+  end
+
+  def self.aborted? : Bool
+    @@abort
+  end
+
   def self.raw=(v : Bool) : Nil
     @@raw = v
   end
@@ -880,6 +909,10 @@ module EPD
       idle = !busy?
       return millis &- t0 if idle == want_idle
       return -1 if millis &- t0 > timeout_ms
+      if @@abort
+        log("EPD: refresh aborted", millis &- t0)
+        return -2
+      end
       delay_ms(@@busy_poll_ms)
     end
     0
@@ -1037,7 +1070,7 @@ module EPD
     have_red = has_red?
     draw_red = have_red && (!fast_req || @@raw)
     fast = fast_req
-    if fast && @@prev_has_red && !@@raw
+    if fast && @@prev_has_red && !@@raw && @@promote
       log("EPD: red on the panel - this fast refresh runs slow to clear it", 0)
       fast = false
     end

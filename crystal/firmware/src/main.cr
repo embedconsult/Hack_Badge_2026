@@ -254,7 +254,12 @@ fun crystal_knob_task(arg : Void*) : Void
     mv_r = knob_mv(cal_r, raw_r)
     hue_l = mv_to_hue(mv_l, LEFT_MV_LO, LEFT_MV_HI)
     hue_r = mv_to_hue(mv_r, RIGHT_MV_LO, RIGHT_MV_HI)
-    Shared.set_knobs(mv_l, mv_r, read_buttons)
+    btns = read_buttons
+    Shared.set_knobs(mv_l, mv_r, btns)
+    # A Menu press aborts a slow (colour) refresh in progress.
+    if (btns & (Games::BTN_PLUS | Games::BTN_MINUS)) != 0_u32 && EPD.abortable?
+      EPD.request_abort
+    end
     if Shared.leds_ready?
       unless Shared.ch_l.null?
         Pixel.hue(hue_l, LED_LEVEL, rgb)
@@ -720,8 +725,184 @@ def lut_timing : Nil
   delay_ms(8000) # time to read it
 end
 
+# ---- screens, NVS, previews ------------------------------------------------
+
+lib LibIDF
+  fun nvs_flash_init : Int32
+  fun nvs_open(name : UInt8*, mode : Int32, handle : UInt32*) : Int32
+  fun nvs_get_u8(h : UInt32, key : UInt8*, v : UInt8*) : Int32
+  fun nvs_set_u8(h : UInt32, key : UInt8*, v : UInt8) : Int32
+  fun nvs_commit(h : UInt32) : Int32
+end
+
+SCR_NAMETAG  = 0
+SCR_PORTRAIT = 1
+SCR_SKETCH   = 2
+SCR_LIFE     = 3
+SCR_SNAKE    = 4
+SCR_DIAG     = 5
+SCR_COUNT    = 6
+HOLD_MS      = 1000 # Sketch: hold User B this long for the colour refresh
+
+module Store
+  @@ok = false
+  @@h = 0_u32
+
+  # Opens NVS namespace "crystal". Never erases: the partition is shared with
+  # the MicroPython firmware, so on any error the mode just isn't persisted.
+  def self.open : Nil
+    err = LibIDF.nvs_flash_init
+    err = LibIDF.nvs_open("crystal".to_unsafe, 1, pointerof(@@h)) if err == 0
+    @@ok = err == 0
+    log("nvs: open err", err)
+  end
+
+  def self.screen : Int32
+    return SCR_NAMETAG unless @@ok
+    v = 0_u8
+    return SCR_NAMETAG if LibIDF.nvs_get_u8(@@h, "screen".to_unsafe, pointerof(v)) != 0
+    v.to_i32! < SCR_COUNT ? v.to_i32! : SCR_NAMETAG
+  end
+
+  def self.screen=(v : Int32) : Nil
+    return unless @@ok
+    LibIDF.nvs_set_u8(@@h, "screen".to_unsafe, v.to_u8!)
+    LibIDF.nvs_commit(@@h)
+  end
+end
+
+def menu_mode_for(scr : Int32) : Int32
+  if scr == SCR_SKETCH
+    Menu::SKETCH
+  elsif scr == SCR_LIFE
+    Menu::LIFE
+  elsif scr == SCR_SNAKE
+    Menu::SNAKE
+  else
+    Menu::NAMETAG
+  end
+end
+
+# Red pixels -> 50% checker in the black plane; red plane cleared. A fast
+# black/white refresh can then show a colour image without driving red.
+def red_to_checker : Nil
+  bk = EPD.black
+  rd = EPD.red
+  i = 0
+  while i < EPD::PLANE
+    r = rd[i]
+    if r != 0_u8
+      mask = (i.unsafe_div(EPD::ROW_BYTES) & 1) == 0 ? 0xAA_u8 : 0x55_u8
+      bk[i] = bk[i] | (r & mask)
+      rd[i] = 0_u8
+    end
+    i = i &+ 1
+  end
+end
+
+def draw_nametag_planes : Nil
+  EPD.fill(EPD::WHITE)
+  ok = PNG.draw(LibIDF.cr_hello_png, LibIDF.cr_hello_png_size, EPD.black, EPD.red, 0, 0, true)
+  draw_pattern(0, true) unless ok
+  draw_name("Jason", "Kridner")
+end
+
+def draw_portrait_planes : Nil
+  EPD.fill(EPD::WHITE)
+  ok = PNG.draw(LibIDF.cr_portrait_png, LibIDF.cr_portrait_png_size, EPD.black, EPD.red, 0, 0, true)
+  draw_pattern(0, true) unless ok
+end
+
+# Fast black/white refresh of the planes (red already folded into black).
+# pulls = 3 with the base LUT at boot, to pull down red left on the panel.
+def fast_bw(pulls : Int32, kind : Int32) : Nil
+  EPD.raw = true # red plane is empty; raw only skips the red-as-ink path
+  EPD.fast_pulls = pulls
+  EPD.refresh(true, kind)
+  EPD.raw = false
+end
+
+# Slow full-colour refresh that a Menu press can abort.
+def colour_refresh : Bool
+  EPD.abortable = true
+  ok = EPD.refresh(false)
+  aborted = EPD.aborted?
+  EPD.abortable = false
+  log2("main: colour refresh ok / aborted", ok ? 1 : 0, aborted ? 1 : 0)
+  ok
+end
+
+module SkState
+  @@colour = false # the red frame is on the panel (keep-red frames)
+
+  def self.colour? : Bool
+    @@colour
+  end
+
+  def self.colour=(v : Bool) : Nil
+    @@colour = v
+  end
+end
+
+# Sketch frame in preview (B/W) mode: frame red as checker, normal fast LUT.
+def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
+  if Menu.needs_background?
+    PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+    red_to_checker
+  end
+  Menu.render(EPD.black, EPD.red)
+  red_to_checker # render may touch red; keep the red plane empty
+  draw_sketch_label(wait, up, panel, total)
+  Shared.led_mode = LED_CYAN
+  if Menu.want_clean?
+    EPD.raw = true
+    sketch_clean
+    EPD.raw = false
+  else
+    fast_bw(1, GAME_LUT)
+  end
+end
+
+# Sketch colour: redraw the frame with red, overlay the drawing, slow refresh.
+def sketch_colour : Nil
+  PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+  Sketch.render(EPD.black, EPD.red)
+  SkState.colour = colour_refresh
+end
+
+# Shows a screen on entry: always a fast black/white frame.
+def enter_screen(scr : Int32, boot : Bool) : Nil
+  pulls = boot ? 3 : 1
+  kind = boot ? EPD::LUT_BASE : GAME_LUT
+  log2("main: screen / boot", scr, boot ? 1 : 0)
+  if scr == SCR_NAMETAG
+    draw_nametag_planes
+    red_to_checker
+    fast_bw(pulls, kind)
+  elsif scr == SCR_PORTRAIT
+    draw_portrait_planes
+    red_to_checker
+    fast_bw(pulls, kind)
+  elsif scr == SCR_DIAG
+    show_diag
+  else
+    Menu.enter(menu_mode_for(scr))
+    SkState.colour = false
+    if scr == SCR_SKETCH
+      PNG.draw(LibIDF.cr_sketch_png, LibIDF.cr_sketch_png_size, EPD.black, EPD.red, 0, 0, false)
+      Menu.render(EPD.black, EPD.red)
+      red_to_checker
+    else
+      Menu.render(EPD.black, EPD.red)
+      draw_mode_label(Menu.mode, 0, 0, 0, 0)
+    end
+    fast_bw(pulls, kind)
+  end
+end
+
 fun crystal_app_main : Void
   led_test
+  Store.open
   log("main: EPD, SPI Hz", SPI_HZ)
   t = millis
   unless EPD.init(SPI_HZ)
@@ -733,101 +914,103 @@ fun crystal_app_main : Void
   speed_test if SPEED_TEST
   lut_probe if LUT_PROBE
   lut_timing if LUT_TIMING
-  show_nametag
 
-  # Menu loop: Menu +/- cycles Nametag -> Sketch -> Life -> Snake.
+  # Browsing never waits for the slow waveform: no red-clearing promotion.
+  EPD.promote = false
   EPD.keep_awake = true
-  EPD.fast_pulls = GAME_PULLS
   Menu.init(Menu::NAMETAG)
+  scr = Store.screen
+  enter_screen(scr, true)
+
   prev = 0_u32
-  last_mode = Menu.mode
   frames = 0
   last_total = 0
   last_wait = 0
   last_input = millis
   pl = Shared.mv_l
   pr = Shared.mv_r
-  portrait = false
-  diag = false
+  b_down = 0      # Sketch: when User B went down (0 = up)
+  b_fired = false # Sketch: the hold already triggered the colour refresh
   while true
     held = Shared.take_buttons
+    now = millis
+    raw_held = held
+    # Sketch: User B is short (clean, passed on at release) or held (colour).
+    if scr == SCR_SKETCH
+      inject = false
+      if (held & Games::BTN_B) != 0_u32
+        b_down = now if b_down == 0
+        if !b_fired && now &- b_down >= HOLD_MS
+          b_fired = true
+          log("sketch: B held, colour refresh", 0)
+          sketch_colour
+        end
+      elsif b_down != 0
+        inject = !b_fired
+        b_down = 0
+        b_fired = false
+      end
+      held = held & (Games::BTN_B ^ 0xFFFFFFFF_u32)
+      held = held | Games::BTN_B if inject
+    end
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
     prev = held
-    now = millis
     dl = Shared.mv_l &- pl
     dr = Shared.mv_r &- pr
-    if dl > 15 || dl < -15 || dr > 15 || dr < -15 || held != 0_u32
+    if dl > 15 || dl < -15 || dr > 15 || dr < -15 || raw_held != 0_u32
       last_input = now
       pl = Shared.mv_l
       pr = Shared.mv_r
     end
-    # PORTRAIT sits between NAMETAG and SKETCH in the Menu +/- cycle; it is
-    # handled here so games/menu.cr needs no change.
+
     plus = Games.pressed?(inp, Games::BTN_PLUS)
     minus = Games.pressed?(inp, Games::BTN_MINUS)
-    if diag
-      if plus || minus
-        diag = false
-        Menu.enter(plus ? Menu::NAMETAG : Menu::SNAKE)
-        last_mode = -1
-        changed = true
-      else
-        if Games.pressed?(inp, Games::BTN_A)
-          lut_timing
-        elsif Games.pressed?(inp, Games::BTN_B)
-          lut_probe
-          show_diag
-        end
-        changed = false
-      end
-    elsif (plus && Menu.mode == Menu::SNAKE) || (minus && Menu.mode == Menu::NAMETAG && !portrait)
-      diag = true
-      log("menu: mode DIAG", 0)
-      show_diag
-      changed = false
-    elsif portrait
-      if plus || minus
-        portrait = false
-        Menu.enter(plus ? Menu::SKETCH : Menu::NAMETAG)
-        changed = true
-      else
-        changed = false
-      end
-    elsif (plus && Menu.mode == Menu::NAMETAG) || (minus && Menu.mode == Menu::SKETCH)
-      portrait = true
-      log("menu: mode PORTRAIT", 0)
-      show_portrait
-      last_mode = -1
-      changed = false
-    else
-      changed = Menu.tick(now, inp)
-    end
-    if changed
-      log("menu: mode", Menu.mode)
+    if plus || minus
+      scr = plus ? (scr &+ 1 == SCR_COUNT ? 0 : scr &+ 1) : (scr == 0 ? SCR_COUNT &- 1 : scr &- 1)
+      Store.screen = scr
+      frames = 0
       t = millis
-      if Menu.mode == Menu::SKETCH
-        lw = last_wait
-        last_wait = millis &- last_input
-        sketch_frame(last_mode != Menu::SKETCH, lw, EPD.upload_ms, EPD.panel_ms, last_total)
-      elsif Menu.render(EPD.black, EPD.red)
-        # Clean (shaking, 3-pull) refresh on mode entry and every CLEAN_EVERY
-        # frames; otherwise the no-shake LUT so unchanged cells stay still.
-        clean = Menu.mode != last_mode || frames >= CLEAN_EVERY
-        frames = clean ? 0 : frames &+ 1
-        pulls = clean ? 3 : GAME_PULLS
-        draw_mode_label(Menu.mode, last_wait, EPD.upload_ms, EPD.panel_ms, last_total)
-        draw_mode_banner(Menu.mode) if EPD.fast_runs_slow?
-        EPD.fast_pulls = pulls
-        last_wait = millis &- last_input
-        EPD.refresh(true, clean ? EPD::LUT_BASE : GAME_LUT)
-      else
-        show_nametag
-      end
-      last_mode = Menu.mode
+      enter_screen(scr, false)
       last_total = millis &- t
-      log2("menu: mode / frame ms", Menu.mode, last_total)
+      log2("main: screen / entry ms", scr, last_total)
+    elsif scr == SCR_NAMETAG || scr == SCR_PORTRAIT
+      if Games.pressed?(inp, Games::BTN_A)
+        if scr == SCR_NAMETAG
+          draw_nametag_planes
+        else
+          draw_portrait_planes
+        end
+        colour_refresh
+      end
+    elsif scr == SCR_DIAG
+      if Games.pressed?(inp, Games::BTN_A)
+        lut_timing
+      elsif Games.pressed?(inp, Games::BTN_B)
+        lut_probe
+        show_diag
+      end
+    elsif Menu.tick(now, inp)
+      t = millis
+      lw = last_wait
+      last_wait = millis &- last_input
+      if scr == SCR_SKETCH
+        if SkState.colour?
+          sketch_frame(false, lw, EPD.upload_ms, EPD.panel_ms, last_total)
+        else
+          sketch_frame_bw(lw, EPD.upload_ms, EPD.panel_ms, last_total)
+        end
+      else
+        Menu.render(EPD.black, EPD.red)
+        clean = frames >= CLEAN_EVERY
+        frames = clean ? 0 : frames &+ 1
+        draw_mode_label(Menu.mode, lw, EPD.upload_ms, EPD.panel_ms, last_total)
+        EPD.fast_pulls = clean ? 3 : GAME_PULLS
+        EPD.refresh(true, clean ? EPD::LUT_BASE : GAME_LUT)
+      end
+      last_total = millis &- t
+      log2("main: screen / frame ms", scr, last_total)
     end
-    if Menu.mode == Menu::SKETCH && !portrait
+    if scr == SCR_SKETCH
       Shared.led_mode = Sketch.dirty? ? LED_YELLOW : LED_GREEN
     else
       Shared.led_mode = 0
