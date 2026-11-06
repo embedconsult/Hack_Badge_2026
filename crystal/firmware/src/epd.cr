@@ -170,7 +170,7 @@ module EPD
   # 2443 ms, 0xB0 still latches): panel supply left on between fast sessions,
   # reset 2/4/20 ms, 05 7D 50 ms, 05 00 1 ms, load strobes 2/10 ms, no 660 ms
   # pre-update wait. Slow (OTP waveform) sessions keep the reference waits.
-  QUICK_OPEN      = true
+  QUICK_OPEN      = true # default; runtime: @@quick_open (shell: flag QUICK_OPEN)
   FAST_TIMEOUT_MS = 5_000   # BUSY wait for a fast waveform (~1.2 s per pull)
   SLOW_TIMEOUT_MS = 180_000 # BUSY wait for the OTP waveform (~33 s)
 
@@ -178,7 +178,7 @@ module EPD
   # this open session was all zeros too (~33 ms per frame). Assumes the COG
   # keeps its RAM between refreshes: NEEDS A HARDWARE CHECK; set false if
   # red ghosts appear after fast frames.
-  SKIP_ZERO_RED = false
+  SKIP_ZERO_RED = false # default; runtime: @@skip_zero_red
   # Experiment (red-copy corruption): PDi's RAM_RW 3B 00 14 with bit-reversed
   # bytes, as PDi's GU_large / Wide_Large drivers and supercon26-badge-os use
   # for this CoG, instead of the OTP's 00 00 10 with MSB-first bytes.
@@ -220,6 +220,8 @@ module EPD
   @@lut_kind = 0         # LUT_* kind of the fast waveform (see build_lutb)
   @@latched_kind = 0
   @@upload_ms = 0
+  @@quick_open = true    # = QUICK_OPEN, switchable at run time
+  @@skip_zero_red = false # = SKIP_ZERO_RED, switchable at run time
   @@session_images = 0
   @@quick = false        # current session opened with the quick waits
   @@powered = false      # panel supply (GPIO48) is on
@@ -271,6 +273,43 @@ module EPD
 
   def self.restart_ms : Int32
     @@restart_ms
+  end
+
+  # ---- run-time flags and status (debug shell) ----
+  def self.quick_open=(v : Bool) : Nil
+    @@quick_open = v
+  end
+
+  def self.quick_open? : Bool
+    @@quick_open
+  end
+
+  def self.skip_zero_red=(v : Bool) : Nil
+    @@skip_zero_red = v
+  end
+
+  def self.skip_zero_red? : Bool
+    @@skip_zero_red
+  end
+
+  def self.latched_kind : Int32
+    @@latched_kind
+  end
+
+  def self.fast_pulls : Int32
+    @@fast_pulls
+  end
+
+  def self.session_images : Int32
+    @@session_images
+  end
+
+  def self.session_open? : Bool
+    @@session_open
+  end
+
+  def self.quick? : Bool
+    @@quick
   end
 
   def self.panel_ms : Int32
@@ -405,7 +444,7 @@ module EPD
     cmd(BOTH, 0x70_u8, 2, 0x71_u8, 0x36_u8) if @@driver_b # after every reset (errata 9)
     @@session_open = true
     @@lut_latched = false
-    @@quick = QUICK_OPEN # the supply is settled: closing this session keeps it on
+    @@quick = @@quick_open # the supply is settled: closing this session keeps it on
     true
   end
 
@@ -859,7 +898,7 @@ module EPD
   # Never called while BUSY is low (see finish_aborted).
   def self.cog_stop : Nil
     @@red_zero = false
-    keep_power = @@quick && QUICK_OPEN && !@@spi_fail
+    keep_power = @@quick && @@quick_open && !@@spi_fail
     cmd1(0x09_u8, 0x7F_u8)
     delay_ms(20)
     cmd1(0x05_u8, 0x7D_u8)
@@ -1323,7 +1362,7 @@ module EPD
         ram_rw(t, wmode, x0, y0)
         send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
         zero_box = red_box_zero?(t == LEFT ? 0 : 1, x0, x1, y0, y1)
-        unless SKIP_ZERO_RED && zero_box && @@red_zero
+        unless @@skip_zero_red && zero_box && @@red_zero
           ram_rw(t, wmode, x0, y0)
           send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
           @@red_zero = false unless zero_box
@@ -1391,7 +1430,7 @@ module EPD
     while t <= RIGHT
       ram_rw_full(t) # RAM_RW
       send_plane(t, 0x10_u8, @@black, fast_ink_red ? @@red : Pointer(UInt8).null)
-      unless SKIP_ZERO_RED && !draw_red && @@red_zero
+      unless @@skip_zero_red && !draw_red && @@red_zero
         ram_rw_full(t)
         send_plane(t, 0x11_u8, draw_red ? @@red : Pointer(UInt8).null, Pointer(UInt8).null)
       end
@@ -1584,7 +1623,7 @@ module EPD
     end
     t_init = millis
     if !@@session_open
-      cog_initial(fast && QUICK_OPEN)
+      cog_initial(fast && @@quick_open)
       @@session_open = true
       @@lut_latched = false
     end

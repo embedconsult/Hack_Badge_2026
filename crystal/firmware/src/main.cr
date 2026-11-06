@@ -56,6 +56,7 @@ lib LibIDF
   fun cr_notify_main : Void
   fun cr_wait_notify(ms : UInt32) : UInt32
   fun cr_stack_free(main_task : Bool) : UInt32 # bytes never used (high-water mark)
+  fun cr_stack_free_self : UInt32
   fun cr_portrait_png : UInt8*
   fun cr_portrait_png_size : Int32
   fun cr_sketch_png : UInt8*
@@ -77,6 +78,7 @@ def game_alloc(n : Int32) : UInt8*
   p
 end
 require "./games/menu"
+require "./shell"
 
 STATUS_LED       = 1
 GPIO_MODE_OUTPUT = 2 # GPIO_MODE_DEF_OUTPUT (BIT1)
@@ -185,6 +187,79 @@ module Shared
   @@led_mode = 0
   @@target = 0         # screen the user has asked for (knob task, on Menu edges)
   @@live = false       # Sketch: the main loop is idle and knob input draws NOW
+  # Debug shell (shell.cr)
+  @@ovr_l = -1         # knob override mV (-1 = real ADC)
+  @@ovr_r = -1
+  @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
+  @@req = 0_u32        # REQ_* bits for the main loop (atomic)
+  @@sx0 = 0
+  @@sy0 = 0
+  @@sx1 = 0
+  @@sy1 = 0
+  REQ_HOLD_A = 1_u32
+  REQ_CLEAN  = 2_u32
+  REQ_STROKE = 4_u32
+
+  def self.ovr_l : Int32
+    @@ovr_l
+  end
+
+  def self.ovr_r : Int32
+    @@ovr_r
+  end
+
+  def self.knob_ovr? : Bool
+    @@ovr_l >= 0 || @@ovr_r >= 0
+  end
+
+  def self.knob_override(l : Int32, r : Int32) : Nil
+    @@ovr_l = l
+    @@ovr_r = r
+  end
+
+  def self.red_ink_plain? : Bool
+    @@red_ink_plain
+  end
+
+  def self.red_ink_plain=(v : Bool) : Nil
+    @@red_ink_plain = v
+  end
+
+  def self.inject_buttons(bits : UInt32) : Nil
+    LibIDF.cr_atomic_or(pointerof(@@latched), bits)
+  end
+
+  def self.request(bits : UInt32) : Nil
+    LibIDF.cr_atomic_or(pointerof(@@req), bits)
+  end
+
+  def self.take_requests : UInt32
+    LibIDF.cr_atomic_xchg(pointerof(@@req), 0_u32)
+  end
+
+  def self.request_stroke(x0 : Int32, y0 : Int32, x1 : Int32, y1 : Int32) : Nil
+    @@sx0 = x0
+    @@sy0 = y0
+    @@sx1 = x1
+    @@sy1 = y1
+    request(REQ_STROKE)
+  end
+
+  def self.sx0 : Int32
+    @@sx0
+  end
+
+  def self.sy0 : Int32
+    @@sy0
+  end
+
+  def self.sx1 : Int32
+    @@sx1
+  end
+
+  def self.sy1 : Int32
+    @@sy1
+  end
   @@rendering = false  # main task is drawing a screen (LED indicator pulses)
 
   def self.target : Int32
@@ -374,6 +449,8 @@ fun crystal_knob_task(arg : Void*) : Void
     raw_r = 0 if raw_r < 0
     mv_l = knob_mv(cal_l, raw_l)
     mv_r = knob_mv(cal_r, raw_r)
+    mv_l = Shared.ovr_l if Shared.ovr_l >= 0 # debug shell: knob <l|r> <mV>
+    mv_r = Shared.ovr_r if Shared.ovr_r >= 0
     hue_l = mv_to_hue(mv_l, LEFT_MV_LO, LEFT_MV_HI)
     hue_r = mv_to_hue(mv_r, RIGHT_MV_LO, RIGHT_MV_HI)
     btns = read_buttons
@@ -914,6 +991,11 @@ module RedCheck
   @@sb = Pointer(UInt8).null
   @@sr = Pointer(UInt8).null
   @@first_row = -1
+  @@last = -1
+
+  def self.last : Int32
+    @@last
+  end
 
   def self.first_row : Int32
     @@first_row
@@ -941,6 +1023,7 @@ module RedCheck
       i = i &+ 1
     end
     log2("redcheck: mismatching red bytes / first row", bad, @@first_row)
+    @@last = bad
     bad
   end
 end
@@ -1238,9 +1321,9 @@ AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this lon
 
 # Fast LUT for frames over Sketch's red frame: red tables must be ground so
 # the red is never driven. HALF60 already is; otherwise the no-shake keep-red.
-SK_RED_INK_PLAIN = false # experiment: plain no-shake B/W LUT over the red frame
+SK_RED_INK_PLAIN = false # experiment default; run time: Shared.red_ink_plain (shell flag)
 def red_ink_kind : Int32
-  return EPD::LUT_NOSHAKE_BW if SK_RED_INK_PLAIN
+  return EPD::LUT_NOSHAKE_BW if Shared.red_ink_plain?
   WIN_LUT == EPD::LUT_HALF60 ? EPD::LUT_HALF60 : EPD::LUT_NOSHAKE_KEEPRED
 end
 
@@ -1754,6 +1837,30 @@ fun crystal_app_main : Void
     end
     held = held & (Games::BTN_A ^ 0xFFFFFFFF_u32)
     held = held | Games::BTN_A if a_tap
+    # Debug shell requests (shell.cr): hold A, clean, scripted stroke.
+    reqs = Shared.take_requests
+    a_hold = true if (reqs & Shared::REQ_HOLD_A) != 0_u32
+    if (reqs & Shared::REQ_CLEAN) != 0_u32
+      log("shell: clean (slow white, zero red)", 0)
+      EPD.fill(EPD::WHITE)
+      colour_refresh
+      Shared.rendering = true
+      enter_screen(scr, false)
+      Shared.rendering = false
+    end
+    if (reqs & Shared::REQ_STROKE) != 0_u32 && scr == SCR_SKETCH
+      Sketch.line(Sketch.canvas, Shared.sx0, Shared.sy0, Shared.sx1, Shared.sy1)
+      Menu.render(EPD.black, EPD.red)
+      red_to_black unless SkState.colour?
+      Shared.rendering = true
+      EPD.raw = true
+      EPD.fast_pulls = 1
+      EPD.refresh(true, SkState.colour? ? red_ink_kind : WIN_LUT)
+      EPD.raw = false
+      Shared.rendering = false
+      SkState.mark_shown
+      log2("shell: stroke refreshed, kind / panel ms", EPD.latched_kind, EPD.panel_ms)
+    end
     if a_hold && scr == SCR_SKETCH
       log("sketch: A held, colour refresh", 0)
       sketch_colour

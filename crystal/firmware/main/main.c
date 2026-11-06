@@ -22,6 +22,8 @@
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/rmt_tx.h"
+#include "hal/usb_serial_jtag_ll.h"
+#include "esp_heap_caps.h"
 #include "font5x7.h"   // from 2026-Billboard_Badge/firmware/esp32s3-itc97
 #include "version.h"   // written by build.sh: git describe + build time
 
@@ -30,6 +32,7 @@ const uint32_t crystal_tick_rate_hz = configTICK_RATE_HZ;
 
 void crystal_app_main(void);           // src/main.cr: EPD demo
 void crystal_knob_task(void *arg);     // src/main.cr: LED blink + knob log
+void crystal_shell_task(void *arg);    // src/shell.cr: debug shell on the console
 
 void cr_log(const char *msg, int32_t v) { printf("%s: %ld\n", msg, (long)v); }
 void cr_log2(const char *msg, int32_t a, int32_t b) { printf("%s: %ld %ld\n", msg, (long)a, (long)b); }
@@ -99,6 +102,18 @@ static TaskHandle_t s_main_task;
 void cr_notify_main(void) { if (s_main_task) xTaskNotifyGive(s_main_task); }
 uint32_t cr_wait_notify(uint32_t ms) { return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms)); }
 
+// Debug shell I/O (src/shell.cr): poll the USB-Serial/JTAG RX FIFO directly
+// (no driver install, so the console output path is unchanged).
+int32_t cr_console_read(uint8_t *buf, int32_t max)
+{
+    if (!usb_serial_jtag_ll_rxfifo_data_available()) return 0;
+    return (int32_t)usb_serial_jtag_ll_read_rxfifo(buf, (uint32_t)max);
+}
+void cr_print(const char *s) { fputs(s, stdout); fflush(stdout); }
+void cr_log3(const char *msg, int32_t a, int32_t b, int32_t c) { printf("%s: %ld %ld %ld\n", msg, (long)a, (long)b, (long)c); }
+int32_t cr_heap_free(uint32_t caps) { return (int32_t)heap_caps_get_free_size(caps); }
+uint32_t cr_stack_free_self(void) { return (uint32_t)uxTaskGetStackHighWaterMark(NULL); }
+
 // Stack high-water marks (bytes never used) for the knob task (the caller)
 // and the main task; logged every 10 s by the knob task.
 uint32_t cr_stack_free(bool main_task)
@@ -118,5 +133,6 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(4000));
     printf("app_main: starting tasks\n");
     xTaskCreatePinnedToCore(crystal_knob_task, "knob", 12288, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(crystal_shell_task, "shell", 6144, NULL, 1, NULL, 1);
     crystal_app_main();
 }
