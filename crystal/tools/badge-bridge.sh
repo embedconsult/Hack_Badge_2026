@@ -4,8 +4,10 @@
 #
 #   crystal/tools/badge-bridge.sh [/dev/cu.usbmodem101]
 #
-# Keeps an RFC2217 bridge to the badge on port 4000 (for the container's
-# serial console), restarting it whenever the badge's USB port drops. When the
+# Keeps a raw TCP bridge (socat) to the badge console on port 4000. Unlike an
+# RFC2217 server it never touches DTR/RTS, so connecting does not reset the
+# ESP32-S3; socat reopens the USB port per connection, so it survives the
+# badge re-enumerating. Set BRIDGE=rfc2217 for the old esp_rfc2217_server. When the
 # container writes crystal/flash-request/request (lines of "OFFSET FILE", with FILE
 # relative to the repository root), it stops the bridge, flashes natively with
 # esptool (which can reset the ESP32-S3's USB-Serial/JTAG into download mode
@@ -17,17 +19,25 @@ REQ=crystal/flash-request
 mkdir -p "$REQ"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
 ESPTOOL="python3 -m esptool"
+BRIDGE=${BRIDGE:-socat}
 SERVER=$(command -v esp_rfc2217_server.py || echo "$HOME/Library/Python/3.9/bin/esp_rfc2217_server.py")
 
 server_pid=""
 start_server() {
   [ -e "$PORT_DEV" ] || return
-  python3 "$SERVER" -p 4000 "$PORT_DEV" >"$REQ/server.log" 2>&1 &
+  if [ "$BRIDGE" = socat ]; then
+    socat -d TCP-LISTEN:4000,reuseaddr,fork "FILE:$PORT_DEV,raw,echo=0,nonblock" >"$REQ/server.log" 2>&1 &
+  else
+    python3 "$SERVER" -p 4000 "$PORT_DEV" >"$REQ/server.log" 2>&1 &
+  fi
   server_pid=$!
-  echo "bridge up on :4000 ($PORT_DEV), pid $server_pid"
+  echo "$BRIDGE bridge up on :4000 ($PORT_DEV), pid $server_pid"
 }
 stop_server() {
-  [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null && wait "$server_pid" 2>/dev/null
+  if [ -n "$server_pid" ]; then
+    pkill -P "$server_pid" 2>/dev/null   # socat children holding the port
+    kill "$server_pid" 2>/dev/null && wait "$server_pid" 2>/dev/null
+  fi
   server_pid=""
 }
 trap 'stop_server; exit 0' INT TERM
@@ -54,7 +64,7 @@ while true; do
   # Restart the bridge if it died, or if it lost the USB port when the badge
   # reset and re-enumerated (the server keeps a dead handle and logs
   # "Device not configured" on every connection instead of exiting).
-  if [ -n "$server_pid" ] && grep -q "Device not configured" "$REQ/server.log" 2>/dev/null; then
+  if [ "$BRIDGE" != socat ] && [ -n "$server_pid" ] && grep -q "Device not configured" "$REQ/server.log" 2>/dev/null; then
     echo "badge port went away; restarting bridge"
     stop_server
   fi
