@@ -1,5 +1,5 @@
 idf_component_register(SRCS "main.c"
-                       PRIV_REQUIRES esp_driver_gpio esp_adc freertos)
+                       PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_adc esp_timer esp_rom heap freertos)
 
 # --- Crystal -> Xtensa object --------------------------------------------------
 # Needs the xtensa-patched Crystal compiler (see ../../toolchain/README.md).
