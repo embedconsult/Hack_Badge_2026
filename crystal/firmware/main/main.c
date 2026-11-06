@@ -47,6 +47,12 @@ int32_t cr_check_layout(int32_t bus, int32_t dev, int32_t trans)
     return bad;
 }
 
+// Images embedded with EMBED_FILES (main/CMakeLists.txt).
+extern const uint8_t hello_png_start[] asm("_binary_hello_i_am_blank_png_start");
+extern const uint8_t hello_png_end[] asm("_binary_hello_i_am_blank_png_end");
+const uint8_t *cr_hello_png(void) { return hello_png_start; }
+int32_t cr_hello_png_size(void) { return (int32_t)(hello_png_end - hello_png_start); }
+
 void app_main(void)
 {
     xTaskCreatePinnedToCore(crystal_knob_task, "knob", 4096, NULL, 2, NULL, 1);

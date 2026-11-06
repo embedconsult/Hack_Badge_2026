@@ -46,9 +46,13 @@ lib LibIDF
 
   # main/main.c: configTICK_RATE_HZ
   $crystal_tick_rate_hz : UInt32
+  # main/main.c: embedded images
+  fun cr_hello_png : UInt8*
+  fun cr_hello_png_size : Int32
 end
 
 require "./epd"
+require "./png"
 
 STATUS_LED       = 1
 GPIO_MODE_OUTPUT = 2 # GPIO_MODE_DEF_OUTPUT (BIT1)
@@ -156,22 +160,17 @@ fun crystal_app_main : Void
   end
   log("main: EPD init (incl. OTP probe) ms", millis &- t)
 
-  # 1..3: fast refreshes (black/white), session kept open between them. What
-  # is on the panel at boot is unknown, so the driver runs the first one on
-  # the slow waveform to clear any red.
-  EPD.keep_awake = true
-  frame = 1
-  while frame <= 3
-    t = millis
-    draw_pattern(frame, false)
-    log2("main: frame / draw ms", frame, millis &- t)
-    EPD.refresh(true)
-    log2("main: frame / done at ms since boot", frame, millis)
-    frame = frame &+ 1
+  # Decode the embedded PNG (960x672, red/white palette) straight into the
+  # planes, then one slow refresh (red needs the panel's own waveform).
+  EPD.fill(EPD::WHITE)
+  t = millis
+  ok = PNG.draw(LibIDF.cr_hello_png, LibIDF.cr_hello_png_size, EPD.black, EPD.red, 0, 0, true)
+  log2("main: png decode ms / bytes", millis &- t, LibIDF.cr_hello_png_size)
+  log2("main: png size", PNG.width, PNG.height)
+  unless ok
+    log("main: png error code", PNG.err)
+    draw_pattern(0, true)
   end
-
-  # 4: slow (OTP waveform) refresh with red stripes; it stays on the panel.
-  draw_pattern(0, true)
   EPD.refresh(false)
-  log2("main: frame / done at ms since boot (final, red)", 4, millis)
+  log("main: image on the panel at ms since boot", millis)
 end
