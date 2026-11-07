@@ -646,13 +646,15 @@ module SkEPD
     @@need_sync
   end
 
-  # After a full refresh: the panel shows `cv` (1 = ink); no ghosts.
-  def self.sync_canvas(cv : UInt8*) : Nil
+  # After a full refresh: the panel shows black | red (null = white).
+  # Those pixels count as ink: a booked ghost on them is never erased, so
+  # the cleanup cannot lighten strokes or the frame art.
+  def self.sync_shown(black : UInt8*, red : UInt8*) : Nil
     return unless @@ok
     @@need_sync = false
     i = 0
     while i < SkBand::PLANE
-      @@driven[i] = cv.null? ? 0_u8 : cv[i]
+      @@driven[i] = (black.null? ? 0_u8 : black[i]) | (red.null? ? 0_u8 : red[i])
       i = i &+ 1
     end
     EPD.zero(@@ghost, SkBand::PLANE &* 8) unless @@ghost.null?
@@ -750,7 +752,7 @@ module SkEPD
     EPD.fast_pulls = 3
     EPD.refresh(true, EPD::LUT_BASE)
     EPD.raw = false
-    sync_canvas(Pointer(UInt8).null)
+    sync_shown(Pointer(UInt8).null, Pointer(UInt8).null)
     keep_f3 = p(SkBand::P_F3)
     SkBand.set(SkBand::P_F3, p(SkBand::P_BARF))
     @@stale = true

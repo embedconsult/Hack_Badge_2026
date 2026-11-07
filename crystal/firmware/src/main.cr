@@ -1990,7 +1990,7 @@ module SkInk
       tc[i] = 0_u8 unless tc.null?
       i = i &+ 1
     end
-    SkEPD.sync_canvas(cv) # drv2: what is inked now, no ghosts
+    SkEPD.sync_shown(EPD.black, EPD.red) # drv2: what the panel shows now, no ghosts
   end
 
   # Marks byte i of the command planes as used.
@@ -2875,7 +2875,7 @@ fun crystal_app_main : Void
         # Band driver (src/sketch_epd.cr): the pen's ink commands as row
         # bands of <= 250 ms each, at once; idle cleanup one band at a time
         # while the knobs rest (knob motion always comes first).
-        SkEPD.sync_canvas(Sketch.canvas) if SkEPD.need_sync? # first use: what is inked already
+        SkEPD.sync_shown(EPD.black, EPD.red) if SkEPD.need_sync? # first use: what is shown already
         if SkState.after_colour?
           SkEPD.release
           SkState.after_colour = false
