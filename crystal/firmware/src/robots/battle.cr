@@ -283,6 +283,38 @@ module RB
   end
 
   # Index of the winner (the only robot left), or -1.
+  # FNV-1a over the final state (cycles, then per robot x, y, damage,
+  # restarts, cycles, active, failed): two badges that played the same
+  # battle compare this (badge link Z message, main/robonet.c).
+  def self.result_hash : UInt32
+    h = 2166136261_u32
+    h = fnv(h, @@c)
+    h = fnv(h, @@n)
+    r = 0
+    while r < @@n
+      h = fnv(h, @@x[r])
+      h = fnv(h, @@y[r])
+      h = fnv(h, @@damage[r])
+      h = fnv(h, @@restarts[r])
+      h = fnv(h, @@cycles[r])
+      h = fnv(h, @@active[r])
+      h = fnv(h, @@failed[r])
+      r = r &+ 1
+    end
+    h
+  end
+
+  def self.fnv(h : UInt32, v : Int32) : UInt32
+    u = v.to_u32!
+    k = 0
+    while k < 4
+      h = (h ^ (u & 0xFF_u32)) &* 16777619_u32
+      u = u.unsafe_shr(8)
+      k = k &+ 1
+    end
+    h
+  end
+
   def self.winner : Int32
     return -1 if active_count != 1
     r = 0

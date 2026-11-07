@@ -1,6 +1,6 @@
 idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c" "qr.c" "settings.c" "b2b.c"
                             "apps_net.c" "apps_gfx.c" "feed.c" "weather.c" "radar.c" "stb_image_impl.c"
-                            "snakes.c" "snakes_net.c" "robots.c"
+                            "snakes.c" "snakes_net.c" "robots.c" "robonet.c"
                        EMBED_FILES "hello_i_am_blank.png" "portrait.png" "sketch_frame.png" "EtchASketch.png" "schedule.csv"
                        PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_driver_rmt esp_adc nvs_flash esp_timer esp_rom heap freertos
                                      esp_wifi esp_netif lwip esp_event esp_http_client esp_http_server esp_https_ota app_update esp_app_format mbedtls json

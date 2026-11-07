@@ -13,7 +13,9 @@
 # Robots: the ones saved in the badge's slots (src/apps/robot_store.cr:
 # shell `robot put`, the Settings page) and the ten that ship with
 # crystal-robots (src/robots/roster.cr). Line-ups go through all of them;
-# shell `robot run a b [c] [d] [@seed]` picks one.
+# shell `robot run a b [c] [d] [@seed]` picks one, and
+# `robot challenge <badge> a b [c] [d] [@seed]` plays one with another badge:
+# both simulate the same battle (main/robonet.c) and compare results.
 # A: next battle (next line-up, next seed). B: skip to the end of this one.
 
 require "./robot_store"
@@ -36,7 +38,14 @@ module RobotsApp
   @@tried = false
   @@running = false
   @@match = 0 # line-ups played
-  @@seed = 1
+  @@seed = 1_u32
+  @@limit = 500000
+  @@net_id = 0_u32  # badge-to-badge match being played (0: none)
+  @@net_done = 0_u32 # its result was handed to robonet
+  @@net = false      # show the badge link status line
+  @@net_sig = 0_u32
+  @@ended = false   # this battle's end was logged and reported
+  @@line = Pointer(UInt8).null
   @@frames = 0
   @@n = 0
   @@pick = Pointer(Int32).null  # line-up code per robot (RobotStore)
@@ -45,7 +54,7 @@ module RobotsApp
   # a line-up asked for by the shell (another task): codes, then the flag
   @@req = Pointer(Int32).null
   @@req_n = 0
-  @@req_seed = 0
+  @@req_seed = 0_u32
   @@req_ready = false
   @@trail = Pointer(Int32).null # per robot TRAIL (x, y) pairs, px
   @@trail_n = 0
@@ -82,8 +91,71 @@ module RobotsApp
 
   def self.request_run(n : Int32, seed : Int32) : Nil
     @@req_n = n
-    @@req_seed = seed
+    @@req_seed = seed.to_u32!
+    @@req_limit = RB::CYCLE_LIMIT
+    @@req_net = 0_u32
     @@req_ready = true
+  end
+
+  @@req_limit = 500000
+  @@req_net = 0_u32
+  @@mid = 0_u32
+  @@mseed = 0_u32
+  @@mlimit = 0_u32
+  @@mn = 0
+  @@midx = Pointer(Int32).null
+
+  # A badge-to-badge match robonet has ready (both sides): play it now.
+  def self.take_net_match : Bool
+    @@midx = game_alloc(4 &* 4).as(Int32*) if @@midx.null?
+    return false if LibIDF.cr_rn_take_match(pointerof(@@mid), pointerof(@@mseed), pointerof(@@mlimit), pointerof(@@mn), @@midx) == 0
+    r = 0
+    while r < @@mn
+      request(r, RobotStore::CODE_NET &+ @@midx[r])
+      r = r &+ 1
+    end
+    @@req_n = @@mn
+    @@req_seed = @@mseed
+    @@req_limit = @@mlimit.to_i32!
+    @@req_net = @@mid
+    @@req_ready = true
+    true
+  end
+
+  # Hand a finished badge-to-badge battle's result to robonet (once).
+  def self.report : Nil
+    return if @@net_id == 0_u32 || @@net_done == @@net_id || !RB.over?
+    @@net_done = @@net_id
+    d = @@buf
+    r = 0
+    while r < @@n
+      d[r] = RB.damage(r).to_u8!
+      r = r &+ 1
+    end
+    LibIDF.cr_rn_result(@@net_id, RB.cycles.to_u32!, RB.winner, @@n, d, RB.result_hash)
+  end
+
+  # Badge link status line into @@line; its length.
+  def self.net_status : Int32
+    @@line = game_alloc(64) if @@line.null?
+    LibIDF.cr_rn_status(@@line, 64)
+    n = 0
+    while n < 63 && @@line[n] != 0_u8
+      n = n &+ 1
+    end
+    n
+  end
+
+  # Changes of the status line (so the screen follows a challenge).
+  def self.net_sig : UInt32
+    v = LibIDF.cr_rn_status(@@buf, 64).to_u32!
+    h = v &* 31_u32
+    i = 0
+    while i < 63 && @@buf[i] != 0_u8
+      h = (h ^ @@buf[i].to_u32!) &* 16777619_u32
+      i = i &+ 1
+    end
+    h
   end
 
   # Every robot available: saved slots first, then the built-ins.
@@ -127,6 +199,8 @@ module RobotsApp
   end
 
   def self.new_battle : Nil
+    @@net_id = 0_u32
+    @@limit = RB::CYCLE_LIMIT
     if @@req_ready
       @@req_ready = false
       @@n = @@req_n
@@ -136,18 +210,23 @@ module RobotsApp
         r = r &+ 1
       end
       @@seed = @@req_seed
+      @@limit = @@req_limit
+      @@net_id = @@req_net
+      @@net = @@net_id != 0_u32
     else
       lineup(@@match)
       @@match = @@match &+ 1
-      @@seed = 0
+      @@seed = 0_u32
+      @@net = false
     end
-    @@seed = (millis.to_u32! & 0xFFFF_u32).to_i32! | 1 if @@seed <= 0
+    @@seed = (millis.to_u32! & 0xFFFF_u32) | 1_u32 if @@seed == 0_u32
     r = 0
     while r < @@n
       RobotStore.load(r, @@pick[r])
       r = r &+ 1
     end
-    RB.start(@@n, @@seed.to_u64!, RB::CYCLE_LIMIT)
+    RB.start(@@n, @@seed.to_u64!, @@limit)
+    @@ended = false
     @@trail_n = 0
     @@ms = 0
     @@running = true
@@ -357,9 +436,13 @@ module RobotsApp
     x = Gfx.text(PANEL_X, y, "CYCLE ", 2)
     number(x, y, RB.cycles, 2)
     x = Gfx.text(PANEL_X, y &+ 24, "SEED ", 2)
-    number(x, y &+ 24, @@seed, 2)
+    number(x, y &+ 24, (@@seed & 0x7FFFFFFF_u32).to_i32!, 2)
     if RB.over?
       Gfx.text(PANEL_X, y &+ 48, win >= 0 ? "BATTLE OVER" : "DRAW", 2)
+    end
+    if @@net
+      n = net_status
+      draw_bytes(PANEL_X, y &+ 72, @@line, n > 50 ? 50 : n, EPD::BLACK, 1)
     end
   end
 
@@ -379,6 +462,7 @@ module RobotsApp
       Apps.show_clean
       return
     end
+    take_net_match
     new_battle if RB.robots == 0 || @@req_ready
     @@frames = 0
     draw
@@ -402,6 +486,14 @@ module RobotsApp
   def self.tick(now : Int32, inp : LibGames::Input) : Nil
     return unless @@ok
     changed = false
+    take_net_match
+    if @@net && !@@running # follow the badge link status (challenge, result check)
+      s = net_sig
+      if s != @@net_sig
+        @@net_sig = s
+        changed = true
+      end
+    end
     if Games.pressed?(inp, Games::BTN_A) || @@req_ready
       new_battle
       @@frames = CLEAN_EVERY # new scene: clean refresh
@@ -417,8 +509,11 @@ module RobotsApp
       changed = advance(FRAME_UPDATES)
     end
     return unless changed
-    if RB.over?
+    if RB.over? && !@@ended
+      @@ended = true
       log2("robots: battle over: cycles / sim ms", RB.cycles, @@ms)
+      report
+      @@net_sig = net_sig
     end
     draw
     @@frames = @@frames &+ 1

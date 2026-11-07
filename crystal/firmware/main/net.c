@@ -7,6 +7,10 @@
 // button samples, and the shell task executes the remote command lines this
 // module queues (so only the main task ever touches the e-paper).
 //
+// Robot battles between badges (B K G J Z messages) are main/robonet.c,
+// driven from net_task; the cr_rn_* functions below are its thread-safe
+// face for the Crystal side (src/apps/robot_store.cr, src/apps/robots.cr).
+//
 // NVS namespace "net": on (u8), name (str "first|last").
 #include <stdint.h>
 #include <stdbool.h>
@@ -25,6 +29,9 @@
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
 #include "radar.h"
+#include "robonet.h"
+#include "esp_heap_caps.h"
+#include "freertos/semphr.h"
 
 bool cr_wifi_hold(void);               // main/ota.c
 void cr_wifi_release(void);
@@ -109,6 +116,7 @@ typedef struct {
     uint8_t kind, caps, screen, flags;
     char name[13];
     uint32_t ip;           // network order, 0 = ESP-NOW only
+    uint16_t port;         // UDP source port of its announces (4626; simulators may differ)
     int8_t rssi;           // what I hear from it (max over RSSI_WIN_MS), 127 unknown
     int8_t their;          // what it hears from me (its heard list), 127 unknown
     int16_t cm;
@@ -322,6 +330,20 @@ static void udp_send(uint32_t ip, char type, const void *body, int n)
     memcpy(h->src, s_me, 6);
     memcpy(buf + sizeof *h, body, n);
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(PORT), .sin_addr.s_addr = ip};
+    sendto(s_sock, buf, sizeof *h + n, 0, (struct sockaddr *)&a, sizeof a);
+}
+
+// to ip:port (host order), bodies up to 600 bytes (robot source chunks)
+static void udp_send_to(uint32_t ip, uint16_t port, char type, const void *body, int n)
+{
+    if (s_sock < 0 || n > 600) return;
+    static uint8_t buf[sizeof(hdr_t) + 600]; // net_task only
+    hdr_t *h = (hdr_t *)buf;
+    memcpy(h->magic, "BLK", 3);
+    h->ver = 1, h->type = type, h->seq = s_seq++;
+    memcpy(h->src, s_me, 6);
+    memcpy(buf + sizeof *h, body, n);
+    struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = ip};
     sendto(s_sock, buf, sizeof *h + n, 0, (struct sockaddr *)&a, sizeof a);
 }
 
@@ -563,6 +585,136 @@ int32_t cr_pong_get(int16_t *v)
     return v[0];
 }
 
+// ---- robot battles (main/robonet.c) ------------------------------------------------
+
+static SemaphoreHandle_t s_rn_lock;
+static portMUX_TYPE s_rn_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void rn_send(rn_addr_t to, char type, const void *body, int n) { udp_send_to(to.ip, to.port, type, body, n); }
+
+static void rn_event(int what)
+{
+    s_ver++;
+    if (what == RN_EV_MATCH) push_line("mode robots", 11); // both badges open ROBOTS
+    cr_notify_main();
+}
+
+static void *rn_alloc(size_t n)
+{
+    void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : malloc(n);
+}
+
+static const rn_io_t s_rn_io = {rn_send, rn_event, rn_alloc};
+
+static void rn_lock(void)
+{
+    if (!s_rn_lock) {
+        SemaphoreHandle_t m = xSemaphoreCreateMutex();
+        xSemaphoreTake(m, portMAX_DELAY); // whoever installs it initialises robonet
+        taskENTER_CRITICAL(&s_rn_mux);
+        bool mine = !s_rn_lock;
+        if (mine) s_rn_lock = m;
+        taskEXIT_CRITICAL(&s_rn_mux);
+        if (mine) {
+            rn_init(&s_rn_io);
+            return; // holding it
+        }
+        vSemaphoreDelete(m);
+    }
+    xSemaphoreTake(s_rn_lock, portMAX_DELAY);
+}
+
+static void rn_unlock(void) { xSemaphoreGive(s_rn_lock); }
+
+int32_t cr_rn_add(const uint8_t *src, int32_t n)
+{
+    rn_lock();
+    int32_t i = rn_add(src, n);
+    rn_unlock();
+    return i;
+}
+
+int32_t cr_rn_read(int32_t i, uint8_t *buf, int32_t max)
+{
+    rn_lock();
+    int32_t n = rn_read(i, buf, max);
+    rn_unlock();
+    return n;
+}
+
+static bool same_ci(const char *a, const uint8_t *b, int n)
+{
+    for (int i = 0; i < n; i++) {
+        int x = a[i], y = b[i];
+        if (x >= 'a' && x <= 'z') x -= 32;
+        if (y >= 'a' && y <= 'z') y -= 32;
+        if (!x || x != y) return false;
+    }
+    return true;
+}
+
+// Challenge the live peer whose name starts with name[0, nl] (or whose MAC
+// ends with those hex digits) to a battle of cache entries idx[0..n-1].
+// 0 started, -1 bad robots, -2 a match is going on, -3 no such badge,
+// -4 network mode off.
+int32_t cr_rn_challenge(const uint8_t *name, int32_t nl, const int32_t *idx, int32_t n, uint32_t seed, uint32_t limit)
+{
+    if (!s_run || s_sock < 0) return -4;
+    int64_t now = now_ms();
+    peer_t *hit = NULL;
+    for (int i = 0; i < PEERS && !hit; i++) {
+        peer_t *p = &s_peer[i];
+        if (!p->seen || now - p->seen > STALE_MS || !p->ip || p->kind == K_BADGEOS) continue;
+        char hex[13];
+        snprintf(hex, sizeof hex, "%02x%02x%02x%02x%02x%02x", MAC2STR(p->mac));
+        if ((nl > 0 && same_ci(p->name, name, nl)) || (nl >= 4 && nl <= 12 && same_ci(hex + 12 - nl, name, nl))) hit = p;
+    }
+    if (!hit) return -3;
+    int ix[RN_ROBOTS];
+    for (int k = 0; k < n && k < RN_ROBOTS; k++) ix[k] = idx[k];
+    rn_addr_t to = {hit->ip, hit->port ? hit->port : PORT};
+    rn_lock();
+    int r = rn_challenge(to, hit->mac, hit->name, ix, n, seed, limit, now);
+    rn_unlock();
+    return r;
+}
+
+int32_t cr_rn_take_match(uint32_t *id, uint32_t *seed, uint32_t *limit, int32_t *n, int32_t *idx)
+{
+    rn_lock();
+    int ix[RN_ROBOTS], nn = 0;
+    bool ok = rn_take_match(id, seed, limit, &nn, ix);
+    rn_unlock();
+    if (!ok) return 0;
+    *n = nn;
+    for (int k = 0; k < nn; k++) idx[k] = ix[k];
+    return 1;
+}
+
+void cr_rn_result(uint32_t id, uint32_t cycles, int32_t winner, int32_t n, const uint8_t *dmg, uint32_t hash)
+{
+    rn_lock();
+    rn_result(id, cycles, winner, n, dmg, hash, now_ms());
+    rn_unlock();
+}
+
+int32_t cr_rn_status(char *buf, int32_t max)
+{
+    rn_lock();
+    int32_t v = rn_status(buf, max);
+    rn_unlock();
+    return v;
+}
+
+uint32_t cr_rn_match_id(void)
+{
+    rn_lock();
+    uint32_t v = rn_match_id();
+    rn_unlock();
+    return v;
+}
+
 // ---- receive -------------------------------------------------------------------
 
 static const char *allowed[] = {"mode", "press", "hold", "colour", "color", "knob", "stroke", "text", "status", "clean", "sketch", NULL};
@@ -582,6 +734,12 @@ static void on_command(const hdr_t *h, uint32_t ip, const char *line, int n, int
     } else if (w == 4 && !strncmp(buf, "pong", 4)) {
         pong_paired(h->src, false, now);
         ok = push_line("mode pong", 9);
+    } else if (w == 5 && !strncmp(buf, "robot", 5)) {
+        // robot list / robot run ... only (not put/del/challenge): src/apps/robot_store.cr
+        const char *a = buf + 5 + strspn(buf + 5, " ");
+        ok = !*a || !strncmp(a, "list", 4) || !strncmp(a, "run ", 4);
+        if (!ok) r[0] = 1;
+        else if (!push_line(buf, n)) r[0] = 2, ok = false;
     } else {
         for (int i = 0; allowed[i]; i++)
             if ((int)strlen(allowed[i]) == w && !strncmp(buf, allowed[i], w)) ok = true;
@@ -594,7 +752,7 @@ static void on_command(const hdr_t *h, uint32_t ip, const char *line, int n, int
     udp_send(ip, 'R', r, 2);
 }
 
-static void on_udp(const uint8_t *b, int n, uint32_t ip, int64_t now)
+static void on_udp(const uint8_t *b, int n, uint32_t ip, uint16_t port, int64_t now)
 {
     if (n < (int)sizeof(hdr_t)) return;
     const hdr_t *h = (const hdr_t *)b;
@@ -611,6 +769,7 @@ static void on_udp(const uint8_t *b, int n, uint32_t ip, int64_t now)
         memcpy(p->name, d + 10, 12);
         p->name[12] = 0;
         p->ip = d[0] == K_BADGEOS ? 0 : ip; // bridged ones are reached through their bridge
+        p->port = port;
         p->seen = now;
         int m = d[22];
         int nh = 0;
@@ -636,6 +795,12 @@ static void on_udp(const uint8_t *b, int n, uint32_t ip, int64_t now)
         peer_t *p = peer_find(h->src, false);
         if (p) p->seen = now;
         pong_rx(h->src, (const pkt_t *)d, false, now);
+    } else if (h->type == 'B' || h->type == 'K' || h->type == 'G' || h->type == 'J' || h->type == 'Z') {
+        peer_t *p = peer_find(h->src, false);
+        rn_addr_t from = {ip, port};
+        rn_lock();
+        rn_rx(from, h->src, p && p->name[0] ? p->name : "badge", h->type, d, n, now);
+        rn_unlock();
     } else if (h->type == 'E' && n > 7) {
         espnow_to(d, d + 7, n - 7); // tunnel: UDP -> ESP-NOW, sent with my MAC
     }
@@ -733,14 +898,14 @@ static void net_task(void *arg)
     s_ver++;
 
     int64_t next_hello = 0;
-    static uint8_t buf[300];
+    static uint8_t buf[1100]; // robot source chunks (B) are 520 + header
     uint32_t pm_seen[PROMISC_N] = {0};
     while (s_run) {
         struct sockaddr_in from;
         socklen_t fl = sizeof from;
         int n = recvfrom(s_sock, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
         int64_t now = now_ms();
-        if (n > 0) on_udp(buf, n, from.sin_addr.s_addr, now);
+        if (n > 0) on_udp(buf, n, from.sin_addr.s_addr, ntohs(from.sin_port), now);
         enow_t r;
         while (xQueueReceive(s_rxq, &r, 0)) on_espnow(&r, now);
         for (int i = 0; i < s_pm_n; i++)
@@ -750,6 +915,9 @@ static void net_task(void *arg)
                 if (p) peer_rssi(p, s_pm_rssi[i], now);
             }
         pong_tick(now);
+        rn_lock();
+        rn_tick(now);
+        rn_unlock();
         if (now >= next_hello) {
             for (int i = 0; i < PEERS; i++)
                 if (s_peer[i].seen && now - s_peer[i].seen > 60000) s_peer[i].seen = 0, s_ver++, promisc_sync();

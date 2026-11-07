@@ -81,3 +81,11 @@ uint32_t cr_atomic_xchg(uint32_t *p, uint32_t v) { uint32_t o = *p; *p = v; retu
 void vTaskDelay(uint32_t t) {}
 void cr_print(const char *s) { fputs(s, stdout); }
 void cr_notify_main(void) {}
+
+// Badge-to-badge battles (main/robonet.c via net.c): nothing going on.
+int32_t cr_rn_add(const uint8_t *s, int32_t n) { return -1; }
+int32_t cr_rn_read(int32_t i, uint8_t *b, int32_t max) { return -1; }
+int32_t cr_rn_challenge(const uint8_t *nm, int32_t nl, const int32_t *idx, int32_t n, uint32_t seed, uint32_t limit) { return -4; }
+int32_t cr_rn_take_match(uint32_t *id, uint32_t *seed, uint32_t *limit, int32_t *n, int32_t *idx) { return 0; }
+void cr_rn_result(uint32_t id, uint32_t cycles, int32_t winner, int32_t n, const uint8_t *dmg, uint32_t hash) {}
+int32_t cr_rn_status(char *buf, int32_t max) { buf[0] = 0; return 0; }

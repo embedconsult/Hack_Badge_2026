@@ -3,6 +3,7 @@
 # prints the result, so it can be compared with the std-prelude spec build.
 #   crystal build --prelude=empty crystal/firmware/test/robots/empty_prelude.cr -o /tmp/rb
 #   /tmp/rb <seed> <limit> robot1.cr robot2.cr [...]
+# (test/robonet/ and crystal/net/sim_badge.py use it as the battle engine)
 require "../../src/rt"
 
 lib LibC
@@ -45,7 +46,7 @@ fun main(argc : Int32, argv : UInt8**) : Int32
   end
   RB.start(n, seed.to_u64!, limit)
   RB.run
-  LibC.printf("cycles %d winner %d\n".to_unsafe, RB.cycles, RB.winner)
+  LibC.printf("cycles %d winner %d hash %u\n".to_unsafe, RB.cycles, RB.winner, RB.result_hash)
   r = 0
   while r < n
     LibC.printf("robot %d damage %d x %d y %d restarts %d cycles %d failed %d msg %s\n".to_unsafe, r,
