@@ -1272,7 +1272,7 @@ module EPD
   LUT_INK = 9
   @@ink_f1 = 2
   @@ink_f3 = 2
-  @@ink_fe = 19
+  @@ink_fe = 2 # erase of a 1-pass grey (Sketch pen cursor); 19 on black leaves pink
 
   def self.ink_frames(f1 : Int32, f3 : Int32, fe : Int32) : Nil
     @@ink_f1 = f1 < 1 ? 1 : (f1 > 19 ? 19 : f1)
@@ -1287,6 +1287,10 @@ module EPD
 
   def self.ink_f3 : Int32
     @@ink_f3
+  end
+
+  def self.ink_fe : Int32
+    @@ink_fe
   end
 
   def self.build_ink : Nil

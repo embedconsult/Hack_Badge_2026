@@ -30,7 +30,7 @@ import heapq, math, re, sys
 
 LIGHT, MID, GRAIN, LINE = 1, 2, 3, 5
 REVEAL_PULLS = 9
-SCALE = 0.92
+SCALE = 1.12
 OFFSET = 2.0                      # second outline edge, px (local)
 HOME = (479, 310)                 # Sketch blank(): centre of the pen area
 PEN = (134, 123, 824, 498)        # X_MIN, PEN_Y_MIN, X_MAX, PEN_Y_MAX
@@ -98,96 +98,131 @@ def spikes_on(curve, step_pts, length, inward, every=1):
     return out
 
 # ---- the drawing ---------------------------------------------------------------
-strokes = []  # (name, tone, points) in reveal order
+# Local px (a single-action revolver's proportions: the barrel with the
+# ejector housing about as long as frame + cylinder + grip; short rounded
+# drum; S-curve from the hammer into the back strap; plow-handle grip
+# angled back ~30 deg; small oval trigger guard; small hammer spur; blade
+# front sight). Scaled by SCALE about the start point (frame bottom front),
+# which lands on the pen's home.
+strokes = []  # (name, tone, points) in drawing order (phases sort them)
 
 def S(name, tone, pts):
     strokes.append((name, tone, [tuple(p) for p in pts]))
 
-# Hammer: spur pointing back and up from the top strap, with checkering.
-ham_out = cr([(214, 90), (210, 76), (200, 64), (186, 56), (176, 56), (174, 62), (184, 68), (194, 80), (200, 98)], 4)
-# Top strap over the cylinder to the barrel; barrel with rib and sight.
-# Recoil shield (barrel/frame join) curving up the front of the frame.
-shield = cr([(318, 86), (312, 112), (316, 150), (320, 190)], 5)
-S("frame bottom", LINE, [(320, 190), (226, 190), (320, 190)]) # starts at the pen's home
-S("shield", LINE, shield[::-1])
-S("top strap", LINE, [(318, 86), (214, 90)])
-S("hammer", LINE, ham_out)
-S("rib", LINE, [(318, 86), (326, 86), (326, 88), (520, 88), (532, 75), (546, 75), (550, 88), (556, 88), (556, 98)])
-S("barrel top", LINE, [(556, 98), (318, 98)])
-S("rib back", LINE, [(318, 98), (318, 86)])
-S("muzzle", LINE, [(556, 98), (556, 124)])
-S("muzzle crown", LINE, ellipse(556, 111, 4, 13, -90, 270, 16))
-S("barrel bottom", LINE, [(556, 124), (330, 124)])
-# Ejector housing under the barrel, rounded front, rod knob.
-ej = [(330, 124), (330, 146), (456, 146)] + cr([(456, 146), (468, 142), (472, 133), (472, 124)], 3)[1:]
+MZ = 596              # muzzle x
+FX = 350              # frame front x
+BT, BB = 226, 254     # barrel top / bottom
+EB = 272              # ejector housing bottom
+EJ = 556              # ejector housing front x
+TS = 214              # top strap y
+CX0, CX1 = 232, 336   # cylinder rear / front (drum side view)
+CY0, CY1 = 214, 318   # cylinder top / bottom
+CYM = (CY0 + CY1) / 2
+RR = (CY1 - CY0) / 2 - 5   # rear arc half-height
+RF = (CY1 - CY0) / 2 - 3   # front arc half-height
+
+def rear_x(y):
+    return CX0 - 7 * math.sqrt(max(0, 1 - ((y - CYM) / RR) ** 2))
+
+def front_x(y):
+    return CX1 + 10 * math.sqrt(max(0, 1 - ((y - CYM) / RF) ** 2))
+
+# Frame: bottom under the cylinder (start: the pen's home), front, top strap.
+fbot = cr([(FX, 312), (330, 320), (300, 323), (282, 323)], 4)
+S("frame bottom", LINE, fbot + fbot[::-1][1:])
+S("frame front", LINE, [(FX, 312), (FX, TS)])
+S("top strap", LINE, cr([(FX, TS), (280, TS - 1), (232, TS), (214, TS + 3)], 4))
+# Small hammer spur, then the S-curve from the hammer into the back strap
+# and the plow-handle grip, butt, front edge up to the guard.
+ham = cr([(214, TS + 3), (206, TS - 6), (194, TS - 12), (180, TS - 10), (178, TS - 5), (188, TS - 1), (198, TS + 8), (203, TS + 22)], 4)
+S("hammer", LINE, ham)
+back = cr([(203, TS + 22), (196, 262), (186, 288), (166, 320), (138, 360), (106, 400), (74, 436), (58, 456), (62, 466)], 6)
+butt = cr([(62, 466), (100, 470), (140, 468), (156, 462)], 4)
+front = cr([(156, 462), (160, 432), (172, 396), (194, 358), (212, 336), (222, 324)], 6)
+S("grip", LINE, back + butt[1:] + front[1:])
+# Small oval trigger guard and a curved trigger.
+guard = cr([(282, 323), (286, 346), (276, 374), (250, 386), (222, 378), (210, 356), (216, 330)], 4)
+S("guard", LINE, guard)
+gin = cr([(272, 323), (275, 344), (266, 366), (248, 375), (228, 369), (220, 352), (224, 330)], 4)
+S("guard inner", LINE, [(272, 323)] + gin[1:])
+trig = cr([(250, 323), (256, 340), (253, 356), (243, 366), (236, 364)], 3)
+S("trigger", LINE, [(272, 323), (250, 323)] + trig + trig[::-1])
+# Recoil shield behind the cylinder, from the top strap down to the frame.
+S("shield", LINE, [(250, 323)] + cr([(224, 323), (220, 290), (218, 250), (214, TS + 3)], 4))
+# Barrel, blade front sight at the muzzle, crown, ejector housing and rod.
+S("barrel top", LINE, [(FX, TS), (FX, BT)] + [(MZ - 22, BT)] + cr([(MZ - 22, BT), (MZ - 20, BT - 9), (MZ - 14, BT - 12), (MZ - 9, BT - 9), (MZ - 8, BT)], 3)[1:] + [(MZ, BT)])
+S("muzzle", LINE, [(MZ, BT), (MZ, BB)])
+S("crown", LINE, ellipse(MZ, (BT + BB) / 2, 4, (BB - BT) / 2, -90, 270, 16))
+S("barrel bottom", LINE, [(MZ, BB), (FX, BB)])
+ej = [(FX + 4, BB), (FX + 4, EB), (EJ - 12, EB)] + cr([(EJ - 12, EB), (EJ - 3, EB - 4), (EJ, EB - 10), (EJ, BB)], 3)[1:]
 S("ejector", LINE, ej)
-S("rod", LINE, [(472, 130), (484, 130)] + cr([(484, 130), (488, 135), (484, 140)], 3)[1:] + [(472, 140)])
-S("ejector back", LINE, [(472, 124), (330, 124)])
-# Barrel underside shading: light hatch on the barrel, mid near the edge.
-S("barrel hatch", LIGHT, spikes(124, 478, 550, 6, 7, -12))
-S("barrel hatch dark", MID, spikes(124, 481, 547, 6, 3, -6))
-S("ejector hatch", LIGHT, [(456, 146)] + spikes(146, 340, 452, 6, 6, -9))
-S("rib line", MID, [(452, 146), (456, 146), (468, 142), (472, 133), (472, 124), (330, 124), (330, 135), (460, 135), (330, 135), (330, 124)])
-# Hammer spur checkering: short strokes across the spur, there and back.
-sp_o = resample(cr([(200, 64), (186, 56), (176, 56)], 6), 6)
-sp_i = resample(cr([(194, 80), (184, 68), (174, 62)], 6), 6)
-chk = [sp_o[0]]
-for k in range(1, 6):
-    chk += [sp_o[k], sp_i[k], sp_o[k]]
-S("checkering", MID, chk)
-# Cylinder: rounded box, flutes (open U slots from the rear edge),
-# shadow hatch along the bottom, front chamber arcs.
-cyl = cr([(236, 96), (304, 96), (312, 104), (313, 140), (312, 176), (304, 184), (236, 184), (227, 176), (226, 140), (227, 104)], 4, closed=True)
-k = min(range(len(cyl)), key=lambda i: math.dist(cyl[i], (304, 96)))
-cyl = cyl[k:] + cyl[1:k + 1]
-S("cylinder", LINE, [(318, 98), (312, 96)] + cyl)
-for yc in (114, 140, 166):
-    S("flute %d" % yc, MID, [(226, yc - 7), (290, yc - 7)] + ellipse(290, yc, 7, 7, -90, 90, 8)[1:] + [(226, yc + 7)] + [(226, yc - 7)])
-S("cylinder shadow", LIGHT, [(236, 184)] + spikes(184, 236, 300, 4, 3, -9))
-S("cylinder shadow dark", MID, [(238, 184)] + spikes(184, 238, 298, 4, 1, -4))
-for yc in (110, 140, 170):
-    S("chamber %d" % yc, MID, [(313, yc - 12)] + ellipse(313, yc, 5, 12, -90, 90, 8)[1:])
-# Frame below the cylinder, trigger guard, trigger.
-guard = cr([(292, 190), (294, 214), (280, 238), (252, 247), (228, 238), (218, 214), (220, 190)], 4)
-S("guard", LINE, [(320, 190), (292, 190)] + guard)
-S("guard inner", LINE, cr([(282, 190), (283, 210), (272, 230), (252, 237), (234, 230), (228, 212), (229, 190)], 4))
-trig = cr([(262, 190), (266, 204), (263, 220), (254, 230), (246, 229)], 3)
-S("trigger", LINE, [(229, 190), (262, 190)] + trig + trig[::-1])
-# Guard interior shading: hatch from the inner guard towards its centre.
-gin = cr([(282, 190), (283, 210), (272, 230), (252, 237), (234, 230), (228, 212), (229, 190)], 4)
-S("guard shade", LIGHT, spikes_on(gin, 1, 7, (256, 205), every=1))
-# Grip: outline (back edge from the hammer, butt, front edge to the guard),
-# an inner panel and flowing wood grain between the panel's sides.
-gb = cr([(200, 98), (186, 130), (162, 175), (132, 228), (104, 280), (86, 318), (86, 340), (102, 354)], 6)
-gf = cr([(220, 190), (212, 214), (196, 250), (180, 290), (170, 325), (160, 350)], 6)
-S("grip back", LINE, [(214, 90), (200, 98)] + gb + [(130, 358), (160, 350)])
-S("grip front", LINE, gf[::-1])
-S("frame rear", LINE, [(220, 190), (217, 140), (214, 90)])
-pb = cr([(204, 124), (186, 164), (160, 212), (134, 262), (112, 304), (106, 332)], 6)
-pf = cr([(212, 168), (204, 200), (190, 238), (176, 276), (164, 310), (152, 338)], 6)
-S("panel", LINE, [(216, 124), (204, 124)] + pb + [(152, 338)] + pf[::-1] + [(204, 124)])
-NB, NF = resample(pb, 40), resample(pf, 40)
-for i, (f, w, ph) in enumerate([(0.2, 2.2, 0.0), (0.38, 2.8, 1.3), (0.56, 2.4, 2.1), (0.74, 2.0, 0.7), (0.88, 1.5, 2.9)]):
+S("rod", LINE, [(EJ, BB + 6), (EJ + 10, BB + 6)] + cr([(EJ + 10, BB + 6), (EJ + 14, BB + 11), (EJ + 10, BB + 16)], 3)[1:] + [(EJ, BB + 16)])
+# Cylinder: short drum; bulging bottom edge, convex front face, rear edge
+# curving into the frame (its top runs along the top strap).
+rear = ellipse(CX0, CYM, 7, RR, 270, 90, 14)          # top -> bottom, bulging left
+bot = cr([(CX0 + 2, CY1 - 4), (CX0 + 22, CY1), (CX1 - 22, CY1), (CX1 - 2, CY1 - 4)], 5)
+frnt = ellipse(CX1, CYM, 10, RF, 90, -90, 14)         # bottom -> top, bulging right
+top = cr([(CX0 + 2, CY0 + 5), (CX0 + 22, CY0 + 1), (CX1 - 22, CY0 + 1), (CX1 - 2, CY0 + 4)], 5)
+rear = ellipse(CX0, CYM, 7, RR, -90, -270, 14)        # top -> bottom via the left
+S("cylinder", LINE, [(CX0, TS)] + rear + bot[1:] + frnt[1:] + top[::-1][1:] + [(CX0, TS)])
+# Grip wood panel: inset from the grip edges, top below the frame line.
+GB = resample([p for p in back if p[1] >= 300], 40)
+GF = resample(front[::-1], 40)
+GF = [p for p in GF]
+NB = [lerp(GB[k], GF[k], 0.14) for k in range(41)]
+NF = [lerp(GB[k], GF[k], 0.86) for k in range(41)]
+S("panel", LINE, [GB[0]] + NB + NF[::-1] + [NB[0]])
+for i, (f, w, ph) in enumerate([(0.18, 2.2, 0.0), (0.34, 2.8, 1.3), (0.5, 2.4, 2.1), (0.66, 2.0, 0.7), (0.82, 1.5, 2.9)]):
     pts = []
     for k in range(41):
-        t = k / 40
-        g = f + (0.05 * math.sin(2 * math.pi * (w * t) + ph) if 0 < k < 40 else 0)
+        g = f + (0.04 * math.sin(2 * math.pi * (w * k / 40) + ph) if 0 < k < 40 else 0)
         pts.append(lerp(NB[k], NF[k], g))
-    if i % 2:
-        pts = pts[::-1]
-    S("grain %d" % i, GRAIN, pts)
-# A knot in the grain.
-S("knot", GRAIN, [lerp(NB[20], NF[20], 0.38)] + ellipse(*lerp(NB[22], NF[22], 0.47), 7, 4, 200, 560, 14))
-
-# Cross-hatching (second direction, later in the shading phase): where it
-# crosses the first hatch the pixels get a second pass, i.e. darker grey.
-S("barrel cross", LIGHT, spikes(124, 484, 550, 6, -7, -12))
-S("ejector cross", LIGHT, [(452, 146)] + spikes(146, 346, 452, 6, -6, -9))
-S("cylinder cross", LIGHT, [(300, 184)] + spikes(184, 242, 300, 6, -6, -10))
-S("guard cross", LIGHT, spikes_on(gin[::-1], 1, 11, (256, 212), every=2))
-# Grip shadow along its back edge: short hatches into the grip.
-gbs = resample(gb, 34)
-S("grip shade", LIGHT, [(200, 98)] + spikes_on(gbs, 1, 9, (260, 260), every=1))
+    S("grain %d" % i, GRAIN, pts[::-1] if i % 2 else pts)
+S("knot", GRAIN, [lerp(NB[22], NF[22], 0.34)] + ellipse(*lerp(NB[24], NF[24], 0.42), 6, 3.5, 200, 560, 14))
+# Grip screw.
+S("screw", MID, [lerp(NB[8], NF[8], 0.5)] + ellipse(*lerp(NB[8], NF[8], 0.56), 4, 4, 180, 540, 12))
+# Hammer spur checkering.
+sp_o = resample(cr([(206, TS - 6), (194, TS - 12), (182, TS - 10)], 6), 5)
+sp_i = resample(cr([(198, TS + 8), (188, TS - 1), (179, TS - 5)], 6), 5)
+chk = [sp_o[0]]
+for k in range(1, 5):
+    chk += [sp_o[k], sp_i[k], sp_o[k]]
+S("checkering", MID, chk)
+# Flutes: lens-shaped grooves following the drum. A flute at angle a
+# around the axis sits at y = CYM - R sin(a), foreshortened by cos(a).
+R = (CY1 - CY0) / 2 - 8
+for a in (-50, -17, 17, 50):
+    yc = CYM - R * math.sin(math.radians(a))
+    h = 8 * math.cos(math.radians(a))
+    xa, xb = CX0 + 4, CX1 - 14
+    bow = 3 * math.sin(math.radians(a))
+    ts = [k / 10 for k in range(11)]
+    up = [(xa + (xb - xa) * t, yc - (h + bow) * math.sin(math.pi * t)) for t in ts]
+    dn = [(xa + (xb - xa) * t, yc + (h - bow) * math.sin(math.pi * t)) for t in ts]
+    S("flute %d" % a, MID, [(rear_x(yc), yc)] + up + dn[::-1] + [(rear_x(yc), yc)])
+# Chamber mouths on the front face.
+for yc in (CYM - 26, CYM + 26):
+    fx = front_x(yc)
+    S("chamber %d" % yc, MID, ellipse(fx - 4, yc, 4, 8, 0, 360, 12))
+S("ejector line", MID, [(EJ, BB), (FX + 4, BB), (FX + 4, (BB + EB) / 2), (EJ - 6, (BB + EB) / 2), (FX + 4, (BB + EB) / 2), (FX + 4, BB)])
+# Shading (light single-pass ink; density = tone, crossings darker).
+S("barrel hatch", LIGHT, spikes(BB, EJ + 18, MZ - 6, 5, 6, -10))
+S("ejector hatch", LIGHT, [(EJ - 12, EB)] + spikes(EB, FX + 12, EJ - 16, 6, 6, -9))
+def contour(edge, dy, flip):
+    pts = sorted((x, y + dy) for x, y in resample(edge, 12))
+    pts = [(rear_x(pts[0][1]), pts[0][1])] + pts[1:-1] + [(front_x(pts[-1][1]), pts[-1][1])]
+    return pts[::-1] if flip else pts
+for i, off in enumerate((3, 6, 10)):
+    S("drum top %d" % off, LIGHT, contour(top, off, i % 2 == 0))
+for i, off in enumerate((3, 5, 8, 12)):
+    S("drum bottom %d" % off, LIGHT, contour(bot, -off, i % 2 == 1))
+S("drum shadow", LIGHT, [(CX0 + 22, CY1)] + spikes(CY1, CX0 + 22, CX1 - 22, 5, 3, -11))
+S("guard shade", LIGHT, spikes_on(gin, 1, 6, (248, 345), every=1))
+S("barrel cross", LIGHT, spikes(BB, EJ + 22, MZ - 6, 5, -6, -10))
+S("ejector cross", LIGHT, [(EJ - 12, EB)] + spikes(EB, FX + 18, EJ - 16, 6, -6, -9))
+S("guard cross", LIGHT, spikes_on(gin[::-1], 1, 9, (248, 350), every=2))
+gbs = resample([p for p in back if p[1] >= 300], 26)
+S("grip shade", LIGHT, [gbs[0]] + spikes_on(gbs, 1, 8, (260, 420), every=1))
 
 # ---- graph routing -------------------------------------------------------------
 

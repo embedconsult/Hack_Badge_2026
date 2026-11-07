@@ -1589,17 +1589,92 @@ module SkInk
   @@lo = 0 # byte range of the command planes in use (to clear after)
   @@hi = -1
 
+  @@cur = Pointer(UInt8).null # pixels showing the pen cursor (1-pass grey)
+  @@cx = -1                    # cursor position on the panel, -1 = none
+  @@cy = -1
+
   def self.ready? : Bool
     if @@pass.null?
       @@pass = LibIDF.heap_caps_malloc((EPD::PLANE &* 8).to_u32!, 0x404_u32).as(UInt8*)
       @@cnew = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
       @@cold = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
-      return false if @@pass.null? || @@cnew.null? || @@cold.null?
+      @@cur = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+      return false if @@pass.null? || @@cnew.null? || @@cold.null? || @@cur.null?
       Games.zero(@@cnew, EPD::PLANE)
       Games.zero(@@cold, EPD::PLANE)
+      Games.zero(@@cur, EPD::PLANE)
       @@hi = -1
     end
-    !@@pass.null? && !@@cnew.null? && !@@cold.null?
+    !@@pass.null? && !@@cnew.null? && !@@cold.null? && !@@cur.null?
+  end
+
+  # ---- pen cursor ------------------------------------------------------------
+  # Four short ticks around the pen (CUR_IN..CUR_OUT px from its centre,
+  # CUR_W px wide), drawn as a first-pass grey (ink command 1) on pixels the
+  # pen never inked, and taken away again with the short lighten command
+  # (2, EPD ink_fe frames = the same drive as one pass, reversed) when the
+  # pen moves. Pixels with ink are never touched by the cursor, so it can't
+  # lighten a line; a full refresh (sync_from_canvas) drops it.
+  CUR_IN  = 6
+  CUR_OUT = 10
+  CUR_W   = 2
+
+  def self.cursor_shown? : Bool
+    @@cx >= 0
+  end
+
+  def self.cur_tick(x0 : Int32, y0 : Int32, w : Int32, h : Int32, on : Bool) : Nil
+    y = y0
+    while y < y0 &+ h
+      x = x0
+      while x < x0 &+ w
+        if x >= Sketch::X_MIN &- Sketch::HALF && x <= Sketch::X_MAX &+ Sketch::HALF &&
+           y >= Sketch::PEN_Y_MIN &- Sketch::HALF && y <= Sketch::PEN_Y_MAX &+ Sketch::HALF
+          i = y &* EPD::ROW_BYTES &+ x.unsafe_shr(3)
+          m = 0x80_u8.unsafe_shr(x & 7)
+          if (@@pass + (y &* EPD::WIDTH &+ x).to_i64!).value == 0_u8 # never over ink
+            if on
+              if (@@cur[i] & m) == 0_u8
+                @@cur[i] = @@cur[i] | m
+                @@cnew[i] = @@cnew[i] | m # command 1: a light grey step
+                @@cold[i] = @@cold[i] & (m ^ 0xFF_u8)
+                use(i)
+              end
+            elsif (@@cur[i] & m) != 0_u8 && (@@cnew[i] & m) == 0_u8
+              @@cur[i] = @@cur[i] & (m ^ 0xFF_u8)
+              @@cold[i] = @@cold[i] | m # command 2: back to white
+              use(i)
+            end
+          else
+            @@cur[i] = @@cur[i] & (m ^ 0xFF_u8) # inked over: it is a line now
+          end
+        end
+        x = x &+ 1
+      end
+      y = y &+ 1
+    end
+  end
+
+  def self.cur_shape(x : Int32, y : Int32, on : Bool) : Nil
+    l = CUR_OUT &- CUR_IN &+ 1
+    h = CUR_W.unsafe_div(2)
+    cur_tick(x &+ CUR_IN, y &- h, l, CUR_W, on)
+    cur_tick(x &- CUR_OUT, y &- h, l, CUR_W, on)
+    cur_tick(x &- h, y &+ CUR_IN, CUR_W, l, on)
+    cur_tick(x &- h, y &- CUR_OUT, CUR_W, l, on)
+  end
+
+  # Moves the cursor to (x, y): new ticks first (so pixels both shapes
+  # share stay), then the old ones go. Call after take_touches. True if
+  # anything changed (an ink pull is needed).
+  def self.cursor_to(x : Int32, y : Int32) : Bool
+    return false unless ready?
+    return false if x == @@cx && y == @@cy
+    cur_shape(x, y, true)
+    cur_shape(@@cx, @@cy, false) if @@cx >= 0
+    @@cx = x
+    @@cy = y
+    true
   end
 
   # After a full refresh: what the canvas shows is solid black (full
@@ -1607,6 +1682,9 @@ module SkInk
   def self.sync_from_canvas : Nil
     return unless ready?
     @@pw0 = -1
+    Games.zero(@@cur, EPD::PLANE) # a full refresh showed no cursor
+    @@cx = -1
+    @@cy = -1
     cv = Sketch.canvas
     tc = Sketch.touch
     i = 0
@@ -1795,6 +1873,7 @@ def quick_draw : Nil
     if x == 0xFFF
       Shared.led_mode = pulls & 1 == 0 ? LED_YELLOW : LED_CYAN
       SkInk.take_touches
+      SkInk.cursor_to(Sketch.x, Sketch.y) # the cursor rides along with the pen
       SkInk.pull
       pulls = pulls &+ 1
     else
@@ -2384,7 +2463,9 @@ fun crystal_app_main : Void
           SkState.mark_shown
         end
         SkState.hint = false # nothing to remove: the help strip stays
-        if SkInk.take_touches
+        inked = SkInk.take_touches
+        inked = true if SkInk.cursor_to(Sketch.x, Sketch.y)
+        if inked
           t = millis
           Shared.led_mode = LED_CYAN
           SkTrack.reset

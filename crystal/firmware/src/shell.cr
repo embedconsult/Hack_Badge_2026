@@ -348,6 +348,10 @@ module Shell
     elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
+    elsif tok_is(0, "inkf")
+      # inkf <f1> <f3> <fe>: ink command drive frames (new session)
+      EPD.ink_frames(tok_int(1, EPD.ink_f1), tok_int(2, EPD.ink_f3), tok_int(3, EPD.ink_fe)) if @@nt >= 4
+      LibIDF.cr_log3("inkf: f1 / f3 / fe".to_unsafe, EPD.ink_f1, EPD.ink_f3, EPD.ink_fe)
     elsif tok_is(0, "reg")
       # reg <osc> <tcon> (decimal): session timing experiment (EPD.x_regs)
       EPD.x_regs(tok_int(1, EPD.x_osc), tok_int(2, EPD.x_tcon)) if @@nt >= 3
