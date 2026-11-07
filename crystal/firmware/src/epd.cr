@@ -1386,7 +1386,11 @@ module EPD
         ram_rw(t, wmode, x0, y0)
         send_box(t, 0x10_u8, @@black, x0, x1, y0, y1)
         zero_box = red_box_zero?(t == LEFT ? 0 : 1, x0, x1, y0, y1)
-        unless @@skip_zero_red && zero_box && @@red_zero
+        # Keep-red kinds never change red: the COG keeps the red RAM from the
+        # colour render. Writing red through a window here put red data
+        # ~336 rows off (photo on f618be4, colour mode), so don't.
+        keep_red = kind == LUT_KEEPRED || kind == LUT_NOSHAKE_KEEPRED
+        unless keep_red || (@@skip_zero_red && zero_box && @@red_zero)
           ram_rw(t, wmode, x0, y0)
           send_box(t, 0x11_u8, @@red, x0, x1, y0, y1)
           @@red_zero = false unless zero_box
