@@ -10,7 +10,7 @@
 #
 # Outputs (workflow artifact badge-firmware-<build>): crystal_blink.bin (the
 # app image, flash at 0x20000), merged-binary.bin (whole flash from 0x0) and
-# badge-version.txt (build number = git rev-list --count HEAD).
+# badge-version.txt ("<git describe> <build>", build = git rev-list --count HEAD).
 # This workflow never publishes a release; see badge-release.yml.
 name: firmware
 
@@ -147,7 +147,7 @@ jobs:
           export ROOTFS=/ IDF_PATH=~/esp/esp-idf
           export CRYSTAL_XTENSA=~/crystal-xtensa/bin/crystal CRYSTAL_LLC_BIN=~/esp-clang/bin/llc
           crystal/firmware/build.sh
-          echo "BUILD_NUM=$(cat crystal/firmware/build/badge-version.txt)" >> "$GITHUB_ENV"
+          echo "BUILD_NUM=$(awk '{print $2}' crystal/firmware/build/badge-version.txt)" >> "$GITHUB_ENV"
       - name: Check outputs
         run: |
           cd crystal/firmware/build

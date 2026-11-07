@@ -1,8 +1,8 @@
 # Publish a CI firmware build as a GitHub release (the badge's OTA source).
 #
 # DISABLED BY DEFAULT. Publishing a release is the user's decision: every badge
-# that checks for updates installs the newest release whose build number is
-# greater than its own. Nothing runs this automatically.
+# with Wi-Fi installs the newest release whose build number is greater than its
+# own, automatically when idle (a4e337c, Ota.auto_tick). Nothing runs this workflow automatically.
 #
 # To publish, all three are needed:
 #   1. Repository variable BADGE_RELEASES_ENABLED = true
@@ -18,7 +18,7 @@
 # The release is tagged build-<N> at the run's commit, marked latest, with the
 # assets the badge fetches (firmware/main/ota.c, tools/release.sh):
 #   badge-app.bin       = crystal_blink.bin (the app image for the other OTA slot)
-#   badge-version.txt   = the build number N
+#   badge-version.txt   = "<git describe> <N>" (main/ota.c reads N)
 name: badge-release
 
 on:
@@ -59,7 +59,7 @@ jobs:
           a=$(ls dl | grep -v -- '-debug$' | head -1)
           cp "dl/$a/crystal_blink.bin" badge-app.bin
           cp "dl/$a/badge-version.txt" badge-version.txt
-          N=$(tr -d '\r\n ' < badge-version.txt)
+          N=$(awk '{print $2}' badge-version.txt)
           case $N in ''|*[!0-9]*) echo "bad build number '$N'" >&2; exit 1 ;; esac
           [ "$(head -c1 badge-app.bin | od -An -tx1 | tr -d ' ')" = e9 ]
           [ "$(wc -c < badge-app.bin)" -le $((0x300000)) ]
