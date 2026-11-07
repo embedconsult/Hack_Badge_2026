@@ -25,10 +25,32 @@ SNAP = "/work/Hack_Badge_2026/crystal/flash-request/snap"
 JPG = SNAP + ".jpg"
 
 
+_last_close = 0.0
+
+
 def console(cmds):
     """cmds: list of strings; '@1.5' waits. Returns the console text."""
-    s = socket.create_connection(("host.docker.internal", 4000), timeout=5)
-    s.settimeout(0.05)
+    # The Mac's socat bridge reopens the USB port per connection; one opened
+    # less than ~2 s after the previous one closed often gets no data at all.
+    # Keep 2 s between connections and check each with a "version" reply.
+    global _last_close
+    for attempt in range(6):
+        time.sleep(max(0.0, _last_close + 2.0 - time.time()))
+        s = socket.create_connection(("host.docker.internal", 4000), timeout=5)
+        s.settimeout(0.05)
+        s.sendall(b"version\r\n")
+        got, e = b"", time.time() + 2.0
+        while time.time() < e and b"badge " not in got:
+            try:
+                got += s.recv(4096)
+            except socket.timeout:
+                pass
+        if b"badge " in got:
+            break
+        s.close()
+        _last_close = time.time()
+    else:
+        raise SystemExit("console: no reply from the badge after 6 connections")
     out = []
 
     def rd(t):
@@ -46,6 +68,7 @@ def console(cmds):
             rd(0.08)
     rd(0.5)
     s.close()
+    _last_close = time.time()
     return "".join(out)
 
 
@@ -98,7 +121,7 @@ def ink():
     console(["mode sketch", "@12", "press a", "@9"])
     for k, f in enumerate((2, 3, 4)):
         console(["inkf %d %d %d" % (f, f, f), "@1.5"])
-        grep(console(stroke(1100 + k * 220, 1100, 1800) + ["knob off", "@1"]), "inkf", "ink upload")
+        grep(console(stroke(900 + k * 500, 500, 2900) + ["knob off", "@1"]), "inkf", "ink upload")
     snap("ink-f2-f3-f4")
     console(["inkf 2 2 2", "@1"])
 
