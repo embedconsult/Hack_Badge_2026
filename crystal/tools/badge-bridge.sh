@@ -15,6 +15,13 @@
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 PORT_DEV=${1:-/dev/cu.usbmodem101}
+TCP_PORT=${2:-4000}
+# Only the default (Supercon badge) instance handles flash requests; extra
+# instances (e.g. a BeagleBadge on :4001) only bridge, with their own log and a
+# fixed baud rate (BAUD, default 115200) for USB-serial adapters.
+FLASHER=1; [ "$TCP_PORT" = 4000 ] || FLASHER=0
+BAUD=${BAUD:-115200}
+LOG=server.log; [ "$TCP_PORT" = 4000 ] || LOG="server-$TCP_PORT.log"
 REQ=crystal/flash-request
 mkdir -p "$REQ"
 export PATH="$HOME/Library/Python/3.9/bin:$PATH"
@@ -26,12 +33,12 @@ server_pid=""
 start_server() {
   [ -e "$PORT_DEV" ] || return
   if [ "$BRIDGE" = socat ]; then
-    socat -d TCP-LISTEN:4000,reuseaddr,fork "FILE:$PORT_DEV,raw,echo=0,nonblock" >"$REQ/server.log" 2>&1 &
+    socat -d TCP-LISTEN:$TCP_PORT,reuseaddr,fork "FILE:$PORT_DEV,raw,echo=0,nonblock,b$BAUD" >"$REQ/$LOG" 2>&1 &
   else
-    python3 "$SERVER" -p 4000 "$PORT_DEV" >"$REQ/server.log" 2>&1 &
+    python3 "$SERVER" -p $TCP_PORT "$PORT_DEV" >"$REQ/$LOG" 2>&1 &
   fi
   server_pid=$!
-  echo "$BRIDGE bridge up on :4000 ($PORT_DEV), pid $server_pid"
+  echo "$BRIDGE bridge up on :$TCP_PORT ($PORT_DEV), pid $server_pid"
 }
 stop_server() {
   if [ -n "$server_pid" ]; then
@@ -44,7 +51,7 @@ trap 'stop_server; exit 0' INT TERM
 
 start_server
 while true; do
-  if [ -f "$REQ/request" ]; then
+  if [ "$FLASHER" = 1 ] && [ -f "$REQ/request" ]; then
     mv "$REQ/request" "$REQ/request.running"
     stop_server
     args=()
@@ -64,7 +71,7 @@ while true; do
   # Restart the bridge if it died, or if it lost the USB port when the badge
   # reset and re-enumerated (the server keeps a dead handle and logs
   # "Device not configured" on every connection instead of exiting).
-  if [ "$BRIDGE" != socat ] && [ -n "$server_pid" ] && grep -q "Device not configured" "$REQ/server.log" 2>/dev/null; then
+  if [ "$BRIDGE" != socat ] && [ -n "$server_pid" ] && grep -q "Device not configured" "$REQ/$LOG" 2>/dev/null; then
     echo "badge port went away; restarting bridge"
     stop_server
   fi
