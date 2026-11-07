@@ -139,6 +139,11 @@ module RC
                     @@name_len.null? || @@tok_sym.null? || @@slot_of.null? ||
                     @@slot_epoch.null? || @@set_g.null? || @@set_c.null? || @@set_l.null? ||
                     @@fn_chk.null?
+    i = 0 # game_alloc memory is not zeroed on the badge
+    while i < SYM_MAX
+      @@slot_epoch[i] = 0
+      i = i &+ 1
+    end
     @@ready = true
   end
 

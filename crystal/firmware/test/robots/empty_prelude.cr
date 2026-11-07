@@ -14,8 +14,16 @@ lib LibC
   fun atoi(s : UInt8*) : Int32
 end
 
+# Like the badge's heap_caps_malloc, memory is not zeroed: fill it with
+# garbage so a read before write shows up as a different match.
 def game_alloc(n : Int32) : UInt8*
-  LibC.calloc(n.to_u64!, 1_u64).as(UInt8*)
+  p = LibC.calloc(n.to_u64!, 1_u64).as(UInt8*)
+  i = 0
+  while i < n
+    p[i] = 0xA5_u8
+    i = i &+ 1
+  end
+  p
 end
 
 require "../../src/robots/battle"

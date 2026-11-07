@@ -44,6 +44,7 @@ end
 
 def fast_bw(p, k); Render.frame("clean"); end
 def millis : Int32; 1000; end
+def log2(m, a, b); puts "#{m}: #{a} #{b}"; end
 def log(m, v); puts "#{m}: #{v}"; end
 
 def text_width(s : String, scale : Int32) : Int32
@@ -97,6 +98,7 @@ require "../../src/apps/builtin"
 require "../../src/apps/home"
 require "../../src/apps/settings"
 require "../../src/apps/schedule"
+require "../../src/apps/robots"
 
 inp = Games.input(1000, 1000, 0_u32, 0_u32)
 press = ->(b : UInt32) { Games.input(1000, 1000, b, 0_u32) }
@@ -114,3 +116,9 @@ ScheduleApp.tick(1, press.call(Games::BTN_B))
 Render.name = "schednow"
 LibIDF.set_time(2026, 11, 7, 14, 10)
 ScheduleApp.enter
+Render.name = "robots"
+RobotsApp.enter
+6.times { RobotsApp.tick(1, inp) }
+RobotsApp.tick(1, press.call(Games::BTN_B))
+RobotsApp.tick(1, press.call(Games::BTN_A))
+3.times { RobotsApp.tick(1, inp) }
