@@ -207,6 +207,7 @@ module Shared
   REQ_CLEAN  = 2_u32
   REQ_STROKE = 4_u32
   REQ_QUICKDRAW = 16_u32 # (8 = REQ_REDRAW, src/net.cr)
+  REQ_FORGET    = 32_u32 # knob override switched on/off: no pen jump
 
   def self.ovr_l : Int32
     @@ovr_l
@@ -221,6 +222,7 @@ module Shared
   end
 
   def self.knob_override(l : Int32, r : Int32) : Nil
+    request(REQ_FORGET) if (l < 0) != (@@ovr_l < 0)
     @@ovr_l = l
     @@ovr_r = r
   end
@@ -1731,6 +1733,32 @@ module SkInk
   end
 end
 
+# EPD busy hook: while an ink pull runs (~0.6 s) the pen keeps following
+# the knobs every knob-task sample, so the next pull draws the path the
+# knobs took (curves stay curves) instead of one straight chord.
+module SkTrack
+  @@ml = -1
+  @@mr = -1
+
+  def self.reset : Nil
+    @@ml = -1
+    @@mr = -1
+  end
+
+  def self.poll : Nil
+    l = Shared.mv_l
+    r = Shared.mv_r
+    return if l == @@ml && r == @@mr # new knob-task sample only
+    @@ml = l
+    @@mr = r
+    Sketch.track(millis, l, r)
+  end
+end
+
+def epd_busy_hook : Nil
+  SkTrack.poll if Shared.screen == SCR_SKETCH
+end
+
 # "Quick draw" (hold B 2 s in Sketch, shell `sketch quickdraw`): a six-
 # shooter drawn in one continuous Etch-a-Sketch path of straight segments,
 # fast, three passes so it ends darker (our own drawing, facing left):
@@ -2187,6 +2215,7 @@ fun crystal_app_main : Void
   a_fired = false # the hold already fired (no tap on release)
   b_down = 0      # Sketch: User B down since (Quick draw hold)
   b_fired = false
+  forget_until = millis # knob references dropped until then (REQ_FORGET)
   while true
     Ota.ui(scr) if Ota.running? # OTA (shell or DIAG): no other e-paper work meanwhile
     held = Shared.take_buttons
@@ -2244,6 +2273,11 @@ fun crystal_app_main : Void
       Shared.rendering = true
       enter_screen(scr, false) # new nametag text (net.cr)
       Shared.rendering = false
+    end
+    forget_until = now &+ 80 if (reqs & Shared::REQ_FORGET) != 0_u32
+    if now &- forget_until < 0 # the knob task may still deliver the old source
+      Sketch.forget_knobs
+      SkTrack.reset
     end
     if (reqs & Shared::REQ_QUICKDRAW) != 0_u32 && scr == SCR_SKETCH
       Shared.rendering = true
@@ -2359,7 +2393,10 @@ fun crystal_app_main : Void
         if SkInk.take_touches
           t = millis
           Shared.led_mode = LED_CYAN
+          SkTrack.reset
+          EPD.hook = true
           SkInk.pull
+          EPD.hook = false
           SkState.pen_seen(Sketch.x, Sketch.y)
           last_total = millis &- t
           SkState.last_lat = millis &- last_input

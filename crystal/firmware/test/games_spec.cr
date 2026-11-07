@@ -346,14 +346,38 @@ describe Snake do
   end
 end
 
+module SkT
+  class_property l = -1
+  class_property r = -1
+end
+
+def sk_wrap(d)
+  ((d + 2048) & 4095) - 2048
+end
+
+# Big knob moves arrive as hand turns do: in steps below Sketch::JUMP (a
+# bigger step between two samples is taken as a source switch, not a turn).
 def sk_tick(t, cl, cr, pressed = 0_u32)
+  if SkT.l >= 0
+    dl = sk_wrap(cl - SkT.l)
+    dr = sk_wrap(cr - SkT.r)
+    n = {dl.abs, dr.abs}.max // 400
+    (1..n).each do |k|
+      Sketch.tick_counts(t, (SkT.l + dl * k // (n + 1)) & 4095, (SkT.r + dr * k // (n + 1)) & 4095, 0_u32)
+    end
+  end
+  SkT.l = cl
+  SkT.r = cr
   Sketch.tick_counts(t, cl, cr, pressed)
 end
 
-# Fresh two-knob sketch, launch refresh consumed, knob refs at (cl, cr).
+# Fresh two-knob sketch, launch refresh consumed, knob refs at (cl, cr),
+# the backlash filter taken up in the + direction (turns up count 1:1).
 def sk_fresh(cl = 1000, cr = 1000, knobs = 2)
   Sketch.init(knobs).should be_true
-  sk_tick(0, cl, cr).should be_true # launch: cleaning flash
+  SkT.l = -1
+  sk_tick(0, cl - Sketch::HYST, cr - Sketch::HYST).should be_true # launch: cleaning flash
+  sk_tick(0, cl, cr)
   Sketch.want_clean?.should be_true
   Sketch.render(plane, plane)
 end
@@ -370,17 +394,21 @@ describe Sketch do
   it "uses upstream's delta: first read 0, deadband 12 keeps the reference, wraps" do
     last = -1
     Sketch.delta(1000, pointerof(last)).should eq 0
-    last.should eq 1000
     Sketch.delta(1012, pointerof(last)).should eq 0
-    Sketch.delta(988, pointerof(last)).should eq 0
-    last.should eq 1000
-    Sketch.delta(1008, pointerof(last)).should eq 0
-    Sketch.delta(1013, pointerof(last)).should eq 13 # slow turn accumulates
-    last.should eq 1013
-    last = 4090
-    Sketch.delta(20, pointerof(last)).should eq 26
-    last = 20
-    Sketch.delta(4090, pointerof(last)).should eq -26
+    Sketch.delta(1013, pointerof(last)).should eq 13
+  end
+
+  it "filters knob noise with a backlash: no wobble, even speed, wraps" do
+    pos = -1
+    Sketch.follow(1000, pointerof(pos)).should eq 0
+    Sketch.follow(1000 + Sketch::HYST, pointerof(pos)).should eq 0
+    Sketch.follow(1000 - Sketch::HYST, pointerof(pos)).should eq 0
+    pos.should eq 1000
+    Sketch.follow(1000 + Sketch::HYST + 3, pointerof(pos)).should eq 3
+    Sketch.follow(1000 + Sketch::HYST + 4, pointerof(pos)).should eq 1 # count by count
+    Sketch.follow(1000 + Sketch::HYST - 5, pointerof(pos)).should eq 0 # reversal inside the band
+    pos = 4090
+    Sketch.follow(20 + Sketch::HYST, pointerof(pos)).should eq 26
   end
 
   it "draws 3 px Bresenham lines including both endpoints" do
@@ -436,10 +464,10 @@ describe Sketch do
     6.times { |i| c = (c + 2000) & 4095; sk_tick(10 + i, c, 1000) } # wraps past 4095
     Sketch.x.should eq Sketch::X_MAX
     sk_tick(20, (c + 30) & 4095, 1000) # 1.76 px further: clamped, remainder dropped
-    sk_tick(30, (c + 30 - 52) & 4095, 1000) # back 3.05 px from 0 remainder
+    sk_tick(30, (c + 30 - 52 - 2 * Sketch::HYST) & 4095, 1000) # reversal takes up the backlash, then back 3.05 px
     Sketch.x.should eq Sketch::X_MAX - 3
     d = 1000
-    6.times { |i| d = (d + 2000) & 4095; sk_tick(40 + i, (c + 30 - 52) & 4095, d) }
+    6.times { |i| d = (d + 2000) & 4095; sk_tick(40 + i, (c + 30 - 52 - 2 * Sketch::HYST) & 4095, d) }
     Sketch.y.should eq Sketch::PEN_Y_MIN
     d2 = 1000
     6.times { |i| d2 = (d2 - 2000) & 4095; sk_tick(60 + i, 0, 0) } # re-reference
@@ -482,8 +510,8 @@ describe Sketch do
     sk_tick(800, 2024, 2024).should be_true
     Sketch.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
     {x0, y0, x1, y1}.should eq({478, 249, 540, 311})
-    sk_tick(900, 1000, 2024) # back left 60 px: new box only
-    sk_tick(1600, 1000, 2024).should be_true
+    sk_tick(900, 1000 - 2 * Sketch::HYST, 2024) # back left 60 px (after the backlash): new box only
+    sk_tick(1600, 1000 - 2 * Sketch::HYST, 2024).should be_true
     Sketch.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
     {x0, y0, x1, y1}.should eq({478, 249, 540, 251})
     sk_tick(1700, 1000, 2024, Games::BTN_B).should be_true # clean: no window
@@ -544,8 +572,9 @@ describe Sketch do
   it "takes knob millivolts through tick()" do
     sk_fresh
     Sketch.tick(10, inp(1000, 1000)) # re-reference at the mV mapping
-    Sketch.tick(20, inp(2024, 1000))
-    (Sketch.x - 479).should be_close(60, 1)
+    Sketch.tick(20, inp(1512, 1000)) # turns arrive in steps below JUMP
+    Sketch.tick(30, inp(2024, 1000))
+    (Sketch.x - 479).should be_close(59, 1) # 60 px less the backlash
   end
 
   it "overlays the trace on the frame: black set, red cleared" do

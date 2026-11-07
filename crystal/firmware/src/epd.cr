@@ -1855,6 +1855,14 @@ module EPD
 
   # ---- refresh -----------------------------------------------------------------
 
+  @@hook = false
+
+  # While set, wait_busy calls epd_busy_hook (defined by the firmware) on
+  # every poll.
+  def self.hook=(v : Bool) : Nil
+    @@hook = v
+  end
+
   def self.busy? : Bool
     LibIDF.gpio_get_level(BUSY1) == 0 || LibIDF.gpio_get_level(BUSY2) == 0
   end
@@ -1870,6 +1878,7 @@ module EPD
         log("EPD: refresh aborted", millis &- t0)
         return -2
       end
+      epd_busy_hook if @@hook # main.cr: e.g. Sketch keeps tracking the knobs
       delay_ms(@@busy_poll_ms)
     end
     0

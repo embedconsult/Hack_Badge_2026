@@ -53,7 +53,9 @@ module Sketch
   PEN_Y_MAX = Y_MAX - 24 # help strip rows Y_MAX - 20 .. Y_MAX - 1
 
   PX_PER_REV      =  240 # pen travel per full knob turn (0..1 knob range)
-  DEADBAND        =   12 # counts (of 4096) of ADC noise to ignore
+  DEADBAND        =   12 # counts (of 4096) of ADC noise to ignore (upstream delta)
+  HYST            =   10 # backlash filter half-width, counts: no wobble when still
+  JUMP            =  700 # counts between two samples no hand turns: re-reference
   ADC_SAMPLES     =    8 # readings the firmware should average per poll
   IDLE_REFRESH_MS =  700 # refresh this long after the knobs stop...
   MAX_WAIT_MS     = 4000 # ...or at most this long while still drawing
@@ -379,15 +381,51 @@ module Sketch
     end
   end
 
-  # Upstream _read_deltas + _poll_knobs, on counts (ax = X knob, ay = Y).
+  # Backlash (hysteresis) filter on counts: the filtered position *pos
+  # follows a only once a is more than HYST away, and then stays exactly
+  # HYST behind it. ADC noise smaller than +-HYST never moves the pen (no
+  # wobble when the knobs are still), while a slow, steady turn moves it
+  # count by count (no deadband steps, so the speed is even). Wraps like
+  # delta; *pos = -1 means no reading yet. Returns the counts moved.
+  def self.follow(a : Int32, pos : Int32*) : Int32
+    if pos.value < 0
+      pos.value = a
+      return 0
+    end
+    d = ((a &- pos.value &+ 2048) & 4095) &- 2048
+    if d > JUMP || d < 0 &- JUMP # source switched (knob override) or a glitch
+      pos.value = a
+      return 0
+    end
+    m = 0
+    if d > HYST
+      m = d &- HYST
+    elsif d < 0 &- HYST
+      m = d &+ HYST
+    end
+    return 0 if m == 0
+    pos.value = (pos.value &+ m) & 4095
+    m
+  end
+
+  # Knob millivolts -> poll (the firmware calls this while a pull is
+  # running too, so the pen follows the knobs' path, not a chord).
+  def self.track(now : Int32, left_mv : Int32, right_mv : Int32) : Nil
+    cl = counts(left_mv, Games::LEFT_MV_LO, Games::LEFT_MV_HI)
+    cr = counts(right_mv, Games::RIGHT_MV_LO, Games::RIGHT_MV_HI)
+    poll(now, SWAP_KNOBS ? cr : cl, SWAP_KNOBS ? cl : cr)
+  end
+
+  # Upstream _read_deltas + _poll_knobs, on counts (ax = X knob, ay = Y),
+  # with the backlash filter instead of upstream's deadband.
   def self.poll(now : Int32, ax : Int32, ay : Int32) : Nil
     cx = 0
     cy = 0
     if @@knobs == 2
-      cx = delta(ax, pointerof(@@last_x))
-      cy = delta(ay, pointerof(@@last_y))
+      cx = follow(ax, pointerof(@@last_x))
+      cy = follow(ay, pointerof(@@last_y))
     else
-      d = delta(ax, pointerof(@@last_x))
+      d = follow(ax, pointerof(@@last_x))
       if @@single_y
         cy = d
       else
