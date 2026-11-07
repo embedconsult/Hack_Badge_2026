@@ -362,6 +362,10 @@ module Shell
     elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
+    elsif tok_is(0, "diffe")
+      # diffe <vdl> <vdh>: diff table black -> white drive frames (new session)
+      EPD.diff_erase(tok_int(1, EPD.diff_el), tok_int(2, EPD.diff_eh)) if @@nt >= 3
+      LibIDF.cr_log3("diffe: vdl / vdh / -".to_unsafe, EPD.diff_el, EPD.diff_eh, 0)
     elsif tok_is(0, "inkf")
       # inkf <f1> <f3> <fe>: ink command drive frames (new session)
       EPD.ink_frames(tok_int(1, EPD.ink_f1), tok_int(2, EPD.ink_f3), tok_int(3, EPD.ink_fe)) if @@nt >= 4

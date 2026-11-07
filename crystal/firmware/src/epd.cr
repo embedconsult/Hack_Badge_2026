@@ -1087,15 +1087,40 @@ module EPD
       k = k &+ 1
     end
     f = 0
-    while f < DIFF_DRIVE
+    while f < 20
       g = f.unsafe_div(2)
       shift = (f & 1) == 1 ? 0 : 2 # phase c: bits 3-2, phase d: bits 1-0
-      q1 = @@lut + ((10 &+ g) &* 8).to_i64!
-      q1[0] = q1[0] | 1.unsafe_shl(shift).to_u8! # VDH
+      if f < DIFF_DRIVE
+        q1 = @@lut + ((10 &+ g) &* 8).to_i64!
+        q1[0] = q1[0] | 1.unsafe_shl(shift).to_u8! # VDH
+      end
       q2 = @@lut + ((20 &+ g) &* 8).to_i64!
-      q2[0] = q2[0] | 2.unsafe_shl(shift).to_u8! # VDL
+      if f < @@diff_el
+        q2[0] = q2[0] | 2.unsafe_shl(shift).to_u8! # VDL
+      elsif f < @@diff_el &+ @@diff_eh
+        q2[0] = q2[0] | 1.unsafe_shl(shift).to_u8! # VDH kick after the erase
+      end
       f = f &+ 1
     end
+  end
+
+  # Black -> white drive of the diff table: VDL frames, then VDH frames
+  # (a short reverse kick). Long VDL brings red pigment up (pink ghosts).
+  @@diff_el = DIFF_DRIVE
+  @@diff_eh = 0
+
+  def self.diff_erase(l : Int32, h : Int32) : Nil
+    @@diff_el = l < 1 ? 1 : (l > 19 ? 19 : l)
+    @@diff_eh = h < 0 ? 0 : (h > 20 &- @@diff_el ? 20 &- @@diff_el : h)
+    cog_stop if @@diff_open && @@latched_kind == LUT_DIFF && !busy? # new table: new session
+  end
+
+  def self.diff_el : Int32
+    @@diff_el
+  end
+
+  def self.diff_eh : Int32
+    @@diff_eh
   end
 
   # main.c:207-239 dcdc_on (ms(t) there is t ticks + 1).
