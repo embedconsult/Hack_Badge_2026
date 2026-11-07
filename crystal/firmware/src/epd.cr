@@ -1148,6 +1148,15 @@ module EPD
     @@mirror_right = v
   end
   WIN_PAD_ROWS = 8
+  # Seam test (DIAG B v10): DRFW start / end moved by this many 4-row units
+  # relative to the DUW rows. 0 / 0 everywhere else.
+  @@drfw_d0 = 0
+  @@drfw_d1 = 0
+
+  def self.drfw_shift(d0 : Int32, d1 : Int32) : Nil
+    @@drfw_d0 = d0
+    @@drfw_d1 = d1
+  end
   WIN_PAD_COLS = 1 # bytes
 
   # Streams rows y0..y1, bytes x0..x1 of one COG's half of `plane` (null =
@@ -1280,6 +1289,9 @@ module EPD
     finish_aborted
     @@spi_fail = false
     unless @@session_open && @@lut_latched && @@latched_fast && @@latched_kind == kind && @@probe < 0
+      # 1 = no session, 2 = LUT not latched / slow, 3 = other kind latched
+      why = !@@session_open ? 1 : (!@@lut_latched || !@@latched_fast ? 2 : (@@latched_kind != kind ? 3 : 4))
+      log2("EPD: window -> full refresh, reason / kind", why, kind)
       @@raw = true
       refresh(true, kind)
       @@raw = false
@@ -1351,7 +1363,11 @@ module EPD
           dx0 = HALF_BYTES &- 1 &- x1
           dx1 = HALF_BYTES &- 1 &- x0
         end
-        cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
+        f0 = y0.unsafe_div(u) &+ @@drfw_d0
+        f1 = y1.unsafe_div(u) &+ @@drfw_d1
+        f0 = 0 if f0 < 0
+        f1 = HEIGHT.unsafe_div(u) &- 1 if f1 > HEIGHT.unsafe_div(u) &- 1
+        cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, f0.to_u8!, f1.to_u8!)
       end
       if wmode == 2 || wmode == 4 || wmode == 5
         ram_rw_full(t)

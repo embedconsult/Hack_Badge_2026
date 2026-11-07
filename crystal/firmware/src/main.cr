@@ -1186,61 +1186,63 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration v8 (DIAG, User B): rows-only windows with RAM_RW at
-# the window start (EPD.refresh_window2 mode 8). HALF60, 1 pull. White base,
-# then each step adds TWO markers on the same rows (left x200, right x650)
-# and refreshes only those rows:
-#   R1 y120  mode 8           R2 y300  mode 8 (y0 > 255: high byte)
-#   R3 y460  mode 8 + 0x91 12 R4 y560  mode 8 + 0x91 12
-# Holds 12 s (photo), then the reference with each step's panel ms.
-WT_STEPS = 4
+# Seam test v10 (DIAG, User B). Sketch's windows leave thin full-width
+# lines at their edges. White screen (full refresh, WIN_LUT, labels and edge
+# ticks), then five white-on-white rows-only windows (mode 8, WIN_LUT, as
+# Sketch ink), each run 3 times, nothing changes in the planes:
+#   V1 rows 92..155   DRFW = DUW rows (as Sketch now)
+#   V2 rows 212..275  DRFW end   +1 unit (4 rows past DUW)
+#   V3 rows 332..395  DRFW start -1 unit
+#   V4 rows 452..515  DRFW inside DUW by 1 unit each side
+#   V5 rows 572..635  DRFW outside DUW by 1 unit each side
+# The DUW rows of each band are marked by ticks at x 0..39 and 920..959,
+# 4 rows OUTSIDE each edge (tick rows y0-6..y0-5 and y1+5..y1+6). The result
+# stays on screen (no reference frame): photograph any time after.
+WT_STEPS = 5
 
 def wt_y(i : Int32) : Int32
-  i == 0 ? 120 : (i == 1 ? 300 : (i == 2 ? 460 : 560))
-end
-
-# v9 run order: rows 460, 560, 300 without 0x91 first, row 120 WITH 0x91 last
-# (so a sticky 0x91 can't contaminate the others). Returns the row index.
-def wt_order(k : Int32) : Int32
-  k == 0 ? 2 : (k == 1 ? 3 : (k == 2 ? 1 : 0))
+  100 &+ i &* 120 # requested box top; padded by EPD to y-8 .. y+55
 end
 
 def window_test : Nil
-  log("wtest v9: white base", 0)
+  log("wtest v10: seam test, white base", 0)
   EPD.fill(EPD::WHITE)
-  fast_bw(3, EPD::LUT_HALF60)
-  times = Shared.times_buf
-  k = 0
-  while k < WT_STEPS
-    i = wt_order(k)
-    y = wt_y(i)
-    window_marker(200, y)
-    window_marker(650, y)
-    EPD.fast_pulls = 1
-    log2("wtest v9: run / y", k &+ 1, y)
-    EPD.refresh_window2(y, y &+ 79, 25, 39, y, y &+ 79, 81, 96, EPD::LUT_HALF60, 8)
-    times[i] = EPD.panel_ms
-    log2("wtest v9: run / panel ms", k &+ 1, EPD.panel_ms)
-    delay_ms(1500)
-    k = k &+ 1
-  end
-  log("wtest: hold 12 s for a photo", 0)
-  delay_ms(12_000)
-  buf = Shared.label_buf
+  draw_text(40, 20, "SEAM TEST V10: LINES AT BAND EDGES?", EPD::BLACK, 3)
   i = 0
   while i < WT_STEPS
-    buf[0] = 0x52_u8 # R
-    buf[1] = (0x31 &+ i).to_u8!
-    buf[2] = 0x20_u8
-    n = 3 &+ put_decimal(buf + 3_i64, times[i])
-    buf[n] = 0x4D_u8
-    buf[n &+ 1] = 0x53_u8
-    draw_bytes(380, wt_y(i) &+ 30, buf, n &+ 2, EPD::BLACK, 2)
+    y0 = wt_y(i) &- 8
+    y1 = wt_y(i) &+ 55
+    EPD.fill_rect(0, y0 &- 6, 40, 2, EPD::BLACK)
+    EPD.fill_rect(920, y0 &- 6, 40, 2, EPD::BLACK)
+    EPD.fill_rect(0, y1 &+ 5, 40, 2, EPD::BLACK)
+    EPD.fill_rect(920, y1 &+ 5, 40, 2, EPD::BLACK)
     i = i &+ 1
   end
-  draw_text(40, 646, "REF v9: ORDER R3,R4,R2 NO 0x91, THEN R1 +0x91", EPD::BLACK, 2)
-  fast_bw(3, EPD::LUT_HALF60)
-  EPD.cog_stop # full COG re-init on the next refresh: nothing of the test survives
+  draw_text(60, wt_y(0) &+ 16, "V1 DRFW = DUW", EPD::BLACK, 3)
+  draw_text(60, wt_y(1) &+ 16, "V2 DRFW END +4 ROWS", EPD::BLACK, 3)
+  draw_text(60, wt_y(2) &+ 16, "V3 DRFW START -4 ROWS", EPD::BLACK, 3)
+  draw_text(60, wt_y(3) &+ 16, "V4 DRFW INSIDE BY 4", EPD::BLACK, 3)
+  draw_text(60, wt_y(4) &+ 16, "V5 DRFW OUTSIDE BY 4", EPD::BLACK, 3)
+  fast_bw(3, WIN_LUT)
+  i = 0
+  while i < WT_STEPS
+    y = wt_y(i)
+    d0 = i == 2 || i == 4 ? -1 : (i == 3 ? 1 : 0)
+    d1 = i == 1 || i == 4 ? 1 : (i == 3 ? -1 : 0)
+    EPD.drfw_shift(d0, d1)
+    r = 0
+    while r < 3
+      EPD.fast_pulls = 1
+      EPD.refresh_window2(y, y &+ 47, 0, EPD::HALF_BYTES &- 1, y, y &+ 47, 0, EPD::HALF_BYTES &- 1, WIN_LUT, 8)
+      log2("wtest v10: band / panel ms", i &+ 1, EPD.panel_ms)
+      delay_ms(300)
+      r = r &+ 1
+    end
+    i = i &+ 1
+  end
+  EPD.drfw_shift(0, 0)
+  EPD.cog_stop # full COG re-init on the next refresh
+  log("wtest v10: done, result stays on screen", 0)
 end
 
 # Build version (git describe + build time), 5x7 font x2, right-aligned to
@@ -1269,11 +1271,11 @@ def show_diag : Nil
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_version(EPD::WIDTH &- 12, 12)
   draw_text(40, 200, "A: LUT TIMING  HOLD A: CLEAN (SLOW)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: WINDOW TEST (~30 S)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: SEAM TEST (~15 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 370, "LED: STEADY = READY, PULSING = BUSY", EPD::BLACK, 3)
-  draw_text(40, 420, "WINDOW TEST: PHOTO AT THE 12 S HOLD,", EPD::BLACK, 3)
-  draw_text(40, 460, "THEN THE REFERENCE WITH TIMES", EPD::BLACK, 3)
+  draw_text(40, 420, "WINDOW TEST: SEAM TEST V10, RESULT", EPD::BLACK, 3)
+  draw_text(40, 460, "STAYS ON SCREEN", EPD::BLACK, 3)
   EPD.fast_pulls = 3
   EPD.raw = true
   EPD.refresh(true, EPD::LUT_BASE) # static screen: clean (shaking) preview
@@ -1318,6 +1320,9 @@ lib LibIDF
   fun nvs_get_u8(h : UInt32, key : UInt8*, v : UInt8*) : Int32
   fun nvs_set_u8(h : UInt32, key : UInt8*, v : UInt8) : Int32
   fun nvs_commit(h : UInt32) : Int32
+  fun nvs_get_u32(h : UInt32, key : UInt8*, v : UInt32*) : Int32
+  fun nvs_set_u32(h : UInt32, key : UInt8*, v : UInt32) : Int32
+  fun esp_reset_reason : Int32
 end
 
 SCR_NAMETAG  = 0
@@ -1359,6 +1364,45 @@ module Store
     err = LibIDF.nvs_open("crystal".to_unsafe, 1, pointerof(@@h)) if err == 0
     @@ok = err == 0
     log("nvs: open err", err)
+    # Boot diagnostics: reset reason (esp_reset_reason_t: 1 power-on,
+    # 3 software, 4 panic, 5 int WDT, 6 task WDT, 7 other WDT, 9 brownout,
+    # 13 USB) and a boot counter kept in NVS.
+    @@reset_reason = LibIDF.esp_reset_reason
+    if @@ok
+      c = 0_u32
+      LibIDF.nvs_get_u32(@@h, "boots".to_unsafe, pointerof(c))
+      c = c &+ 1
+      LibIDF.nvs_set_u32(@@h, "boots".to_unsafe, c)
+      v = 0_u8
+      @@sk_win = LibIDF.nvs_get_u8(@@h, "sk_win".to_unsafe, pointerof(v)) == 0 && v != 0_u8
+      LibIDF.nvs_commit(@@h)
+      @@boots = c.to_i32!
+    end
+    Shared.sk_win = @@sk_win
+    LibIDF.cr_log3("boot: count / reset reason / SK_WIN".to_unsafe, @@boots, @@reset_reason, @@sk_win ? 1 : 0)
+  end
+
+  @@reset_reason = 0
+  @@boots = 0
+  @@sk_win = false # value last stored in NVS
+
+  def self.reset_reason : Int32
+    @@reset_reason
+  end
+
+  def self.boots : Int32
+    @@boots
+  end
+
+  # Main loop: persist SK_WIN when the shell changed it (NVS writes stay off
+  # the small shell stack).
+  def self.sync_sk_win : Nil
+    return if Shared.sk_win? == @@sk_win
+    @@sk_win = Shared.sk_win?
+    return unless @@ok
+    LibIDF.nvs_set_u8(@@h, "sk_win".to_unsafe, @@sk_win ? 1_u8 : 0_u8)
+    LibIDF.nvs_commit(@@h)
+    log("nvs: SK_WIN saved", @@sk_win ? 1 : 0)
   end
 
   def self.screen : Int32
@@ -1980,7 +2024,9 @@ fun crystal_app_main : Void
         bx1 = EPD::WIDTH &- 1 if bx1 > EPD::WIDTH &- 1
         by1 = EPD::HEIGHT &- 1 if by1 > EPD::HEIGHT &- 1
         changed = false
+        hint_gone = false
         if moved && SkState.hint?
+          hint_gone = true
           draw_sketch_hint(false) # drawing started: the full refresh below removes it
           SkState.hint = false
         end
@@ -1997,7 +2043,7 @@ fun crystal_app_main : Void
           Shared.led_mode = LED_CYAN
           kind = SkState.colour? ? red_ink_kind : WIN_LUT
           EPD.fast_pulls = 1
-          if Shared.sk_win?
+          if Shared.sk_win? && !hint_gone
             # Rows-only window (mode 8): full width x the changed rows.
             EPD.refresh_window2(b[0], b[1], 0, EPD::HALF_BYTES &- 1,
               b[0], b[1], 0, EPD::HALF_BYTES &- 1, kind, 8)
@@ -2063,6 +2109,7 @@ fun crystal_app_main : Void
     else
       Shared.led_mode = 0
     end
+    Store.sync_sk_win
     Shared.live = scr == SCR_SKETCH && !Shared.rendering? && Shared.target == scr
     LibIDF.cr_wait_notify(20_u32) # woken early by the knob task on input
   end

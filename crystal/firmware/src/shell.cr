@@ -121,6 +121,9 @@ module Shell
       LibIDF.cr_stack_free(false).to_i32!, LibIDF.cr_stack_free(true).to_i32!, LibIDF.cr_stack_free_self.to_i32!)
     LibIDF.cr_log3("status: free heap internal / psram / -".to_unsafe,
       LibIDF.cr_heap_free(0x800_u32), LibIDF.cr_heap_free(0x400_u32), 0)
+    LibIDF.cr_log3("status: boot count / reset reason / uptime ms".to_unsafe,
+      Store.boots, Store.reset_reason, millis)
+    LibIDF.cr_log3("status: SK_WIN / - / -".to_unsafe, Shared.sk_win? ? 1 : 0, 0, 0)
   end
 
   def self.dump(red : Bool) : Nil
