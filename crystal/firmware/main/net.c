@@ -553,7 +553,7 @@ int32_t cr_pong_get(int16_t *v)
 
 // ---- receive -------------------------------------------------------------------
 
-static const char *allowed[] = {"mode", "press", "hold", "colour", "color", "knob", "stroke", "text", "status", "clean", NULL};
+static const char *allowed[] = {"mode", "press", "hold", "colour", "color", "knob", "stroke", "text", "status", "clean", "sketch", NULL};
 
 static void on_command(const hdr_t *h, uint32_t ip, const char *line, int n, int64_t now)
 {

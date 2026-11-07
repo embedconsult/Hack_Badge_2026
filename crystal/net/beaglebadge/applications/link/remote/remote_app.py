@@ -19,6 +19,7 @@ ACTIONS = [
     ("Nametag", "mode nametag"),
     ("Portrait", "mode portrait"),
     ("Sketch: draw with joystick", None),
+    ("Sketch: Draw! (quick draw)", "sketch quickdraw"),
     ("Send nametag text", None),
     ("Colour render (hold A)", "hold a"),
     ("Press A", "press a"),
