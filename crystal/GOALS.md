@@ -13,7 +13,8 @@ Set by the user. Read these before changing anything they cover. A change that b
 
 ## How a change becomes the default
 
-- **Camera proof:** a camera snap of long strokes, drawn the way a user draws (1, 3 and 5 passes, a pause, more strokes). Shell logs alone are not enough.
+- **Primary test: quick draw** (`python3 crystal/tools/morning_checks.py quickdraw`), the Colt the user shows in demos. A change must keep the gun as clean as the baseline (9e163f2, `/tmp/claude-0/sk/qd_base.png`: whole outline, no missing segments, seams or copies), with no pull over 250 ms. Baseline today: 14 pulls of 580 ms, 9.9 s total.
+- **Camera proof:** camera snaps of quick draw, plus long hand-style strokes (1, 3 and 5 passes, a pause, more strokes). Shell logs alone are not enough.
 - **Timings:** the ms log for the same run, with no pull over 250 ms.
 - **Report trade-offs to the user:** say in the report, not only in notes, what got worse and what got better.
 - **Sign-off for Sketch:** no default flip for Sketch without the user's OK.
