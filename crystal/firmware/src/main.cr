@@ -212,6 +212,28 @@ module Shared
   REQ_FORGET    = 32_u32 # knob override switched on/off: no pen jump
   REQ_WTEST     = 64_u32 # erase waveform test (WTest.codes)
 
+  @@idle_job = false # an idle-time slow refresh: any input aborts it
+  @@idle_l = 0
+  @@idle_r = 0
+
+  def self.idle_job? : Bool
+    @@idle_job
+  end
+
+  def self.idle_l : Int32
+    @@idle_l
+  end
+
+  def self.idle_r : Int32
+    @@idle_r
+  end
+
+  def self.idle_job=(v : Bool) : Nil
+    @@idle_l = @@mv_l
+    @@idle_r = @@mv_r
+    @@idle_job = v
+  end
+
   def self.ovr_l : Int32
     @@ovr_l
   end
@@ -574,9 +596,18 @@ fun crystal_knob_task(arg : Void*) : Void
       woke_btns = btns
       LibIDF.cr_notify_main
     end
-    # A Menu press aborts a slow (colour) refresh in progress.
+    # A Menu press aborts a slow (colour) refresh in progress; during an
+    # idle one (red residue clean, Sketch idle colour) any button or knob
+    # turn does, so a visitor picking the badge up is never kept waiting.
     if (btns & (Games::BTN_PLUS | Games::BTN_MINUS)) != 0_u32 && EPD.abortable?
       EPD.request_abort
+    end
+    if Shared.idle_job? && EPD.abortable?
+      il = mv_l &- Shared.idle_l
+      ir = mv_r &- Shared.idle_r
+      if btns != 0_u32 || il > 40 || il < -40 || ir > 40 || ir < -40
+        EPD.request_abort
+      end
     end
     if Shared.leds_ready?
       err = 0
@@ -1697,8 +1728,8 @@ module RedRes
   end
 end
 
-RES_IDLE_MS = 8_000
-SK_IDLE_COLOUR_MS = 60_000 # Sketch: idle this long -> the red frame (colour render) # idle time before the automatic slow clean of red residue
+RES_IDLE_MS = 60_000
+SK_IDLE_COLOUR_MS = 60_000 # Sketch: idle this long -> the red frame (colour render) # idle time before the automatic slow clean of red residue (any input aborts it)
 
 # Slow full-colour refresh that a Menu press can abort.
 def colour_refresh : Bool
@@ -1709,7 +1740,7 @@ def colour_refresh : Bool
   EPD.abortable = false
   Shared.rendering = false
   log2("main: colour refresh ok / aborted", ok ? 1 : 0, aborted ? 1 : 0)
-  if ok && !aborted
+  if ok || aborted # an aborted wait still runs the waveform to its end
     RedRes.residue = false # a full OTP refresh cleans the whole panel
     RedRes.on_panel = EPD.has_red?
   else
@@ -1722,7 +1753,14 @@ end
 # waveform, which removes red residue (the image itself doesn't change).
 def red_residue_clean(scr : Int32) : Nil
   log("main: slow clean of red residue, screen", scr)
+  # Any input aborts the wait (Shared.idle_job): the main loop is free at
+  # once, but the OTP waveform itself can't be cut short; it runs to its end
+  # (same image, red removed) and the next refresh waits for it
+  # (EPD.finish_aborted). Knob motion keeps being tracked meanwhile.
+  Shared.idle_job = true
   colour_refresh
+  Shared.idle_job = false
+  RedRes.residue = false # aborted or not, the waveform completes
   SkState.mark_shown
   Sketch.forget_knobs if scr == SCR_SKETCH
 end
@@ -1762,6 +1800,70 @@ module SkInk
       @@hi = -1
     end
     !@@pass.null? && !@@cnew.null? && !@@cold.null? && !@@cur.null?
+  end
+
+  # ---- shake to erase ----------------------------------------------------------
+  # Like shaking an Etch-a-Sketch: the lines dissolve before the screen is
+  # clean. One session with a shake table (three lighten strengths, VDL 4 /
+  # 8 / 19 frames): pull 1 lightens each inked pixel by a random strength
+  # (speckled fade), pull 2 drives them all strongly. The erase clean that
+  # follows (3 full-drive pulls) removes what is left, pink included.
+  SHAKE_CODES = "222200000000000000002222222222222222222022222222000000000000" # tables 1, 2, 3
+
+  def self.shake : Nil
+    return unless ready?
+    codes = WTest.codes
+    k = 0
+    while k < 60
+      codes[k] = SHAKE_CODES.to_unsafe[k] &- 48_u8
+      k = k &+ 1
+    end
+    Shared.rendering = true
+    t0 = millis
+    seed = (millis | 1).to_u32!
+    step = 0
+    while step < 2
+      Games.zero(@@cnew, EPD::PLANE)
+      Games.zero(@@cold, EPD::PLANE)
+      any = false
+      i = 0
+      while i < EPD::PLANE
+        q = @@pass + (i &* 8).to_i64!
+        n = 0_u8
+        o = 0_u8
+        b = 0
+        while b < 8
+          if q[b] != 0_u8 || (@@cur[i] & 0x80_u8.unsafe_shr(b)) != 0_u8
+            m = 0x80_u8.unsafe_shr(b)
+            r = 2_u32
+            if step == 0
+              seed = seed &* 1103515245_u32 &+ 12345_u32
+              r = seed.unsafe_shr(16).unsafe_mod(3_u32)
+            end
+            # r 0: cmd 1 (VDL 4), 1: cmd 3 (VDL 8), 2: cmd 2 (VDL 19)
+            n = n | m if r != 2_u32
+            o = o | m if r != 0_u32
+            any = true
+          end
+          b = b &+ 1
+        end
+        @@cnew[i] = n
+        @@cold[i] = o
+        i = i &+ 1
+      end
+      break unless any
+      Shared.led_mode = step == 0 ? LED_YELLOW : LED_CYAN
+      EPD.ink_custom = codes
+      EPD.refresh_ink(@@cnew, @@cold)
+      step = step &+ 1
+    end
+    EPD.ink_custom = Pointer(UInt8).null
+    EPD.cog_stop
+    Games.zero(@@cnew, EPD::PLANE)
+    Games.zero(@@cold, EPD::PLANE)
+    @@hi = -1
+    Shared.rendering = false
+    log2("sketch: shake pulls / ms", step, millis &- t0)
   end
 
   # ---- pen cursor ------------------------------------------------------------
@@ -2612,6 +2714,9 @@ fun crystal_app_main : Void
         lw = last_wait
         last_wait = millis &- last_input
         lat = SkState.last_lat
+        # A (erase) shakes the drawing away first: two ink pulls dissolve
+        # the lines (speckled, then gone), then the clean below.
+        SkInk.shake if Menu.needs_background? && Shared.upd(SCR_SKETCH) == UPD_INK && SkInk.ready?
         if SkState.colour?
           sketch_frame(false, lat, EPD.upload_ms, EPD.panel_ms, last_total)
         else
@@ -2788,7 +2893,9 @@ fun crystal_app_main : Void
     if scr == SCR_SKETCH && !SkState.colour? && Shared.target == scr && !Shared.rendering? &&
        raw_held == 0_u32 && millis &- last_input >= SK_IDLE_COLOUR_MS && !Ota.running?
       log("sketch: idle, colour frame", 0)
+      Shared.idle_job = true # input frees the main loop (the waveform completes)
       sketch_colour
+      Shared.idle_job = false
       last_input = millis
     end
     if RedRes.residue? && Shared.target == scr && !Shared.rendering? && raw_held == 0_u32 &&
