@@ -1853,12 +1853,11 @@ module SkInk
       end
       break unless any
       Shared.led_mode = step == 0 ? LED_YELLOW : LED_CYAN
-      EPD.ink_custom = codes
+      EPD.ink_custom = codes if step == 0 # a new table: one new session for both pulls
       EPD.refresh_ink(@@cnew, @@cold)
       step = step &+ 1
     end
-    EPD.ink_custom = Pointer(UInt8).null
-    EPD.cog_stop
+    EPD.ink_custom = Pointer(UInt8).null # (stops the shake session; power stays on)
     Games.zero(@@cnew, EPD::PLANE)
     Games.zero(@@cold, EPD::PLANE)
     @@hi = -1
