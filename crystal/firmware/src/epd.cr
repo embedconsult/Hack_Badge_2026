@@ -1143,11 +1143,6 @@ module EPD
   WIN_MODE = 5
   # Right COG's DRFW x counted from the other end (test hypothesis, v4).
   @@mirror_right = false
-  @@send91 = false
-
-  def self.send91=(v : Bool) : Nil
-    @@send91 = v
-  end
 
   def self.mirror_right=(v : Bool) : Nil
     @@mirror_right = v
@@ -1276,7 +1271,9 @@ module EPD
   #     RAM_RW = [00, y0 & FF, 0x10 | y0 >> 8] (reading OTP 00 00 10 / PDi
   #     3B 00 14 as [x start, y start low, flags | y start high]), only those
   #     rows uploaded at full width, DRFW full width x the same rows.
-  # @@send91: also send 0x91 <- 0x12 after DUW/DRFW (Pervasive_Wide_Large).
+  #     Measured (window tests v8/v9): correct at rows 120..639 on both
+  #     COGs, ~180-230 ms for 96 rows. Do NOT send 0x91 12 (Pervasive Wide
+  #     Large): with it, the windows at rows 460/560 landed shifted (v8).
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
                            wmode : Int32 = WIN_MODE) : Int32
@@ -1356,7 +1353,6 @@ module EPD
         end
         cmd(t, 0x90_u8, 4, dx0.to_u8!, dx1.to_u8!, y0.unsafe_div(u).to_u8!, y1.unsafe_div(u).to_u8!)
       end
-      cmd(t, 0x91_u8, 1, 0x12_u8) if @@send91
       if wmode == 2 || wmode == 4 || wmode == 5
         ram_rw_full(t)
         send_plane(t, 0x10_u8, @@black, Pointer(UInt8).null)
@@ -1401,6 +1397,14 @@ module EPD
       log("EPD: window refresh failed, COG powered down", rc)
       cog_stop # also clears session_open / lut_latched
       return -1
+    end
+    # Windows count toward the session cap like full images.
+    @@session_images = @@session_images &+ 1
+    if @@abort
+      @@stop_pending = true # waveform may still run: no commands now
+      @@lut_latched = false
+    elsif !@@keep_awake || @@session_images >= SESSION_IMAGES
+      cog_stop
     end
     rc
   end

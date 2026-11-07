@@ -93,7 +93,7 @@ module Shell
     say("  knob <l|r> <mV> | knob off\n")
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
-    say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED> <0|1>\n")
+    say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
   end
 
   def self.status : Nil
@@ -150,7 +150,7 @@ module Shell
   def self.flag : Nil
     v = tok_int(2, -1)
     if v < 0 || v > 1
-      say("usage: flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED> <0|1>\n")
+      say("usage: flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
       return
     end
     on = v == 1
@@ -158,6 +158,8 @@ module Shell
       EPD.quick_open = on
     elsif tok_is(1, "SK_RED_INK_PLAIN")
       Shared.red_ink_plain = on
+    elsif tok_is(1, "SK_WIN")
+      Shared.sk_win = on
     elsif tok_is(1, "SKIP_ZERO_RED")
       EPD.skip_zero_red = on
     else

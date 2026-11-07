@@ -191,6 +191,7 @@ module Shared
   @@ovr_l = -1         # knob override mV (-1 = real ADC)
   @@ovr_r = -1
   @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
+  @@sk_win = false        # Sketch ink through rows-only windows (shell: flag SK_WIN)
   @@req = 0_u32        # REQ_* bits for the main loop (atomic)
   @@sx0 = 0
   @@sy0 = 0
@@ -223,6 +224,14 @@ module Shared
 
   def self.red_ink_plain=(v : Bool) : Nil
     @@red_ink_plain = v
+  end
+
+  def self.sk_win? : Bool
+    @@sk_win
+  end
+
+  def self.sk_win=(v : Bool) : Nil
+    @@sk_win = v
   end
 
   def self.inject_buttons(bits : UInt32) : Nil
@@ -1207,11 +1216,9 @@ def window_test : Nil
     y = wt_y(i)
     window_marker(200, y)
     window_marker(650, y)
-    EPD.send91 = i == 0
     EPD.fast_pulls = 1
     log2("wtest v9: run / y", k &+ 1, y)
     EPD.refresh_window2(y, y &+ 79, 25, 39, y, y &+ 79, 81, 96, EPD::LUT_HALF60, 8)
-    EPD.send91 = false
     times[i] = EPD.panel_ms
     log2("wtest v9: run / panel ms", k &+ 1, EPD.panel_ms)
     delay_ms(1500)
@@ -1990,7 +1997,11 @@ fun crystal_app_main : Void
           Shared.led_mode = LED_CYAN
           kind = SkState.colour? ? red_ink_kind : WIN_LUT
           EPD.fast_pulls = 1
-          if SK_WINDOWED
+          if Shared.sk_win?
+            # Rows-only window (mode 8): full width x the changed rows.
+            EPD.refresh_window2(b[0], b[1], 0, EPD::HALF_BYTES &- 1,
+              b[0], b[1], 0, EPD::HALF_BYTES &- 1, kind, 8)
+          elsif SK_WINDOWED
             EPD.refresh_window(b[2], b[3], b[0], b[1], kind)
           else
             EPD.raw = true
