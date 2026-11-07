@@ -31,8 +31,10 @@ typedef struct {
 } snk_cfg_t;
 
 // Shell: the words after "snakes". Returns 1 if c changed (save it), 0 if
-// not (list, help), 2 for "play" (the caller starts a game), -1 on bad
-// syntax; msg = what to print (ends with a newline).
+// not (list, help), 2 for "play" (the caller starts a game), 3 for "league
+// [games]" (*games = how many, default 5), 4 "league reset", 5 "league
+// show", -1 on bad syntax; msg = what to print (ends with a newline).
+int snk_cmd_league(const char *args, int *games);
 int snk_cmd(const char *args, snk_cfg_t *c, char *msg, int n);
 
 typedef struct {
@@ -45,6 +47,34 @@ typedef struct {
 bool snk_parse_url(const char *url, snk_url_t *u);
 // u->path + "/" + ep (ep "" = the bot's root, i.e. GET /), into out.
 void snk_path(const snk_url_t *u, const char *ep, char *out, int n);
+
+// ---- league (`snakes league`): a rating table over many games ------------------
+// Elo (start 1500, pairwise between every two snakes of a game, K = 32 /
+// (snakes - 1)), plus wins (sole longest survivor) and points (opponents
+// outlasted). Entries by name; the house snake is "house".
+#define SNK_LG 8
+#define SNK_ELO0 1500
+
+typedef struct {
+    char name[SNK_NAME];
+    int32_t elo;
+    uint16_t games, wins, points, pad;
+} snk_lg_ent_t;
+
+typedef struct {
+    uint32_t magic; // SNK_LG_MAGIC when valid
+    int32_t n, games;
+    snk_lg_ent_t e[SNK_LG];
+} snk_league_t;
+#define SNK_LG_MAGIC 0x31474C53u // "SLG1"
+
+void snk_league_reset(snk_league_t *L);
+// One game of n snakes: name[i], score[i] (higher = lasted longer; equal = tie).
+void snk_league_game(snk_league_t *L, int n, const char *const *name, const int *score);
+// Entry indices best first (Elo, then wins, then games); returns L->n.
+int snk_league_order(const snk_league_t *L, int *order);
+// The table as text (ends with a newline); its length.
+int snk_league_text(const snk_league_t *L, char *out, int n);
 
 // ---- JSON ------------------------------------------------------------------------
 

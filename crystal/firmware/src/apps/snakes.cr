@@ -14,6 +14,12 @@
 # the house snakes, applies the standard rules (src/games/snakes_rules.cr)
 # and redraws the board with one differential update. A: pause, B: stop.
 #
+# League (`snakes league [games]`): that many games in a row between every
+# saved bot and one house snake (four at a time, rotating when there are
+# more), drawn every LG_DRAW turns only so they run at the bots' pace; each
+# result goes into an Elo table (main/snakes.c, NVS) shown in the lobby.
+# B stops the league. `snakes league show | reset` on the shell.
+#
 # Black only (red needs the ~33 s slow waveform). The network side is C:
 # main/snakes_net.c (worker task, NVS) and main/snakes.c (JSON, HTTP).
 
@@ -42,6 +48,15 @@ lib LibIDF
   fun cr_snk_shout(i : Int32) : UInt8*
   fun cr_snk_err_name(e : Int32) : UInt8*
   fun esp_random : UInt32
+  fun cr_snk_lg_req : Int32
+  fun cr_snk_lg_game(n : Int32, who : Int32*, score : Int32*) : Void
+  fun cr_snk_lg_n : Int32
+  fun cr_snk_lg_games : Int32
+  fun cr_snk_lg_name(k : Int32) : UInt8*
+  fun cr_snk_lg_elo(k : Int32) : Int32
+  fun cr_snk_lg_played(k : Int32) : Int32
+  fun cr_snk_lg_wins(k : Int32) : Int32
+  fun cr_snk_lg_points(k : Int32) : Int32
 end
 
 module SnakesApp
@@ -83,6 +98,12 @@ module SnakesApp
   @@play_req = false
   @@net_drawn = 0
   @@buf = Pointer(UInt8).null
+  LG_DRAW = 10 # league games: turns between screen updates
+  @@lg_on = false
+  @@lg_total = 0
+  @@lg_game = 0 # games played so far
+  @@lg_drawn = 0
+  @@score = Pointer(Int32).null
 
   # Shell `snakes play` (shell task): start a game as soon as the app runs.
   def self.request_play : Nil
@@ -96,8 +117,9 @@ module SnakesApp
       @@auto = game_alloc(R::MAX &* 4).as(Int32*)
       @@snap = game_alloc(SNAP_MAX &* 4).as(Int32*)
       @@buf = game_alloc(64)
+      @@score = game_alloc(R::MAX &* 4).as(Int32*)
     end
-    !@@who.null? && !@@moves.null? && !@@auto.null? && !@@snap.null? && !@@buf.null?
+    !@@who.null? && !@@moves.null? && !@@auto.null? && !@@snap.null? && !@@buf.null? && !@@score.null?
   end
 
   # ---- drawing helpers --------------------------------------------------
@@ -292,6 +314,11 @@ module SnakesApp
       Gfx.text(SIDE, 100, @@net_drawn == 1 ? "JOINING WI-FI..." : "STARTING...", 2)
     elsif @@paused
       Gfx.text(SIDE, 100, "PAUSED", 2)
+    elsif @@lg_on
+      xx = Gfx.text(SIDE, 100, "LEAGUE GAME ", 2)
+      xx = num(xx, 100, @@lg_game &+ 1, 2)
+      xx = Gfx.text(xx, 100, " OF ", 2)
+      num(xx, 100, @@lg_total, 2)
     end
     if @@state == ST_OVER
       draw_result
@@ -415,7 +442,9 @@ module SnakesApp
       Gfx.text(40, y &+ 10, "NO BOTS SAVED YET: HOUSE SNAKES PLAY EACH OTHER.", 2)
     end
     net = LibIDF.cr_snk_net
-    if @@msg == 1 || net == 2
+    if @@msg == 3
+      Gfx.text(40, 520, "A LEAGUE NEEDS A SAVED BOT (SNAKES ADD <NAME> <URL>)", 2)
+    elsif @@msg == 1 || net == 2
       Gfx.text(40, 520, "COULD NOT JOIN THE WI-FI (SHELL: WIFI <SSID> <PASSWORD>)", 2)
     elsif @@msg == 2
       Gfx.text(40, 520, "NOBODY TO PLAY: B ADDS HOUSE SNAKES", 2)
@@ -423,11 +452,76 @@ module SnakesApp
       Gfx.text(40, 520, "JOINING THE WI-FI...", 2)
     end
     Gfx.box(40, 552, 880, 2, true)
-    Gfx.text(40, 566, "ADD A BOT (USB SHELL): SNAKES ADD <NAME> HTTP://<IP>:<PORT>", 2)
-    Gfx.text(40, 592, "BOT API: GET /  POST /START /MOVE /END (THE OPEN SNAKE BOT API)", 2)
-    Gfx.text(40, 618, "EXAMPLE BOT + HOW-TO: CRYSTAL/NET/SNAKES/ IN THE BADGE REPO", 2)
+    if LibIDF.cr_snk_lg_n > 0
+      draw_league(562)
+    else
+      Gfx.text(40, 566, "ADD A BOT (USB SHELL): SNAKES ADD <NAME> HTTP://<IP>:<PORT>", 2)
+      Gfx.text(40, 592, "BOT API: GET /  POST /START /MOVE /END (THE OPEN SNAKE BOT API)", 2)
+      Gfx.text(40, 618, "LEAGUE: SNAKES LEAGUE [GAMES]. HOW TO COMPETE: SETTINGS PAGE /COMPETE", 2)
+    end
     @@sig = LibIDF.cr_snk_sig
     @@drawn = millis
+  end
+
+  # League table, best first: two columns of three below y.
+  def self.draw_league(y : Int32) : Nil
+    n = LibIDF.cr_snk_lg_n
+    xx = Gfx.text(40, y, "LEAGUE (", 2)
+    xx = num(xx, y, LibIDF.cr_snk_lg_games, 2)
+    Gfx.text(xx, y, " GAMES)", 2)
+    Gfx.text(256, y, "ELO WON/PLAYED", 2)
+    Gfx.text(696, y, "ELO WON/PLAYED", 2) if n > 3
+    k = 0
+    while k < n && k < 6
+      x = k < 3 ? 40 : 480
+      yy = y &+ 26 &+ (k < 3 ? k : k &- 3) &* 24
+      xx = num(x, yy, k &+ 1, 2)
+      xx = Gfx.text(xx, yy, ".", 2)
+      cstr(xx &+ 12, yy, LibIDF.cr_snk_lg_name(k), 13, 2)
+      xx = num(x &+ 216, yy, LibIDF.cr_snk_lg_elo(k), 2)
+      xx = num(x &+ 264, yy, LibIDF.cr_snk_lg_wins(k), 2)
+      xx = Gfx.text(xx, yy, "/", 2)
+      num(xx, yy, LibIDF.cr_snk_lg_played(k), 2)
+      k = k &+ 1
+    end
+  end
+
+  # `snakes league N` asked for (shell): start it.
+  def self.league_check : Bool
+    n = LibIDF.cr_snk_lg_req
+    return false if n <= 0
+    if @@state == ST_START || @@state == ST_TURN
+      LibIDF.cr_snk_end(@@snap, @@nsnap)
+    end
+    @@lg_on = LibIDF.cr_snk_bots > 0
+    @@lg_total = n
+    @@lg_game = 0
+    unless @@lg_on
+      @@msg = 3
+      lobby
+      return true
+    end
+    @@state = ST_LOBBY
+    start
+    true
+  end
+
+  # League game: four of the entrants (every saved bot, then one house
+  # snake), rotating through them game by game.
+  def self.league_lineup : Nil
+    @@lg_drawn = 0
+    nb = LibIDF.cr_snk_bots
+    e = nb &+ 1
+    m = e < R::MAX ? e : R::MAX
+    @@n = 0
+    k = 0
+    while k < m
+      c = (@@lg_game &* m &+ k).unsafe_mod(e)
+      @@who[@@n] = c == nb ? -1 : c
+      @@bots_in = true if c < nb
+      @@n = @@n &+ 1
+      k = k &+ 1
+    end
   end
 
   # ---- game flow ----------------------------------------------------------
@@ -450,13 +544,14 @@ module SnakesApp
     end
     @@n = 0
     @@bots_in = false
-    h = 0
+    h = @@lg_on ? R::MAX : 0 # league: league_lineup instead
+    league_lineup if @@lg_on
     while h < @@houses && @@n < R::MAX
       @@who[@@n] = -1
       @@n = @@n &+ 1
       h = h &+ 1
     end
-    b = 0
+    b = @@lg_on ? nb : 0
     while b < nb && @@n < R::MAX
       @@who[@@n] = b
       @@n = @@n &+ 1
@@ -510,6 +605,8 @@ module SnakesApp
       return
     end
     LibIDF.cr_snk_turn(@@snap, @@nsnap) # the bots think while the panel updates
+    return if @@lg_on && R.turn &- @@lg_drawn < LG_DRAW # league: at the bots' pace
+    @@lg_drawn = R.turn
     draw_game
     @@since_clean = @@since_clean &+ 1
     if @@since_clean >= CLEAN_EVERY
@@ -523,6 +620,26 @@ module SnakesApp
   def self.finish : Nil
     LibIDF.cr_snk_end(@@snap, @@nsnap)
     @@state = ST_OVER
+    if @@lg_on && !@@stopped
+      i = 0
+      while i < @@n
+        @@score[i] = R.alive?(i) ? 100_000 &+ R.length(i) : R.out_turn(i)
+        i = i &+ 1
+      end
+      LibIDF.cr_snk_lg_game(@@n, @@who, @@score)
+      @@lg_game = @@lg_game &+ 1
+      draw_game
+      Apps.show
+      if @@lg_game < @@lg_total
+        @@state = ST_LOBBY
+        start
+      else
+        @@lg_on = false
+        lobby
+      end
+      return
+    end
+    @@lg_on = false
     draw_game
     Apps.show
   end
@@ -562,6 +679,7 @@ module SnakesApp
       start
       return
     end
+    return if league_check
     lobby
   end
 
@@ -581,6 +699,7 @@ module SnakesApp
       start
       return
     end
+    return if league_check
     busy = LibIDF.cr_snk_busy != 0
     if @@state == ST_LOBBY
       if a && !busy
@@ -600,6 +719,7 @@ module SnakesApp
       elsif !busy
         if @@bots_in && LibIDF.cr_snk_net == 2
           @@msg = 1
+          @@lg_on = false
           LibIDF.cr_snk_end(@@snap, @@nsnap)
           @@state = ST_LOBBY
           draw_lobby

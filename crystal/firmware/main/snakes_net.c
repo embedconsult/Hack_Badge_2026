@@ -89,6 +89,37 @@ static void cfg_save(void)
     nvs_close(h);
 }
 
+// ---- league table (NVS "snakes"/"league") -----------------------------------------
+
+static snk_league_t s_lg;
+static bool s_lg_loaded;
+static volatile int s_lg_req; // `snakes league N` asked for N games
+
+static void lg_load(void)
+{
+    if (s_lg_loaded) return;
+    s_lg_loaded = true;
+    snk_league_reset(&s_lg);
+    nvs_handle_t h;
+    nvs_flash_init();
+    if (nvs_open("snakes", NVS_READONLY, &h) != ESP_OK) return;
+    size_t n = sizeof s_lg;
+    if (nvs_get_blob(h, "league", &s_lg, &n) != ESP_OK || n != sizeof s_lg || s_lg.magic != SNK_LG_MAGIC ||
+        s_lg.n < 0 || s_lg.n > SNK_LG)
+        snk_league_reset(&s_lg);
+    for (int i = 0; i < s_lg.n; i++) s_lg.e[i].name[SNK_NAME - 1] = 0;
+    nvs_close(h);
+}
+
+static void lg_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open("snakes", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_blob(h, "league", &s_lg, sizeof s_lg);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
 // ---- https (esp_http_client) ----------------------------------------------------
 
 static void tls_drop(int i)
@@ -274,6 +305,18 @@ int32_t cr_snk_cmd(const uint8_t *line, int32_t n)
         return 0;
     }
     int r = snk_cmd(args, &s_cfg, msg, sizeof msg);
+    if (r >= 3 && r <= 5) {
+        int games = 0;
+        lg_load();
+        if (r == 3 && snk_cmd_league(args, &games) == 3) s_lg_req = games;
+        if (r == 4) {
+            snk_league_reset(&s_lg);
+            lg_save();
+            s_sig++;
+            cr_notify_main();
+        }
+        if (r == 5) snk_league_text(&s_lg, msg, sizeof msg);
+    }
     if (r == 1) {
         cfg_save();
         for (int i = 0; i < SNK_BOTS; i++) s_lobby_state[i] = 0;
@@ -357,3 +400,49 @@ int32_t cr_snk_misses(int32_t i) { return i >= 0 && i < SNK_SLOTS ? s_game.timeo
 const uint8_t *cr_snk_name(int32_t i) { return (const uint8_t *)(i >= 0 && i < SNK_SLOTS ? s_game.name[i] : ""); }
 const uint8_t *cr_snk_shout(int32_t i) { return (const uint8_t *)(i >= 0 && i < SNK_SLOTS ? s_game.shout[i] : ""); }
 const uint8_t *cr_snk_err_name(int32_t e) { return (const uint8_t *)snk_err_name(e); }
+
+// ---- league (src/apps/snakes.cr) ---------------------------------------------------
+
+// Games asked for by `snakes league N` (once), 0 none.
+int32_t cr_snk_lg_req(void)
+{
+    int n = s_lg_req;
+    s_lg_req = 0;
+    return n;
+}
+
+// A league game is over: entries who[i] (-1 house, else a saved bot) and
+// score[i] (higher = lasted longer). Saved at once.
+void cr_snk_lg_game(int32_t n, const int32_t *who, const int32_t *score)
+{
+    lg_load();
+    const char *names[SNK_SLOTS];
+    int sc[SNK_SLOTS];
+    if (n > SNK_SLOTS) n = SNK_SLOTS;
+    for (int i = 0; i < n; i++) {
+        names[i] = who[i] >= 0 && who[i] < s_cfg.n ? s_cfg.bot[who[i]].name : "house";
+        sc[i] = score[i];
+    }
+    snk_league_game(&s_lg, n, names, sc);
+    lg_save();
+    static char t[600];
+    snk_league_text(&s_lg, t, sizeof t);
+    fputs(t, stdout);
+}
+
+static int s_lg_order[SNK_LG];
+
+// Entries (refreshes the ranking for the accessors below).
+int32_t cr_snk_lg_n(void)
+{
+    lg_load();
+    return snk_league_order(&s_lg, s_lg_order);
+}
+
+int32_t cr_snk_lg_games(void) { return s_lg.games; }
+static const snk_lg_ent_t *lg_at(int32_t k) { return &s_lg.e[s_lg_order[k < 0 || k >= SNK_LG ? 0 : k]]; }
+const uint8_t *cr_snk_lg_name(int32_t k) { return (const uint8_t *)lg_at(k)->name; }
+int32_t cr_snk_lg_elo(int32_t k) { return lg_at(k)->elo; }
+int32_t cr_snk_lg_played(int32_t k) { return lg_at(k)->games; }
+int32_t cr_snk_lg_wins(int32_t k) { return lg_at(k)->wins; }
+int32_t cr_snk_lg_points(int32_t k) { return lg_at(k)->points; }

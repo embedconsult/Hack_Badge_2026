@@ -156,3 +156,23 @@ int32_t cr_tn_status(char *buf, int32_t max) {
     return s_tn_state == 2 ? 4 : s_tn_state ? 2 : 0;
 }
 void cr_tn_badge(int32_t k, char *out) { snprintf(out, 13, "%s", k == 1 ? "SimBeagle" : "Organizer"); }
+
+// SNAKES league (main/snakes_net.c): stub_lg_ask(n) as `snakes league n`;
+// recorded games build a fixed-looking table.
+static int s_lg_req, s_lg_games;
+void stub_lg_ask(int32_t n) { s_lg_req = n; }
+int32_t cr_snk_lg_req(void) { int n = s_lg_req; s_lg_req = 0; return n; }
+void cr_snk_lg_game(int32_t n, const int32_t *who, const int32_t *score) {
+    s_lg_games++;
+    printf("stub: league game %d:", s_lg_games);
+    for (int i = 0; i < n; i++) printf(" %d=%d", who[i], score[i]);
+    printf("\n");
+}
+static const char *k_lgn[] = {"alice", "house", "zigzag-9000"};
+int32_t cr_snk_lg_n(void) { return s_lg_games ? 3 : 0; }
+int32_t cr_snk_lg_games(void) { return s_lg_games; }
+const uint8_t *cr_snk_lg_name(int32_t k) { return (const uint8_t *)k_lgn[k % 3]; }
+int32_t cr_snk_lg_elo(int32_t k) { return 1532 - 21 * k; }
+int32_t cr_snk_lg_played(int32_t k) { return s_lg_games; }
+int32_t cr_snk_lg_wins(int32_t k) { return k == 0 ? s_lg_games : 0; }
+int32_t cr_snk_lg_points(int32_t k) { return 2 - k; }

@@ -19,6 +19,9 @@ lib LibSnk
   fun snk_host_ms(s : Void*, i : Int32) : Int32
   fun snk_host_size : Int32
   fun calloc(n : LibC::SizeT, m : LibC::SizeT) : Void*
+  fun snk_league_reset(l : Void*) : Void
+  fun snk_league_game(l : Void*, n : Int32, name : UInt8**, score : Int32*) : Void
+  fun snk_league_text(l : Void*, out : UInt8*, n : Int32) : Int32
 end
 
 ports = ARGV.map(&.to_i)
@@ -84,5 +87,26 @@ games.each_with_index do |(entries, label), g|
   puts "arena_host: #{label}: #{turns} turns, winner #{who}, #{missed} missed moves, slowest answer #{slowest} ms"
   failures += 1 if missed > 0 || turns < 5 || !SnakeRules.over? && turns < 500
 end
+# a small league as `snakes league 4` plays it: both bots and the house
+# snake every game, scores as src/apps/snakes.cr (alive: 100000 + length,
+# else the turn it went out), into main/snakes.c's Elo table
+league = LibSnk.calloc(1, 4096)
+LibSnk.snk_league_reset(league)
+names = ["house", "botA", "botB"]
+4.times do |g|
+  entries = [nil, ports[0], ports[1]] of Int32?
+  turns, missed, _ = play(entries, (g + 100).to_u32)
+  scores = (0...3).map { |i| SnakeRules.alive?(i) ? 100_000 + SnakeRules.length(i) : SnakeRules.out_turn(i) }
+  ptrs = names.map(&.to_unsafe)
+  LibSnk.snk_league_game(league, 3, ptrs.to_unsafe, scores.to_unsafe)
+  failures += 1 if missed > 0
+end
+text = Bytes.new(1024)
+LibSnk.snk_league_text(league, text.to_unsafe, 1024)
+table = String.new(text.to_unsafe)
+puts table
+failures += 1 unless table.includes?("4 games") && names.all? { |n| table.includes?(n) }
+elos = table.lines[2..].map { |l| l.split[2].to_i }
+failures += 1 unless (elos.sum - 1500 * 3).abs <= 3 # zero-sum
 puts failures == 0 ? "arena_host: ok" : "arena_host: #{failures} FAILED"
 exit(failures == 0 ? 0 : 1)

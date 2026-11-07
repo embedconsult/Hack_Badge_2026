@@ -118,6 +118,7 @@ module Shell
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
     say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
     say("  snakes list | snakes add <name> <url> | snakes rm <name|#> | snakes play   (bot arena)\n")
+    say("  snakes league [games] | snakes league show | snakes league reset   (Elo table, SNAKES lobby)\n")
     say("  robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
     say("  robot tourney [net] [seed] [seeds] | robot standings [net]   (round robin; net: all robot badges)\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
@@ -437,10 +438,11 @@ module Shell
       RobotShell.command # src/apps/robot_store.cr
     elsif tok_is(0, "snakes")
       # main/snakes_net.c: add / list / rm (saved in NVS), prints the result
-      if LibIDF.cr_snk_cmd(@@line, @@len) == 2
+      r = LibIDF.cr_snk_cmd(@@line, @@len)
+      if r == 2 || r == 3 # play / league: SNAKES picks it up (league: cr_snk_lg_req)
         id = Apps.find("SNAKES".to_unsafe, 6)
         if id >= 0
-          SnakesApp.request_play
+          SnakesApp.request_play if r == 2
           Shared.target = id
           LibIDF.cr_notify_main
         end
