@@ -96,7 +96,7 @@ module Shell
     banner
     say("version status reboot mode press hold knob text\n")
     say("net wifi ota sketch stroke dump upd flag clean\n")
-    say("clock usbflash inkf\n")
+    say("clock usbflash inkf weather snakes\n")
     say("help all: details\n")
   end
 
@@ -105,6 +105,7 @@ module Shell
     say("  help | version | status | reboot\n")
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
     say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
+    say("  snakes list | snakes add <name> <url> | snakes rm <name|#> | snakes play   (bot arena)\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
     say("  clock <Y> <M> <D> <h> <m>       (set local time, Schedule NOW/NEXT)\n")
@@ -382,6 +383,16 @@ module Shell
       ota
     elsif tok_is(0, "weather")
       LibIDF.cr_weather_cmd(@@line, @@len) # main/apps_net.c: parses, saves, prints
+    elsif tok_is(0, "snakes")
+      # main/snakes_net.c: add / list / rm (saved in NVS), prints the result
+      if LibIDF.cr_snk_cmd(@@line, @@len) == 2
+        id = Apps.find("SNAKES".to_unsafe, 6)
+        if id >= 0
+          SnakesApp.request_play
+          Shared.target = id
+          LibIDF.cr_notify_main
+        end
+      end
     elsif tok_is(0, "net")
       if tok_is(1, "ap") && (tok_is(2, "on") || tok_is(2, "off"))
         LibIDF.cr_net_set_ap(tok_is(2, "on"))
