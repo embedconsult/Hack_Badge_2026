@@ -91,11 +91,13 @@ class Keys:
         """Returns (key pressed now or repeating, key held or None)."""
         import input
         now = time.ticks_ms()
+        d = input.driver
+        if d and getattr(d, "files", None):
+            self.ev_key = 0  # hardware keys: LVGL's KEY event repeats them, use the driver only
         if self.ev_key:
             k = self.ev_key
             self.ev_key = 0
             return k, None
-        d = input.driver
         if not d:
             return None, None
         pressed = d.state == lv.INDEV_STATE.PRESSED
