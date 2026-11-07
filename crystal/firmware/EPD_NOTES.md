@@ -140,3 +140,16 @@ Notes:
 - Their 0x70 71 36 booster setting right after every reset matches errata 9.
 - Their firmware uses an OTA partition table (otadata at 0xf000, ota_0 at 0x20000). Flashing it replaces
   our bootloader/partition table; restore the first 0x9000 bytes before flashing ours at 0x10000.
+
+## Ink commands (UPD_INK, Sketch default) - Nov 2026 night session
+- yigitabi's whole-panel session has no DCTL (0x01); with our OTP-order RAM writes (RAM_RW 00 00 10, bytes not
+  reversed) the image then lands MIRRORED within each COG half (x 200 shows at 279). `diff_open` now sends
+  `0x01 otp[0x10]` like write_planes. This was the "strokes start far right" bug in UPD_DIFF.
+- Writing BOTH RAMs every update turns the table index (0x11 << 1) | 0x10 into a per-pixel command
+  (DIAG B "ink command test", camera): 1 = VDH for INK_F1 frames, 3 = VDH for INK_F3 frames, 2 = VDL for
+  INK_FE frames, 0 = nothing. VDH 2 frames per pass gives 5 visible steps from light grey to black over 5
+  passes. VDL 19 frames on black leaves faint pink (red pigment comes up): don't use it to erase.
+- Pull = 20 frames, 580 ms whole panel; 0x03 OSC (17..33) and 0x60 TCON (5..37) did not change it.
+- Rows-only ink pulls (DUW rows + RAM_RW at the window start + DRFW rows) ran in 22-104 ms, but the strokes
+  did not appear and the window edges left seam lines: off (flag INK_WIN). Pull time follows the DRFW rows
+  (~0.85 ms/row + ~20 ms).
