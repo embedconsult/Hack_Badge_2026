@@ -75,6 +75,51 @@ Crystal always emits a C `main` symbol. Localize it before linking
 crystal/firmware/build.sh          # = idf.py build merge-bin; outputs in crystal/firmware/build/
 ```
 
+## Literal pools (`CRYSTAL_SPLIT`, `CRYSTAL_OPT`)
+Xtensa `L32R` loads a 32-bit constant (a "literal") from at most 256 KiB
+*before* the instruction. Crystal writes the whole program as one `.literal`
+and one `.text` section, so once `.text` of `crystal_app.o` passes about
+230 KiB the far end can't reach the pool and the link fails with
+`dangerous relocation: l32r: literal target out of range`. With `--release`
+(-O3) the code is 297 KiB, which is why the default build uses `-O2` (221 KiB;
+89% of the reach is used already: `test/robots/literal_reach.py build/crystal_blink.map`).
+
+`CRYSTAL_SPLIT=1` lifts the limit, without changing the compiler:
+1. Crystal runs its optimisation pipeline as usual and `--emit llvm-ir` writes
+   the optimised module (`crystal_app.ll`). (`--emit llvm-bc` doesn't work
+   with `--cross-compile`: it copies a cache file that isn't written.)
+2. `firmware/main/crystal_sections.py` gives every function an explicit
+   `section ".text.<name>"`. The Xtensa backend then puts that function's
+   pool in `.literal.<name>`. This is what `llc --function-sections` does,
+   but with sanitised names: Crystal's names contain spaces
+   (`*Menu::tick<Int32, Int32>:Nil`), and `idf.py size` can't parse a map file
+   with spaces in input section names.
+3. esp-clang's `llc` (the same LLVM 22 the compiler links) compiles it with
+   the target machine Crystal would use (`-mcpu=esp32s3`, static relocs, no
+   GlobalISel, -O3 codegen for `--release`, else -O2). The code is the same
+   as Crystal's own object within a few bytes per function (7 of 631 symbols
+   differ at -O3; the total is 1.2 KiB smaller).
+
+The IDF linker script matches `.literal .literal.* .text .text.*` in one
+statement, and the Xtensa linker keeps a file's literals at the front while
+the reach fits. When it doesn't, the linker moves each pool in front of its own
+function. So only one function (the largest is `crystal_app_main`, 54 KiB)
+has to fit in 256 KiB, not the whole object. `--gc-sections` can now also drop unused
+Crystal functions. Nothing goes to IRAM: the code stays in `.flash.text`, and
+IRAM stays at 16383 of 16384 bytes. `CRYSTAL_LLC_FLAGS` passes extra `llc`
+flags, e.g. `--mtext-section-literals` (pools inline in `.text.<name>`, behind a
+jump at each function entry; not needed).
+
+```sh
+CRYSTAL_OPT=--release CRYSTAL_SPLIT=1 crystal/firmware/build.sh   # -O3, links
+crystal/firmware/build.sh                                          # default: -O2, Crystal's own object
+CRYSTAL_SPLIT=1 crystal/firmware/test/robots/crystal_size.sh       # object sizes only
+crystal/firmware/test/robots/crystal_grow.sh   # full -O3 link with the code stub-grown (KIB=...)
+```
+`build.sh` passes the variables into the chroot via the generated
+`main/crystal_flags.cmake`. A change re-runs cmake and the Crystal step.
+The split is opt-in until it has been measured on the badge.
+
 ## Status / limits
 Only `--prelude=empty` works so far: compiler primitives, `lib` bindings and
 `fun`, with no stdlib, GC or exceptions. The Xtensa C ABI class

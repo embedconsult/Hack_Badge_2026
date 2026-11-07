@@ -6,3 +6,4 @@ dependencies.lock
 build-*/
 main/version.h
 build-merged/
+main/crystal_flags.cmake
