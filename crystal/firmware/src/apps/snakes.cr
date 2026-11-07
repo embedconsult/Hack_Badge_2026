@@ -138,6 +138,14 @@ module SnakesApp
     Gfx.bytes(x, y, p, n, scale)
   end
 
+  # cstr cut to max characters with "..." when it is longer.
+  def self.cstr_fit(x : Int32, y : Int32, p : UInt8*, max : Int32, scale : Int32) : Int32
+    n = cstr_len(p)
+    return Gfx.bytes(x, y, p, n, scale) if n <= max
+    x = Gfx.bytes(x, y, p, max &- 3, scale)
+    Gfx.text(x, y, "...", scale)
+  end
+
   def self.num(x : Int32, y : Int32, v : Int32, scale : Int32) : Int32
     n = put_decimal(@@buf, v < 0 ? 0 : v)
     Gfx.bytes(x, y, @@buf, n, scale)
@@ -426,7 +434,7 @@ module SnakesApp
       elsif s == 3
         Gfx.text(xx, y &+ 4, "NO ANSWER", 2)
       end
-      cstr(80, y &+ 28, LibIDF.cr_snk_bot_url(i), 60, 1)
+      cstr_fit(80, y &+ 27, LibIDF.cr_snk_bot_url(i), 70, 2) # 80..920 px
       y = y &+ 48
       i = i &+ 1
     end

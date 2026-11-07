@@ -447,14 +447,11 @@ module RobotsApp
       st = RB.failed?(r) ? "FAILED" : (r == win ? "WINNER" : (RB.active?(r) ? "" : "DESTROYED"))
       Gfx.text(PANEL_X, y &+ 58, st, 2)
       if RB.failed?(r) && RB.msg_len(r) > 0
-        m = RB.msg(r)
-        n = RB.msg_len(r)
-        draw_bytes(PANEL_X, y &+ 80, m, n > 50 ? 50 : n, EPD::BLACK, 1)
-        draw_bytes(PANEL_X, y &+ 90, m + 50_i64, n > 100 ? 50 : n &- 50, EPD::BLACK, 1) if n > 50
+        wrap2(PANEL_X, y &+ 78, RB.msg(r), RB.msg_len(r)) # readable: 2x, two lines
       elsif RB.out_len(r) > 0
-        Gfx.text(PANEL_X, y &+ 82, "puts", 1)
+        x = Gfx.text(PANEL_X, y &+ 78, "> ", 2)
         n = RB.out_len(r)
-        draw_bytes(PANEL_X &+ 30, y &+ 82, RB.out(r), n > 44 ? 44 : n, EPD::BLACK, 1)
+        fit(x, y &+ 78, RB.out(r), n, PANEL_CHARS &- 2)
       end
       r = r &+ 1
     end
@@ -472,6 +469,41 @@ module RobotsApp
       draw_bytes(PANEL_X, y &+ 44, @@line, n > 52 ? 52 : n, EPD::BLACK, 1)
       draw_bytes(PANEL_X, y &+ 54, @@line + 52_i64, n &- 52, EPD::BLACK, 1) if n > 52
     end
+  end
+
+  PANEL_CHARS = 26 # 2x characters (12 px) across the side panel (640..960)
+
+  # p[0, n] in 2x, cut with "..." to max characters.
+  def self.fit(x : Int32, y : Int32, p : UInt8*, n : Int32, max : Int32) : Int32
+    return draw_bytes(x, y, p, n, EPD::BLACK, 2) if n <= max
+    x = draw_bytes(x, y, p, max &- 3, EPD::BLACK, 2)
+    Gfx.text(x, y, "...", 2)
+  end
+
+  # p[0, n] in 2x on up to two panel lines, broken at a space if one is
+  # near, the rest cut with "...".
+  def self.wrap2(x : Int32, y : Int32, p : UInt8*, n : Int32) : Nil
+    if n <= PANEL_CHARS
+      draw_bytes(x, y, p, n, EPD::BLACK, 2)
+      return
+    end
+    cut = PANEL_CHARS
+    k = PANEL_CHARS
+    while k > PANEL_CHARS &- 10
+      if p[k] == 32_u8
+        cut = k
+        break
+      end
+      k = k &- 1
+    end
+    draw_bytes(x, y, p, cut, EPD::BLACK, 2)
+    rest = p + cut.to_i64!
+    m = n &- cut
+    while m > 0 && rest[0] == 32_u8
+      rest = rest + 1_i64
+      m = m &- 1
+    end
+    fit(x, y &+ 16, rest, m, PANEL_CHARS)
   end
 
   def self.draw : Nil
@@ -788,7 +820,7 @@ module RobotsApp
     end
     draw_table(y &+ 30, @@tnet ? 20 : 21)
     draw_link_line(624) if @@tnet
-    Gfx.text(24, 650, "PTS: 3 A WIN (LAST ONE STANDING), 1 A DRAW (ALIVE AT THE CYCLE LIMIT). DMG: AVERAGE DAMAGE", 1)
+    Gfx.text(24, 648, "PTS: 3 = WIN (LAST ONE STANDING), 1 = DRAW. DMG: AVERAGE DAMAGE", 2)
   end
 
   # Tournament screens' tick (T_SIM, T_TABLE); T_FINAL runs as a battle.
