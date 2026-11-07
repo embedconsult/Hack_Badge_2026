@@ -1793,6 +1793,7 @@ INK_CAP = 5
 module SkInk
   @@pass = Pointer(UInt8).null # one byte per pixel: passes so far
   @@cnew = Pointer(UInt8).null # command planes for the next pull
+  @@prev = Pointer(UInt8).null # pixels the previous pull touched (one pass per visit)
   @@cold = Pointer(UInt8).null
   @@lo = 0 # byte range of the command planes in use (to clear after)
   @@hi = -1
@@ -1803,12 +1804,14 @@ module SkInk
       @@pass = LibIDF.heap_caps_malloc((EPD::PLANE &* 8).to_u32!, 0x404_u32).as(UInt8*)
       @@cnew = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
       @@cold = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
-      return false if @@pass.null? || @@cnew.null? || @@cold.null?
+      @@prev = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+      return false if @@pass.null? || @@cnew.null? || @@cold.null? || @@prev.null?
+      Games.zero(@@prev, EPD::PLANE)
       Games.zero(@@cnew, EPD::PLANE)
       Games.zero(@@cold, EPD::PLANE)
       @@hi = -1
     end
-    !@@pass.null? && !@@cnew.null? && !@@cold.null?
+    !@@pass.null? && !@@cnew.null? && !@@cold.null? && !@@prev.null?
   end
 
   # ---- shake to erase ----------------------------------------------------------
@@ -1879,14 +1882,25 @@ module SkInk
   # cursor. A resting pen re-inks its 3x3 dot one light pass every
   # DWELL_MS, up to DWELL_CAP passes, so it shows where the pen is without
   # blotting; moving on lays the normal passes.
-  DWELL_MS  = 1200
-  DWELL_CAP = 3
+  DWELL_MS  = 3000 # rest this long before the pen dot gets its one extra pass
+  DWELL_CAP = 2    # ...and only if it has fewer passes than this
 
   def self.dwell_ink(x : Int32, y : Int32) : Bool
     return false unless ready?
     q = @@pass + (y &* EPD::WIDTH &+ x).to_i64!
     return false if q.value >= DWELL_CAP.to_u8!
     Games.fill_rect(Sketch.touch, x &- Sketch::HALF, y &- Sketch::HALF, Sketch::LINE_W, Sketch::LINE_W)
+    # a new visit: forget that the last pull touched the dot
+    yy = y &- Sketch::HALF
+    while yy <= y &+ Sketch::HALF
+      xx = x &- Sketch::HALF
+      while xx <= x &+ Sketch::HALF
+        i = yy &* EPD::ROW_BYTES &+ xx.unsafe_shr(3)
+        @@prev[i] = @@prev[i] & (0x80_u8.unsafe_shr(xx & 7) ^ 0xFF_u8)
+        xx = xx &+ 1
+      end
+      yy = yy &+ 1
+    end
     true
   end
 
@@ -1895,6 +1909,7 @@ module SkInk
   def self.sync_from_canvas : Nil
     return unless ready?
     @@pw0 = -1
+    Games.zero(@@prev, EPD::PLANE)
     cv = Sketch.canvas
     tc = Sketch.touch
     i = 0
@@ -1944,11 +1959,21 @@ module SkInk
     bk = EPD.black
     rd = EPD.red
     any = @@hi >= 0
+    pv = @@prev
     i = 0
     while i < EPD::PLANE
-      t = tc[i]
-      if t != 0_u8
+      t0 = tc[i]
+      # One pass per visit: a pixel the previous pull also touched is the
+      # same pass of the pen (a slow stroke covers each pixel of its 3 px
+      # line in 2-3 pulls), not a retrace.
+      t = t0 & (pv[i] ^ 0xFF_u8)
+      pv[i] = t0
+      if t0 != 0_u8
         tc[i] = 0_u8
+        bk[i] = bk[i] | t0
+        rd[i] = rd[i] & (t0 ^ 0xFF_u8)
+      end
+      if t != 0_u8
         n = @@cnew[i]
         o = @@cold[i]
         q = @@pass + (i &* 8).to_i64!
@@ -1973,8 +1998,6 @@ module SkInk
           use(i)
           any = true
         end
-        bk[i] = bk[i] | t
-        rd[i] = rd[i] & (t ^ 0xFF_u8)
       end
       i = i &+ 1
     end
@@ -2706,8 +2729,8 @@ fun crystal_app_main : Void
         end
         SkState.hint = false # nothing to remove: the help strip stays
         # pen resting: re-ink its dot now and then (the pen point is the cursor)
-        if now &- Sketch.last_motion_ms >= SkInk::DWELL_MS && now &- SkState.dwell_at >= SkInk::DWELL_MS
-          SkState.dwell_at = now
+        if now &- Sketch.last_motion_ms >= SkInk::DWELL_MS && SkState.dwell_at != Sketch.last_motion_ms
+          SkState.dwell_at = Sketch.last_motion_ms # once per resting place
           SkInk.dwell_ink(Sketch.x, Sketch.y)
         end
         inked = SkInk.take_touches

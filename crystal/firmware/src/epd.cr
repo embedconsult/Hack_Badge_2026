@@ -863,6 +863,11 @@ module EPD
       return false unless otp_sane?
       log("EPD: E2969JS0B1 (driver B) detected", 0)
       @@otp_valid = true
+      log3("EPD: OTP DCTL 0x10 / RAM_RW 0x13 0x14 (x, y)", @@otp[0x10].to_i32!, @@otp[0x13].to_i32!, @@otp[0x14].to_i32!)
+      log3("EPD: OTP RAM_RW 0x15 / DUW 0x16 0x17", @@otp[0x15].to_i32!, @@otp[0x16].to_i32!, @@otp[0x17].to_i32!)
+      log3("EPD: OTP DUW 0x18 0x19 0x1A", @@otp[0x18].to_i32!, @@otp[0x19].to_i32!, @@otp[0x1A].to_i32!)
+      log3("EPD: OTP DUW 0x1B / DRFW 0x0C 0x0D", @@otp[0x1B].to_i32!, @@otp[0x0C].to_i32!, @@otp[0x0D].to_i32!)
+      log3("EPD: OTP DRFW 0x0E 0x0F / -", @@otp[0x0E].to_i32!, @@otp[0x0F].to_i32!, 0)
       return true
     end
     otp_read_raw(false)
