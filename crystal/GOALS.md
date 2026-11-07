@@ -6,9 +6,10 @@ Set by the user. Read these before changing anything they cover. A change that b
 
 1. **No update over 250 ms.** This covers every pull the user can see while drawing, cleanup included. The badge logs each pull's ms; a pull over 250 ms fails the change.
 2. **Quick render first.** Strokes appear right away with a row-window pull. Cleanup runs only when the knobs pause, in row bands of 250 ms or less, and knob motion always comes first.
-3. **Light passes.** One pass gives light grey, and the user darkens a line by retracing it, about 5 passes to black. The pen point is the cursor: no crosshairs or tick marks on the canvas.
-4. **No displaced ink.** No copies of strokes anywhere else on the panel, no seam lines at window edges, and every stroke must appear.
-5. **Grey trails and pink ghosts are acceptable** in Sketch. Don't trade speed for them.
+3. **Lines may stay light.** Dark lines are not a requirement, so don't spend effort on darkness. A light, even line is fine, and retracing may darken it. The pen point is the cursor: no crosshairs or tick marks on the canvas.
+4. **Use idle time for cleanup.** While the knobs are still, clean in the background in chunks of 250 ms or less, and knob motion always comes first.
+5. **No displaced ink.** No copies of strokes anywhere else on the panel, no seam lines at window edges, and every stroke must appear.
+6. **Grey trails and pink ghosts are acceptable** in Sketch. Don't trade speed for them.
 
 ## How a change becomes the default
 
