@@ -391,7 +391,7 @@ module Shell
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
     elsif tok_is(0, "wbar")
-      WBar.set(tok_int(1, 8), tok_int(2, WIN_LUT))
+      WBar.set(tok_int(1, 8), tok_int(2, WIN_LUT), tok_int(3, -1), tok_int(4, 40))
       Shared.request(Shared::REQ_WBAR)
       LibIDF.cr_notify_main
       say("ok\n")

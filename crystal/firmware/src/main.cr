@@ -1292,9 +1292,22 @@ module WBar
     @@kind
   end
 
-  def self.set(m : Int32, k : Int32) : Nil
+  @@y0 = -1
+  @@step = 0
+
+  def self.y0 : Int32
+    @@y0
+  end
+
+  def self.step : Int32
+    @@step
+  end
+
+  def self.set(m : Int32, k : Int32, y0 : Int32, step : Int32) : Nil
     @@mode = m
     @@kind = k
+    @@y0 = y0
+    @@step = step
   end
 end
 
@@ -1303,9 +1316,10 @@ def wbar_test : Nil
   EPD.fill(EPD::WHITE)
   fast_bw(3, EPD::LUT_BASE)
   i = 0
-  while i < 4
-    y = i == 0 ? 100 : (i == 1 ? 300 : (i == 2 ? 400 : 560))
-    x = 100 &+ i &* 200
+  n = WBar.y0 < 0 ? 4 : 6
+  while i < n
+    y = WBar.y0 < 0 ? (i == 0 ? 100 : (i == 1 ? 300 : (i == 2 ? 400 : 560))) : WBar.y0 &+ i &* WBar.step
+    x = 60 &+ i &* 150
     EPD.fill_rect(x, y, 120, 16, EPD::BLACK)
     EPD.fast_pulls = 1
     rc = EPD.refresh_window2(y &- 8, y &+ 23, 0, EPD::HALF_BYTES &- 1, y &- 8, y &+ 23, 0, EPD::HALF_BYTES &- 1, WBar.kind, WBar.mode)
