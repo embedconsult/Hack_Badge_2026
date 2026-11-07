@@ -123,7 +123,7 @@ module Shell
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
     say("  clock <Y> <M> <D> <h> <m>       (set local time, Schedule NOW/NEXT)\n")
     say("  text <first>[|<last>]           (nametag name, saved)\n")
-    say("  press <a|b|plus|minus> | hold a | colour | clean\n")
+    say("  press <a|b|plus|minus|menu> | hold a | colour | clean\n")
     say("  knob <l|r> <mV> | knob off\n")
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
@@ -318,12 +318,16 @@ module Shell
       if tok_is(1, "plus") || tok_is(1, "minus")
         t = Shared.target
         Shared.target = step_screen(t, tok_is(1, "plus"))
+      elsif tok_is(1, "menu")
+        # Menu + and Menu - held together for 300 ms, through the real button
+        # path (the knob task's gesture logic): home from any app.
+        Shared.hold_fake(Games::BTN_PLUS | Games::BTN_MINUS, 300)
       elsif tok_is(1, "a")
         Shared.inject_buttons(Games::BTN_A)
       elsif tok_is(1, "b")
         Shared.inject_buttons(Games::BTN_B)
       else
-        say("usage: press <a|b|plus|minus>\n")
+        say("usage: press <a|b|plus|minus|menu>\n")
         return
       end
       LibIDF.cr_notify_main
@@ -408,8 +412,10 @@ module Shell
       end
     elsif tok_is(0, "diffe")
       # diffe <vdl> <vdh>: diff table black -> white drive frames (new session)
+      # diffe <vdl> <vdh> [<draw>]: + white -> black VDH frames
+      EPD.diff_draw = tok_int(3, EPD.diff_draw) if @@nt >= 4
       EPD.diff_erase(tok_int(1, EPD.diff_el), tok_int(2, EPD.diff_eh)) if @@nt >= 3
-      LibIDF.cr_log3("diffe: vdl / vdh / -".to_unsafe, EPD.diff_el, EPD.diff_eh, 0)
+      LibIDF.cr_log3("diffe: vdl / vdh / draw".to_unsafe, EPD.diff_el, EPD.diff_eh, EPD.diff_draw)
     elsif tok_is(0, "inkf")
       # inkf <f1> <f3> <fe>: ink command drive frames (new session)
       EPD.ink_frames(tok_int(1, EPD.ink_f1), tok_int(2, EPD.ink_f3), tok_int(3, EPD.ink_fe)) if @@nt >= 4

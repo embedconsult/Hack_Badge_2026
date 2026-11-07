@@ -1095,7 +1095,7 @@ module EPD
     while f < 20
       g = f.unsafe_div(2)
       shift = (f & 1) == 1 ? 0 : 2 # phase c: bits 3-2, phase d: bits 1-0
-      if f < DIFF_DRIVE
+      if f < @@diff_draw
         q1 = @@lut + ((10 &+ g) &* 8).to_i64!
         q1[0] = q1[0] | 1.unsafe_shl(shift).to_u8! # VDH
       end
@@ -1113,6 +1113,17 @@ module EPD
   # (a short reverse kick). Long VDL brings red pigment up (pink ghosts).
   @@diff_el = 19 # erase drive (was DIFF_DRIVE 10; settle pulls add 2 x 19)
   @@diff_eh = 0
+
+  @@diff_draw = DIFF_DRIVE # white -> black VDH frames
+
+  def self.diff_draw : Int32
+    @@diff_draw
+  end
+
+  def self.diff_draw=(d : Int32) : Nil
+    @@diff_draw = d < 1 ? 1 : (d > 19 ? 19 : d)
+    cog_stop if @@diff_open && @@latched_kind == LUT_DIFF && !busy?
+  end
 
   def self.diff_erase(l : Int32, h : Int32) : Nil
     @@diff_el = l < 1 ? 1 : (l > 19 ? 19 : l)

@@ -212,6 +212,20 @@ module Shared
   REQ_FORGET    = 32_u32 # knob override switched on/off: no pen jump
   REQ_WTEST     = 64_u32 # erase waveform test (WTest.codes)
 
+  @@fake = 0_u32 # buttons the shell holds down (until @@fake_until)
+  @@fake_until = 0
+
+  def self.fake_buttons : UInt32
+    return 0_u32 if @@fake == 0_u32
+    @@fake = 0_u32 if millis &- @@fake_until >= 0
+    @@fake
+  end
+
+  def self.hold_fake(bits : UInt32, ms : Int32) : Nil
+    @@fake_until = millis &+ ms
+    @@fake = bits
+  end
+
   @@idle_job = false # an idle-time slow refresh: any input aborts it
   @@idle_l = 0
   @@idle_r = 0
@@ -424,7 +438,7 @@ def read_buttons : UInt32
   b = b | Games::BTN_B if LibIDF.gpio_get_level(BTN_B_GPIO) == 0
   b = b | Games::BTN_PLUS if LibIDF.gpio_get_level(BTN_PLUS_GPIO) == 0
   b = b | Games::BTN_MINUS if LibIDF.gpio_get_level(BTN_MINUS_GPIO) == 0
-  b
+  b | Shared.fake_buttons # shell `press menu`: held for real, through the same path
 end
 
 # Per-screen indicator colour (full scale; shown at 1/8 on the LEDs):
