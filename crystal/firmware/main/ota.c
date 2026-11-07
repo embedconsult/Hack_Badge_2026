@@ -374,7 +374,6 @@ void cr_wifi_unacquire(void)
     }
 }
 
-bool cr_wifi_connected(void) { return s_netif && s_eg && (xEventGroupGetBits(s_eg) & BIT_UP); }
 const char *cr_wifi_ip(void) { return s_last_ip; }
 int32_t cr_wifi_channel(void) { return s_channel; }
 int32_t cr_wifi_rssi(void)

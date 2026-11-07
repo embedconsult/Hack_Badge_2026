@@ -85,6 +85,7 @@ module Shell
     say("commands:\n")
     say("  help | version | status | reboot\n")
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
+    say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
     say("  text <first>[|<last>]           (nametag name, saved)\n")
@@ -349,6 +350,8 @@ module Shell
       wifi
     elsif tok_is(0, "ota")
       ota
+    elsif tok_is(0, "weather")
+      LibIDF.cr_weather_cmd(@@line, @@len) # main/apps_net.c: parses, saves, prints
     elsif tok_is(0, "net")
       if tok_is(1, "ap") && (tok_is(2, "on") || tok_is(2, "off"))
         LibIDF.cr_net_set_ap(tok_is(2, "on"))

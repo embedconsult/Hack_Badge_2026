@@ -1,7 +1,8 @@
 idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c"
+                            "apps_net.c" "apps_gfx.c" "feed.c" "weather.c" "radar.c" "stb_image_impl.c"
                        EMBED_FILES "hello_i_am_blank.png" "portrait.png" "sketch_frame.png" "EtchASketch.png"
                        PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_driver_rmt esp_adc nvs_flash esp_timer esp_rom heap freertos
-                                     esp_wifi esp_netif lwip esp_event esp_http_client esp_https_ota app_update esp_app_format mbedtls)
+                                     esp_wifi esp_netif lwip esp_event esp_http_client esp_https_ota app_update esp_app_format mbedtls json)
 
 # --- Crystal -> Xtensa object --------------------------------------------------
 # Needs the xtensa-patched Crystal compiler (see ../../toolchain/README.md).
