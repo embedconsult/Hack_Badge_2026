@@ -41,6 +41,13 @@ jobs:
       - uses: crystal-lang/install-crystal@v1
         with:
           crystal: ${{ env.CRYSTAL_VERSION }}
+      - name: Cache crystal-robots oracle
+        uses: actions/cache@v4
+        with:
+          path: crystal/firmware/test/robots/upstream
+          key: crystal-robots-${{ hashFiles('crystal/firmware/test/robots/upstream.sh') }}
+      - name: Fetch crystal-robots oracle (robots specs)
+        run: crystal/firmware/test/robots/upstream.sh
       - name: Host specs
         working-directory: crystal
         run: crystal spec spec firmware/test/*_spec.cr
@@ -73,11 +80,11 @@ jobs:
         run: |
           d=$(mktemp -d)
           gh release download "$ESP_LLVM" -R espressif/llvm-project -D "$d" \
-            -p "clang-esp-$ESP_LLVM-x86_64-linux-gnu.tar.xz" \
-            -p "libs-clang-esp-$ESP_LLVM-x86_64-linux-gnu.tar.xz"
+            -p "clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz" \
+            -p "libs-clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz"
           mkdir -p "$d/clang" "$d/libs"
-          tar -xJf "$d/clang-esp-$ESP_LLVM-x86_64-linux-gnu.tar.xz" -C "$d/clang"
-          tar -xJf "$d/libs-clang-esp-$ESP_LLVM-x86_64-linux-gnu.tar.xz" -C "$d/libs"
+          tar -xJf "$d/clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz" -C "$d/clang"
+          tar -xJf "$d/libs-clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz" -C "$d/libs"
           mv "$d/clang/esp-clang" ~/esp-clang
           # libLLVM*.so come from the libs package (as in toolchain/README.md)
           find "$d/libs" -name 'libLLVM*' -exec cp -a {} ~/esp-clang/lib/ \;
