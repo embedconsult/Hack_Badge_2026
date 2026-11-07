@@ -791,6 +791,16 @@ void cr_net_set(bool on)
     s_ver++;
 }
 
+// Settings app (main/settings.c): stop network mode for a while without
+// saving anything; cr_net_boot() restarts it as saved. True once stopped.
+bool cr_net_pause(void)
+{
+    s_run = false;
+    for (int i = 0; i < 100 && s_task_alive; i++) vTaskDelay(pdMS_TO_TICKS(50));
+    s_ver++;
+    return !s_task_alive;
+}
+
 void cr_net_boot(void)
 {
     nvs_handle_t h;
