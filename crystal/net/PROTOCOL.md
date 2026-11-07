@@ -16,18 +16,18 @@ broadcast or a peer MAC, outside any BSS. Findings on the BeagleBadge (kernel 6.
 - Chip/driver: TI **CC33xx** over SDIO, `cc33xx` + `mac80211` (`/sys/class/net/wlan0/device/driver` ->
   `cc33xx_driver`).
 - Interface modes include **monitor**, and `iw phy phy0 interface add mon0 type monitor` works *next to*
-  the associated `wlan0` (tested). But the firmware filters what reaches the host: in 5 s mon0 saw 4 frames,
-  all beacons of our own AP. It is not a usable sniffer while `wlan0` is associated.
-- nl80211 lists `frame`, `remain_on_channel` and RX of action frames (`0xd0`) in managed mode, so a
-  userspace program *could* register for vendor action frames on `wlan0` and transmit them with
-  `NL80211_CMD_FRAME` (off-channel with remain-on-channel). Whether the CC33xx firmware passes broadcast
-  action frames from outside the BSS up to the host is untested: it needs an ESP-NOW sender in range,
-  i.e. our Supercon badge with the `net` build (experiment in section 7).
+  the associated `wlan0`. **Transmit works**: ESP-NOW frames written to `mon0` (AF_PACKET + radiotap) go
+  out on wlan0's channel; a Crystal badge received 24 of 25 injected `BOSR` beacons and listed the
+  BeagleBadge as a badge os badge (`crystal/net/espnow_nl80211.py inject`).
+- **Receive does not**: the CC33xx firmware filters what reaches the host. `mon0` sees only a few beacons
+  and data frames, and an nl80211 `REGISTER_FRAME` for `7f 18 fe 34` action frames on `wlan0` registers
+  fine but never gets one, while a Crystal badge beacons ESP-NOW at 1 Hz a few cm away.
+- `NL80211_CMD_FRAME` on `wlan0` fails with ENOTCONN (station mode refuses frames outside its BSS).
 - Channel: the BeagleBadge's Wi-Fi follows its access point (tonight a phone hotspot on channel 6);
-  badge os uses a fixed channel 1.
+  badge os uses a fixed channel 1. Injection goes out on the current channel only.
 
-So the **working path is UDP on the shared Wi-Fi**, with our Supercon badge as an **ESP-NOW bridge**.
-Direct ESP-NOW from Linux stays an experiment (section 7).
+So the **working path is UDP on the shared Wi-Fi**, with our Supercon badge as an **ESP-NOW bridge**
+(needed for receiving). The BeagleBadge can additionally send ESP-NOW itself through `mon0`.
 
 ## 2. Transport
 
@@ -91,6 +91,7 @@ shell task so only the main task ever drives the e-paper):
 | `hold a` / `colour` | the long-press colour refresh |
 | `knob <l\|r> <mV>` / `knob off` | override a knob (drives Sketch, Life, Snake) |
 | `stroke x0 y0 x1 y1` | a line on the Sketch canvas, x 134..824, y 123..522 |
+| `sketch quickdraw` | Sketch draws its six-shooter |
 | `text <line1>[\|<line2>]` | set the nametag name (saved), shows the nametag |
 | `pong` | go to the PONG screen and pair with the sender at once (no button dance) |
 | `status` | logs status on the badge console (reply is just ok) |
@@ -148,8 +149,7 @@ Body: `mac[6]`, `rssi` int8, then an ESP-NOW payload (<= 200 bytes).
 
 ## 7. Open experiments
 
-1. Direct ESP-NOW on the BeagleBadge: with a Crystal badge in `net on` on the same channel, register
-   `wlan0` for action frames matching `7f 18 fe 34` (nl80211 `REGISTER_FRAME`) and see whether `BOSR`
-   beacons arrive; then send one with `NL80211_CMD_FRAME` and check the Crystal badge logs it. If both
-   work, the BeagleBadge can talk to badge os directly and the bridge becomes optional.
+1. Direct ESP-NOW on the BeagleBadge: TX done (injection), RX blocked by the CC33xx firmware. Worth
+   checking for a firmware/driver knob (debugfs `cc33xx/beacon_filtering`, a "promiscuous" or sniffer mode
+   in TI's firmware) before giving up on RX.
 2. FTM between the Crystal badge (SoftAP responder) and badge os (`CONFIG_ESP_WIFI_FTM_ENABLE`).

@@ -61,7 +61,7 @@ module LinkUI
   PADW     =  16
   PADH     = 120
   PADX     =  24
-  CLEAN_AT =  40 # frames between full-drive refreshes
+  CLEAN_AT =  12 # frames between full-drive refreshes (diff frames leave ball ghosts)
 
   @@txt = Pointer(UInt8).null
   @@pv = Pointer(Int16).null
