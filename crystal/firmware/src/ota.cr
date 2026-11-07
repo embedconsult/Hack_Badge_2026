@@ -16,7 +16,7 @@ lib LibIDF
   fun cr_ota_state : Int32
   fun cr_ota_pct : Int32
   fun cr_ota_msg : UInt8*
-  fun cr_ota_boot_ok : Void
+  fun cr_ota_boot_ok : Int32
   fun cr_ota_boot_failed : Void
 end
 
@@ -61,8 +61,9 @@ module Ota
     LibIDF.cr_ota_running
   end
 
-  def self.boot_ok : Nil
-    LibIDF.cr_ota_boot_ok
+  # True on the first boot of a freshly updated image.
+  def self.boot_ok : Bool
+    LibIDF.cr_ota_boot_ok != 0
   end
 
   def self.boot_failed : Nil
@@ -145,6 +146,7 @@ module Ota
     end
     delay_ms(RESULT_MS)
     Shared.take_buttons # presses during the update don't act on the screen
+    RedRes.residue = true # its big text leaves a ghost: slow clean when idle
     enter_screen(scr, false)
     Shared.rendering = false
   end

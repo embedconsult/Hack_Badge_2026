@@ -1029,6 +1029,7 @@ def sketch_frame(entry : Bool, wait : Int32, up : Int32, panel : Int32, total : 
     sketch_background
   end
   Menu.render(EPD.black, EPD.red)
+  draw_sketch_hint(false) # the help strip (its own background redraw drops it)
   draw_sketch_label(wait, up, panel, total, true)
   Shared.led_mode = LED_CYAN
   if entry
@@ -1664,6 +1665,41 @@ def fast_bw(pulls : Int32, kind : Int32) : Nil
   EPD.raw = false
 end
 
+# Red on the panel. Fast tables can't remove red pigment (EPD_NOTES), so
+# a screen that replaces a colour image leaves a red ghost. on_panel: a
+# colour image is up on purpose; residue: a fast refresh replaced it (or an
+# OTA status screen ran). The main loop then redraws the current screen
+# with one slow (OTP) refresh once the badge has been idle RES_IDLE_MS.
+module RedRes
+  @@on_panel = false
+  @@residue = false
+
+  def self.on_panel? : Bool
+    @@on_panel
+  end
+
+  def self.on_panel=(v : Bool) : Nil
+    @@on_panel = v
+  end
+
+  def self.residue? : Bool
+    @@residue
+  end
+
+  def self.residue=(v : Bool) : Nil
+    @@residue = v
+  end
+
+  # A fast refresh is about to replace what is on the panel.
+  def self.replaced : Nil
+    @@residue = true if @@on_panel
+    @@on_panel = false
+  end
+end
+
+RES_IDLE_MS = 8_000
+SK_IDLE_COLOUR_MS = 60_000 # Sketch: idle this long -> the red frame (colour render) # idle time before the automatic slow clean of red residue
+
 # Slow full-colour refresh that a Menu press can abort.
 def colour_refresh : Bool
   Shared.rendering = true
@@ -1673,7 +1709,22 @@ def colour_refresh : Bool
   EPD.abortable = false
   Shared.rendering = false
   log2("main: colour refresh ok / aborted", ok ? 1 : 0, aborted ? 1 : 0)
+  if ok && !aborted
+    RedRes.residue = false # a full OTP refresh cleans the whole panel
+    RedRes.on_panel = EPD.has_red?
+  else
+    RedRes.residue = true
+  end
   ok
+end
+
+# Automatic slow clean (RedRes): the current planes again, with the OTP
+# waveform, which removes red residue (the image itself doesn't change).
+def red_residue_clean(scr : Int32) : Nil
+  log("main: slow clean of red residue, screen", scr)
+  colour_refresh
+  SkState.mark_shown
+  Sketch.forget_knobs if scr == SCR_SKETCH
 end
 
 SK_WINDOWED   = false # Sketch ink: windowed refresh (EPD::WIN_MODE) - experimental, keep OFF
@@ -2243,18 +2294,15 @@ def sketch_colour : Nil
   # (and logged), so the colour render can be diagnosed from a photo.
   draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0, true)
   colour_refresh
-  # Show-off render only: drawing stays black/white. Back to the B/W planes
-  # (frame red -> black) now; the next stroke does one full B/W refresh
-  # (SkState.after_colour), then windows again.
-  Sketch.render(EPD.black, EPD.red)
-  red_to_black
-  draw_sketch_hint(false)
-  draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
-  SkState.colour = false
-  SkState.red_frame = false
-  SkState.after_colour = true
+  # The red frame stays: ink pulls only drive the pixels the pen touches,
+  # and erase / clean flash only the white screen with the keep-red LUT,
+  # so drawing simply continues on the colour frame.
+  SkState.colour = true
+  SkState.red_frame = true
+  SkState.after_colour = false
   SkState.hint = false
   SkState.mark_shown
+  Sketch.forget_knobs
 end
 
 # Shows a screen on entry: always a fast black/white frame.
@@ -2262,6 +2310,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   Shared.screen = scr
   LibIDF.cr_net_screen(scr)
   SkState.red_frame = false unless scr == SCR_SKETCH # another screen replaces it
+  RedRes.replaced unless scr == SCR_SKETCH && SkState.red_frame?
   # Every preview uses WIN_LUT (HALF60), the kind game frames and Sketch ink
   # use too, so the COG session stays latched across screen switches (no ~5 s
   # restart on the first frame). Static screens get 2 pulls (HALF60 erases
@@ -2382,7 +2431,7 @@ fun crystal_app_main : Void
   Shared.rendering = true
   enter_screen(scr, true)
   Shared.rendering = false
-  Ota.boot_ok # display works: keep this image (OTA rollback)
+  RedRes.residue = true if Ota.boot_ok # display works: keep this image (OTA rollback); the update screen left a ghost
 
   prev = 0_u32
   frames = 0
@@ -2511,6 +2560,7 @@ fun crystal_app_main : Void
       Shared.rendering = false
       colour_shown = false # any other screen's refresh replaced the colour image
       colour_due = millis &+ AUTO_COLOUR_MS
+      last_input = millis # idle timers (Sketch colour, red residue) start now
       last_total = millis &- t
       log2("main: screen / entry ms", scr, last_total)
     elsif scr == SCR_NAMETAG || scr == SCR_PORTRAIT
@@ -2733,6 +2783,19 @@ fun crystal_app_main : Void
       Shared.led_mode = 0
     end
     Store.sync_upd
+    # Sketch left alone: put the red Etch-a-Sketch frame up (slow colour
+    # render, ~33 s); drawing then goes on over it (ink pulls never touch it).
+    if scr == SCR_SKETCH && !SkState.colour? && Shared.target == scr && !Shared.rendering? &&
+       raw_held == 0_u32 && millis &- last_input >= SK_IDLE_COLOUR_MS && !Ota.running?
+      log("sketch: idle, colour frame", 0)
+      sketch_colour
+      last_input = millis
+    end
+    if RedRes.residue? && Shared.target == scr && !Shared.rendering? && raw_held == 0_u32 &&
+       millis &- last_input >= RES_IDLE_MS && !Ota.running?
+      red_residue_clean(scr)
+      last_input = millis
+    end
     # Erase settling (EPD.diff_settle): when an app's diff updates pause,
     # the pixels they erased get their remaining VDL pulls (no pink).
     if EPD.settle_pending? && Shared.target == scr && raw_held == 0_u32 && millis &- EPD.diff_last_ms >= 400

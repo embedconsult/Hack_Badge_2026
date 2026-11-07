@@ -673,12 +673,13 @@ void cr_ota_boot_guard(void)
     if (esp_timer_create(&a, &s_guard) == ESP_OK) esp_timer_start_once(s_guard, (uint64_t)BOOT_GUARD_MS * 1000);
 }
 
-void cr_ota_boot_ok(void)
+int cr_ota_boot_ok(void)
 {
-    if (!pending_verify()) return;
+    if (!pending_verify()) return 0;
     esp_ota_mark_app_valid_cancel_rollback();
     if (s_guard) esp_timer_stop(s_guard);
     printf("ota: new image marked valid\n");
+    return 1;
 }
 
 void cr_ota_boot_failed(void)
