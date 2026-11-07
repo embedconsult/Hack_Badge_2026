@@ -9,6 +9,8 @@
 //   - /robots: the ROBOTS app's robot slots (main/robots.c): paste a robot
 //     in the crystal-robots language, it is parsed and checked on the badge
 //     (cr_robot_check, src/apps/robot_store.cr) and saved to a slot.
+//   - /compete: how to compete (static page in flash): the robot language
+//     in brief, tournaments, the snake bot API and the league.
 // One radio: network mode is paused while the AP is up (cr_net_pause) and
 // restarted from NVS afterwards (cr_net_boot). The AP itself is ota.c's
 // cr_wifi_ap_start / cr_wifi_ap_stop (also used by `net ap on`).
@@ -171,7 +173,8 @@ static esp_err_t h_root(httpd_req_t *r)
     if (net) put(r, " checked");
     put(r, "> Badge link on (UDP + ESP-NOW; starts when you leave Settings)</label></fieldset>"
            "<button>Save</button></form>");
-    put(r, "<p><a href=/robots>Robots</a>: battle robots for the ROBOTS app</p>");
+    put(r, "<p><a href=/robots>Robots</a>: battle robots for the ROBOTS app &middot; "
+           "<a href=/compete>How to compete</a>: robots, snake bots, tournaments</p>");
     put(r, NULL);
     return ESP_OK;
 }
@@ -291,7 +294,7 @@ static const char k_rhead[] =
     "padding:.6em 1.2em}td{padding:.1em .6em}small{color:#666}</style><h2>Robots</h2>"
     "<p><small>Robots in the <a href='https://jkridner.beagleboard.io/crystal-robots/'>crystal-robots</a> language "
     "(same as the website). Saved robots join the ROBOTS app's line-ups; the shell's "
-    "<code>robot run</code> picks a battle.</small></p>";
+    "<code>robot run</code> picks a battle. <a href=/compete>How to compete</a></small></p>";
 
 #define ROBOT_BODY_MAX 30000
 
@@ -388,6 +391,57 @@ static esp_err_t h_robots_save(httpd_req_t *r)
     return ESP_OK;
 }
 
+// ---- how to compete (static) ----------------------------------------------------
+
+static const char k_compete[] =
+    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>How to compete</title><style>body{font:16px system-ui,sans-serif;max-width:44em;margin:auto;padding:1em}"
+    "code,pre{font:14px ui-monospace,monospace;background:#f3f3f3}pre{padding:.6em;overflow:auto}"
+    "td{padding:.15em .5em;vertical-align:top}h3{margin-top:1.4em}</style>"
+    "<h2>How to compete</h2><p>Two games on this badge, two ways to win: write a <b>robot</b> "
+    "(ROBOTS) or a <b>snake bot</b> (SNAKES).</p>"
+    "<h3>ROBOTS: battle robots</h3>"
+    "<p>Robots are small programs in the <a href='https://jkridner.beagleboard.io/crystal-robots/'>crystal-robots</a> "
+    "language (Ruby-like, after CROBOTS). Try them on that website: the badge plays every battle exactly "
+    "like it. Then paste yours on <a href=/robots>/robots</a> (checked and saved to a slot).</p>"
+    "<pre>global(dir, 0)\n\nmain(\"Spinner\") do\n  while true\n    r = scan(dir, 10)    # anyone within 10 deg?\n"
+    "    if r > 0 &amp;&amp; r &lt;= 700\n      cannon(dir, r)     # fire at that range\n    else\n      dir = (dir + 20) % 360\n"
+    "    end\n    if damage &gt; 50\n      drive(rand(360), 40)\n    end\n  end\nend</pre>"
+    "<table><tr><td><code>scan(deg, res)</code><td>distance (m) to the nearest robot within deg &plusmn; res (res &le; 10), 0 if none"
+    "<tr><td><code>cannon(deg, range)</code><td>fire a missile (range &le; 700 m, two in the air at most); 1 fired, 0 not"
+    "<tr><td><code>drive(deg, speed)</code><td>speed 0..100 %; the heading only changes at 50 % or less"
+    "<tr><td><code>damage speed loc_x loc_y</code><td>own damage (100: destroyed), speed, position (field 1000 x 1000 m, 0,0 lower left)"
+    "<tr><td><code>rand(n) sqrt(x)</code><td>0..n-1; square root"
+    "<tr><td><code>sin cos tan atan</code><td>degrees, scaled by 100000 (<code>atan(100000 * y / x)</code>)"
+    "<tr><td><code>puts x</code> <code>sleep</code><td>show a value on the badge; wait"
+    "<tr><td><code>global(name, v)</code><td>a global with a start value; <code>NAME = 3</code> constants; <code>def f(a) ... end</code>"
+    "<tr><td>control<td><code>if/elsif/else</code>, <code>while</code>, <code>until</code>, <code>case/when</code>, "
+    "<code>break</code>, <code>return</code>; <code>main(\"Name\") do ... end</code> is the robot</table>"
+    "<p>0 deg is east, 90 north. Walls and collisions hurt; missiles explode where they land.</p>"
+    "<p><b>Tournaments</b>: on ROBOTS press B after a battle (<b>TOURNEY</b>), or shell <code>robot tourney</code>: every "
+    "saved robot and the 10 built-ins in a round robin of 4-robot battles, 3 points for the last one standing, 1 for "
+    "surviving to the cycle limit, then a final of the top four. With network mode on and other badges around, "
+    "<b>LINK TOURNEY</b> (<code>robot tourney net</code>) pulls in every badge's saved robots; every badge plays it "
+    "and cross-checks. <code>robot standings [net]</code> prints the table.</p>"
+    "<h3>SNAKES: snake bots over HTTP</h3>"
+    "<p>A snake bot is a small web server you run (laptop, phone, Pi, cloud) that speaks the open snake-bot API: "
+    "<code>GET /</code> (info), <code>POST /start</code>, <code>POST /move</code> answering "
+    "<code>{\"move\": \"up|down|left|right\", \"shout\": \"...\"}</code> within 500 ms, <code>POST /end</code>. "
+    "The board is 11 x 11 (y up), standard rules: eat to grow and heal, avoid walls, bodies and longer heads. "
+    "Existing Battlesnake bots work as they are. API, rules and an example bot in Python: "
+    "<a href='https://github.com/embedconsult/Hack_Badge_2026/blob/crystal/crystal/net/snakes/README.md'>"
+    "crystal/net/snakes/README.md</a> in the badge repo.</p>"
+    "<p>Bring it: <code>snakes add &lt;name&gt; http://&lt;ip&gt;:&lt;port&gt;</code> on the badge's USB shell, then "
+    "<code>snakes play</code>, or <code>snakes league 10</code>: ten games against the other bots and the house snake, "
+    "with an Elo table in the SNAKES lobby (bots are matched by name).</p>"
+    "<p><a href=/>Settings</a> &middot; <a href=/robots>Robots</a></p>";
+
+static esp_err_t h_compete(httpd_req_t *r)
+{
+    httpd_resp_set_type(r, "text/html");
+    return httpd_resp_send(r, k_compete, sizeof k_compete - 1);
+}
+
 // Phones probe these to detect a captive portal: answer with the page.
 static esp_err_t h_any(httpd_req_t *r)
 {
@@ -415,7 +469,7 @@ int32_t cr_settings_start(void)
     }
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.stack_size = 12288; // /robots parses and checks robots on this task
-    cfg.max_uri_handlers = 6;
+    cfg.max_uri_handlers = 8;
     cfg.uri_match_fn = httpd_uri_match_wildcard;
     cfg.lru_purge_enable = true;
     if (httpd_start(&s_http, &cfg) != ESP_OK) {
@@ -433,6 +487,8 @@ int32_t cr_settings_start(void)
     httpd_register_uri_handler(s_http, &u_save);
     httpd_register_uri_handler(s_http, &u_robots);
     httpd_register_uri_handler(s_http, &u_robots_save);
+    httpd_uri_t u_compete = {.uri = "/compete", .method = HTTP_GET, .handler = h_compete};
+    httpd_register_uri_handler(s_http, &u_compete);
     httpd_register_uri_handler(s_http, &u_any);
     printf("settings: AP %s up, http://192.168.4.1/\n", s_ssid);
     return 0;
