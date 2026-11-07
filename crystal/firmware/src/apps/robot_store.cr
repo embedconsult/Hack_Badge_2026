@@ -35,6 +35,8 @@ lib LibIDF
   fun cr_tn_standings(tid : UInt32*, hash : UInt32*, table : UInt8*, max : Int32) : Int32
   fun cr_tn_status(buf : UInt8*, max : Int32) : Int32
   fun cr_tn_badge(k : Int32, out : UInt8*) : Void
+  fun cr_tn_autojoin : Bool
+  fun cr_tn_autojoin_set(on : Bool) : Void
   fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
   fun vTaskDelay(ticks : UInt32) : Void
   # main/net.c + main/robonet.c: badge-to-badge battles
@@ -356,12 +358,18 @@ module RobotShell
       run(true)
     elsif Shell.tok_is(1, "tourney")
       tourney
+    elsif Shell.tok_is(1, "autojoin")
+      if Shell.tok_is(2, "on") || Shell.tok_is(2, "off")
+        LibIDF.cr_tn_autojoin_set(Shell.tok_is(2, "on"))
+      end
+      say(LibIDF.cr_tn_autojoin ? "robot: autojoin on: join nearby tournaments on Home or ROBOTS, or after 60 s untouched (saved)\n" :
+        "robot: autojoin off: never join nearby tournaments; the top bar says TOURNEY NEARBY (saved)\n")
     elsif Shell.tok_is(1, "standings")
       LibIDF.cr_robot_tbl_print(Shell.tok_is(2, "net") ? 1 : 0) # main/robots.c
     else
       say("usage: robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
       say("       robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]\n")
-      say("       robot tourney [net] [seed] [seeds] | robot standings [net]\n")
+      say("       robot tourney [net] [seed] [seeds] | robot standings [net] | robot autojoin [on|off]\n")
     end
   end
 

@@ -6,7 +6,7 @@
 //   host_badge --port P --engine bin/rb [--name N] [--bcast host:port]... [--secs S]
 //              [--loss PERCENT] [--slow S] [--ip A] [--mac HEX12]
 //              [--challenge BADGE [--seed N] robot.cr ...]
-//              [--mine robot.cr]... [--builtin robot.cr]... [--tourney PEERS [--seed N] [--seeds K]]
+//              [--mine robot.cr]... [--builtin robot.cr]... [--tourney PEERS [--seed N] [--seeds K]] [--no-join]
 //
 // Tournaments (main/tourney_net.c): --mine files are this badge's slot
 // robots, --builtin files its built-ins (used when it organizes);
@@ -125,7 +125,9 @@ static int add_files(const char **f, int nf, int *idx, int max)
 static int tn_mine(int *idx, int max) { return add_files(s_mine, s_nmine, idx, max); }
 static int tn_builtins(int *idx, int max) { return add_files(s_builtin, s_nbuiltin, idx, max); }
 
-static const tn_io_t s_tn_io = {send_to, on_event, tn_mine, tn_builtins, tn_peers};
+static bool s_no_join; // --no-join: as a badge busy in another app (robot autojoin)
+static bool tn_may(int64_t now) { return !s_no_join; }
+static const tn_io_t s_tn_io = {send_to, on_event, tn_mine, tn_builtins, tn_peers, tn_may};
 
 static struct {
     bool due;
@@ -260,6 +262,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--builtin") && i + 1 < argc && s_nbuiltin < TN_ROBOTS) s_builtin[s_nbuiltin++] = argv[++i];
         else if (!strcmp(argv[i], "--tourney") && i + 1 < argc) tourney = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--seeds") && i + 1 < argc) seeds = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--no-join")) s_no_join = true;
         else if (!strcmp(argv[i], "--challenge") && i + 1 < argc) badge = argv[++i];
         else if (nfiles < RN_ROBOTS) files[nfiles++] = argv[i];
     }

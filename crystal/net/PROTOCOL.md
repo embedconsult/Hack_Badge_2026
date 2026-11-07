@@ -194,6 +194,11 @@ start one (`robot tourney net`, B: LINK TOURNEY on ROBOTS) organizes if it is th
 to the lowest, which waits 2.5 s (to hear every announce), then organizes with every live robot badge,
 the asker included.
 
+Joining is opt-in on the Crystal badge (`robot autojoin on|off`, NVS net/autojoin, also on the Settings
+page; default on): it answers a `Q` only while it shows Home or ROBOTS, or after 60 s without a button
+press or knob turn, and always when it asked for the tournament itself. Otherwise it stays silent (the
+organizer leaves it out after 20 s), logs it and shows TOURNEY NEARBY in its top bar for 30 s.
+
 Every `T` body starts with `sub` (one ASCII letter) and `tid` u32 (the tournament; 0 in `O`):
 
 | sub | From -> to | Rest of the body |

@@ -35,6 +35,11 @@ typedef struct {
 
 static const tn_io_t *s_io;
 static struct {
+    uint32_t tid;
+    int64_t at;
+    char name[13];
+} s_near; // the last invitation not taken
+static struct {
     bool on;
     int64_t at;
     uint32_t seed;
@@ -91,8 +96,21 @@ static void reset(void)
 void tn_init(const tn_io_t *io, const uint8_t me[6], const char *name)
 {
     s_io = io;
+    memset(&s_near, 0, sizeof s_near);
     tn_set_me(me, name);
     reset();
+}
+
+bool tn_may_join(bool autojoin, bool home_or_robots, int64_t idle_ms)
+{
+    return autojoin && (home_or_robots || idle_ms >= TN_IDLE_JOIN_MS);
+}
+
+bool tn_nearby(char *name, int max, int64_t now)
+{
+    if (!s_near.tid || now - s_near.at > TN_NEARBY_MS || (T.role == R_PART && T.tid == s_near.tid)) return false;
+    if (name) snprintf(name, max, "%s", s_near.name);
+    return true;
 }
 
 bool tn_busy(void) { return T.role != R_NONE && T.st != S_DONE && T.st != S_FAIL; }
@@ -547,7 +565,13 @@ void tn_rx(rn_addr_t from, const uint8_t mac[6], const char *name, const uint8_t
         return;
     }
     if (sub == 'Q' && (!tn_busy() || T.role == R_ASK) && !(T.role == R_PART && T.tid == tid)) {
-        if (T.role == R_PART && T.st == S_DONE && T.tid == tid) return;
+        if (T.role != R_ASK && s_io->may_join && !s_io->may_join(now)) { // not now: note it, no screen change
+            if (s_near.tid != tid) printf("tourney: %s's tournament nearby, not joining (robot autojoin)\n", name);
+            s_near.tid = tid, s_near.at = now;
+            snprintf(s_near.name, sizeof s_near.name, "%s", name);
+            event(TN_EV_STATUS);
+            return;
+        }
         join(from, mac, name, tid, now);
         send_e();
         return;

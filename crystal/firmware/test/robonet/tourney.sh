@@ -7,6 +7,9 @@
 #   2. a simulator has the lowest MAC: the badge code asks it to organize
 #   3. a simulator whose engine disagrees is caught by the organizing badge
 #   4. 20 % of the badge code's packets lost
+#   5. the badge code is busy in another app (robot autojoin): it does not
+#      join, only notes the tournament nearby; the simulators play without it
+# (test_join.c: the join rule itself, case by case)
 #
 #   crystal/firmware/test/robonet/tourney.sh
 set -eu
@@ -17,6 +20,7 @@ mkdir -p bin
 crystal build --prelude=empty ../robots/empty_prelude.cr -o bin/rb
 crystal run ../robots/dump_roster.cr -- bin/roster
 gcc -O1 -g -Wall -I../../main -o bin/host_badge host_badge.c ../../main/robonet.c ../../main/tourney_net.c
+gcc -O1 -g -Wall -I../../main -o bin/test_join test_join.c ../../main/tourney_net.c ../../main/robonet.c
 R=bin/roster
 # players' own robots: built-ins under new names (so new sources)
 mk() { sed "s/main(\"[A-Za-z]*\")/main(\"$2\")/" "$R/$1.cr" > "bin/$2.cr"; }
@@ -82,5 +86,29 @@ grep -q "SimB got a DIFFERENT result" bin/tH4681.log || { echo "FAIL badge did n
 run 4691 f41200000001 "--loss 20" bin/rb
 check "20 % packet loss: badge verdict" 0 $H
 check "20 % packet loss: sim A verdict" 0 $SA
+
+# 5. a badge busy elsewhere does not join (sim A organizes, lower MAC)
+P=4701
+python3 "$NET/sim_badge.py" 60 --port $((P + 1)) --link-port $((P + 9)) --bcast 127.0.0.1:$P \
+  --bcast 127.0.0.1:$((P + 2)) --name SimA --engine bin/rb --mine bin/Blaze.cr bin/Comet.cr $SB --tourney 2 --seeds 1 \
+  > bin/tA$P.log 2>&1 &
+A=$!
+python3 "$NET/sim_badge.py" 60 --port $((P + 2)) --link-port $((P + 9)) --bcast 127.0.0.1:$P \
+  --bcast 127.0.0.1:$((P + 1)) --name SimB --engine bin/rb --mine bin/Dash.cr \
+  > bin/tB$P.log 2>&1 &
+SB_PID=$!
+set +e
+bin/host_badge --port $P --bcast 127.0.0.1:$((P + 1)) --bcast 127.0.0.1:$((P + 2)) --secs 40 \
+  --mac f4ffffffff01 --name HostBadge --engine bin/rb --mine bin/Ace.cr --no-join > bin/tH$P.log 2>&1
+wait $A; SA=$?
+wait $SB_PID; SBX=$?
+set -e
+check "busy badge left out: sim A verdict" 0 $SA
+check "busy badge left out: sim B verdict" 0 $SBX
+grep -q "nearby, not joining" bin/tH$P.log || { echo "FAIL busy badge did not note the tournament"; fail=1; }
+if grep -q "joined" bin/tH$P.log; then echo "FAIL busy badge joined"; fail=1; fi
+if grep -q "HostBadge brings" bin/tA$P.log; then echo "FAIL organizer got robots from the busy badge"; fail=1; fi
+
+bin/test_join || fail=1
 
 [ $fail = 0 ] && echo "tourney net: all passed" || { tail -n 15 bin/t[HAB]46*.log; exit 1; }

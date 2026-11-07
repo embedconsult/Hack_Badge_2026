@@ -16,6 +16,7 @@ lib LibIDF
   fun cr_net_set_ap(on : Bool) : Void
   fun cr_net_take_line(buf : UInt8*, max : Int32) : Int32
   fun cr_net_input(l : Int32, r : Int32, b : UInt32) : Void
+  fun cr_tn_where(home_or_robots : Int32) : Void # robot tournaments: may join here (main/net.c)
   fun cr_net_screen(s : Int32) : Void
   fun cr_net_version : UInt32
   fun cr_net_status_text(buf : UInt8*, max : Int32) : Int32

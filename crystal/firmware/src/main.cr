@@ -2427,6 +2427,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   red_before = RedRes.on_panel? || RedRes.residue?
   Shared.screen = scr
   LibIDF.cr_net_screen(scr)
+  LibIDF.cr_tn_where(scr == SCR_HOME || scr == Apps.find("ROBOTS".to_unsafe, 6) ? 1 : 0)
   SkState.red_frame = false unless scr == SCR_SKETCH # another screen replaces it
   RedRes.replaced unless scr == SCR_SKETCH && SkState.red_frame?
   # Every preview uses WIN_LUT (HALF60), the kind game frames and Sketch ink

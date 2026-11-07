@@ -37,6 +37,9 @@ typedef struct {
     int (*builtins)(int *idx, int max);
     // the live peers that play robot battles (announce caps bit 16)
     int (*peers)(tn_peer_t *p, int max, int64_t now);
+    // asked to join a tournament (Q): may this badge join now? NULL = yes.
+    // The badge: tn_may_join(setting, on Home/ROBOTS, idle time).
+    bool (*may_join)(int64_t now);
 } tn_io_t;
 
 enum { TN_EV_STATUS = 0, TN_EV_RUN = 1, TN_EV_DONE = 2 };
@@ -70,3 +73,13 @@ int tn_status(char *buf, int max);
 // Name of badge k of the current plan ("" if none).
 const char *tn_badge_name(int k);
 bool tn_busy(void);
+
+// Joining is opt-in (`robot autojoin on|off`, default on): with autojoin on
+// a badge joins when it shows Home or ROBOTS, or nobody touched it for
+// TN_IDLE_JOIN_MS; otherwise (and always with autojoin off) it only notes
+// the invitation (tn_nearby) so the top bar can say so.
+#define TN_IDLE_JOIN_MS 60000
+#define TN_NEARBY_MS 30000
+bool tn_may_join(bool autojoin, bool home_or_robots, int64_t idle_ms);
+// An invitation declined in the last TN_NEARBY_MS: its organizer's name.
+bool tn_nearby(char *name, int max, int64_t now);

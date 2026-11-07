@@ -133,6 +133,7 @@ static int s_tn_len;
 void stub_tn_offer(void) { s_tn_offer = 1; }
 int32_t cr_tn_start(uint32_t seed, int32_t seeds) { return -4; }
 int32_t cr_tn_peers(void) { return 0; }
+int32_t cr_tn_nearby(void) { return 0; }
 int32_t cr_tn_take_run(uint32_t *tid, uint32_t *seed, int32_t *seeds, int32_t *n, int32_t *idx, uint8_t *owner) {
     if (!s_tn_offer) return 0;
     s_tn_offer = 0, s_tn_state = 1;

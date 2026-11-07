@@ -42,6 +42,8 @@ int32_t cr_robot_len(int32_t k);
 int32_t cr_robot_read(int32_t k, uint8_t *buf, int32_t max);
 bool cr_robot_write(int32_t k, const uint8_t *src, int32_t n, const char *name);
 bool cr_robot_name(int32_t k, char *out);
+bool cr_tn_autojoin(void);                                             // main/net.c
+void cr_tn_autojoin_set(bool on);
 int32_t cr_robot_check(const uint8_t *src, int32_t n, uint8_t *msg, int32_t max); // src/apps/robot_store.cr
 
 #define AP_CHANNEL 6
@@ -171,7 +173,11 @@ static esp_err_t h_root(httpd_req_t *r)
     put(r, "'><label><input type=checkbox name=open value=1> Open network (no password)</label></fieldset>"
            "<fieldset><legend>Network mode</legend><label><input type=checkbox name=net value=1");
     if (net) put(r, " checked");
-    put(r, "> Badge link on (UDP + ESP-NOW; starts when you leave Settings)</label></fieldset>"
+    put(r, "> Badge link on (UDP + ESP-NOW; starts when you leave Settings)</label><br>"
+           "<label><input type=checkbox name=aj value=1");
+    if (cr_tn_autojoin()) put(r, " checked");
+    put(r, "> Join robot tournaments from nearby badges</label><br><small>When the badge shows Home or ROBOTS, "
+           "or nobody has touched it for a minute; otherwise the top bar says TOURNEY NEARBY.</small></fieldset>"
            "<button>Save</button></form>");
     put(r, "<p><a href=/robots>Robots</a>: battle robots for the ROBOTS app &middot; "
            "<a href=/compete>How to compete</a>: robots, snake bots, tournaments</p>");
@@ -252,6 +258,7 @@ static esp_err_t h_save(httpd_req_t *r)
     int s = form_get(body, "ssid", ssid, 32), p = form_get(body, "pass", pass, 63);
     bool open = form_get(body, "open", tmp, 3) > 0;
     bool net = form_get(body, "net", tmp, 3) > 0;
+    bool aj = form_get(body, "aj", tmp, 3) > 0;
     if (a == -2 || b == -2) return reply(r, "Not saved: nametag lines are 12 characters max");
     if (s == -2 || p == -2) return reply(r, "Not saved: SSID 32 / password 63 characters max");
     if (!printable(n1, false) || !printable(n2, false)) return reply(r, "Not saved: nametag uses plain ASCII, no '|'");
@@ -280,7 +287,8 @@ static esp_err_t h_save(httpd_req_t *r)
         nvs_commit(h);
         nvs_close(h);
     }
-    printf("settings: saved (name, wifi %s, net %d)\n", s > 0 ? "set" : "kept", net);
+    if (aj != cr_tn_autojoin()) cr_tn_autojoin_set(aj); // `robot autojoin on|off`
+    printf("settings: saved (name, wifi %s, net %d, autojoin %d)\n", s > 0 ? "set" : "kept", net, aj);
     return reply(r, "Saved.");
 }
 

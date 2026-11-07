@@ -661,7 +661,55 @@ static int tn_peers(tn_peer_t *out, int max, int64_t now)
     return n;
 }
 
-static const tn_io_t s_tn_io = {rn_send, tn_event, tn_mine, tn_builtins, tn_peers};
+static void rn_lock(void);
+static void rn_unlock(void);
+
+// Joining someone else's tournament is opt-in (tn_may_join): NVS net/autojoin
+// (default on: join on Home or ROBOTS, or after 60 s untouched; off: never).
+static volatile bool s_tn_where;   // Home or ROBOTS on screen (src/main.cr enter_screen)
+static volatile int64_t s_touched; // last button press or knob turn (knob task)
+static int s_autojoin = -1;        // -1: not read yet
+
+bool cr_tn_autojoin(void)
+{
+    if (s_autojoin < 0) {
+        nvs_handle_t h;
+        uint8_t v = 1;
+        if (nv(&h, false)) {
+            if (nvs_get_u8(h, "autojoin", &v) != ESP_OK) v = 1;
+            nvs_close(h);
+        }
+        s_autojoin = v != 0;
+    }
+    return s_autojoin;
+}
+
+void cr_tn_autojoin_set(bool on)
+{
+    nvs_handle_t h;
+    if (nv(&h, true)) {
+        nvs_set_u8(h, "autojoin", on);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    s_autojoin = on;
+}
+
+void cr_tn_where(int32_t home_or_robots) { s_tn_where = home_or_robots != 0; }
+
+static bool tn_may(int64_t now) { return tn_may_join(cr_tn_autojoin(), s_tn_where, now - s_touched); }
+
+// A tournament nearby that this badge did not join (top bar hint).
+int32_t cr_tn_nearby(void)
+{
+    if (!s_rn_lock) return 0;
+    rn_lock();
+    bool v = tn_nearby(NULL, 0, now_ms());
+    rn_unlock();
+    return v;
+}
+
+static const tn_io_t s_tn_io = {rn_send, tn_event, tn_mine, tn_builtins, tn_peers, tn_may};
 
 static void rn_lock(void)
 {
@@ -1150,6 +1198,11 @@ void cr_net_boot(void)
 // knob task, every 15 ms
 void cr_net_input(int32_t mv_l, int32_t mv_r, uint32_t btns)
 {
+    static int32_t seen_l = -1000, seen_r = -1000;
+    if (btns || mv_l - seen_l > 120 || seen_l - mv_l > 120 || mv_r - seen_r > 120 || seen_r - mv_r > 120) {
+        if (btns || seen_l > -1000) s_touched = now_ms(); // a press or a real turn, not knob noise
+        seen_l = mv_l, seen_r = mv_r;
+    }
     s_in_l = mv_l;
     s_in_btn = btns;
 }

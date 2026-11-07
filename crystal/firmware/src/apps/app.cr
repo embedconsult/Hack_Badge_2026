@@ -235,6 +235,7 @@ end
 
 lib LibIDF
   fun cr_battery_pct : Int32 # main/apps.c: 0..100, -1 = on USB, -2 = unknown
+  fun cr_tn_nearby : Int32   # main/net.c: a robot tournament nearby, not joined
 end
 
 # Drawing helpers into EPD.black (5x7 font, 6 px per char x scale).
@@ -380,7 +381,11 @@ module TopBar
     end
     w = n &* 12 &+ (k > 0 ? 24 &+ 36 &+ k &* 12 : 0)
     x = (EPD::WIDTH &- w).unsafe_div(2)
-    x = draw_bytes(x, 27, v, n, EPD::BLACK, 2)
+    if LibIDF.cr_tn_nearby != 0 # instead of the version: a hint, nothing more (robot autojoin)
+      x = Gfx.text(x, 27, "TOURNEY NEARBY", 2)
+    else
+      x = draw_bytes(x, 27, v, n, EPD::BLACK, 2)
+    end
     if k > 0
       x = x &+ 24
       Gfx.frame(x, 27, 26, 14, 2)
