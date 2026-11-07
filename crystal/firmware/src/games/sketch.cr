@@ -47,6 +47,10 @@ module Sketch
   Y_MIN = 123
   X_MAX = 824 # 826 - HALF - 1
   Y_MAX = 522
+  # The pen stays clear of the version label at the top and the help strip
+  # at the bottom of the white screen (main.cr draws both inside it).
+  PEN_Y_MIN = Y_MIN + 20 # label rows Y_MIN .. Y_MIN + 17
+  PEN_Y_MAX = Y_MAX - 46 # help strip rows Y_MAX - 42 .. Y_MAX - 5
 
   PX_PER_REV      =  240 # pen travel per full knob turn (0..1 knob range)
   DEADBAND        =   12 # counts (of 4096) of ADC noise to ignore
@@ -378,7 +382,7 @@ module Sketch
     tx = @@px &+ mx
     ty = @@py &+ my
     nx = tx < X_MIN ? X_MIN : (tx > X_MAX ? X_MAX : tx)
-    ny = ty < Y_MIN ? Y_MIN : (ty > Y_MAX ? Y_MAX : ty)
+    ny = ty < PEN_Y_MIN ? PEN_Y_MIN : (ty > PEN_Y_MAX ? PEN_Y_MAX : ty)
     if nx != tx
       @@wall_x = now
       @@walled_x = true

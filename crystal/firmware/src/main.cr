@@ -191,7 +191,7 @@ module Shared
   @@ovr_l = -1         # knob override mV (-1 = real ADC)
   @@ovr_r = -1
   @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
-  @@sk_win = false        # Sketch ink through rows-only windows (shell: flag SK_WIN)
+  @@sk_win = true         # Sketch ink through rows-only windows (shell: flag SK_WIN)
   @@req = 0_u32        # REQ_* bits for the main loop (atomic)
   @@sx0 = 0
   @@sy0 = 0
@@ -1038,143 +1038,16 @@ module RedCheck
 end
 
 def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32, colour : Bool = false) : Nil
-  buf = Shared.label_buf
-  buf[0] = 0x53_u8 # S
-  buf[1] = 0x4B_u8 # K
-  buf[2] = 0x20_u8
-  n = 3
-  n = put_field(buf, n, wait, true)
-  n = put_field(buf, n, up, false)
-  n = put_field(buf, n, panel, false)
-  n = put_field(buf, n, total, false)
-  # Second line: the last Sketch entry, decode/upload/panel/restart ms.
-  e = n
-  buf[e] = 0x45_u8 # E
-  buf[e &+ 1] = 0x4E_u8 # N
-  buf[e &+ 2] = 0x54_u8 # T
-  buf[e &+ 3] = 0x20_u8
-  m = e &+ 4
-  m = put_field(buf, m, SkState.entry_decode, true)
-  m = put_field(buf, m, SkState.e_up, false)
-  m = put_field(buf, m, SkState.e_pan, false)
-  m = put_field(buf, m, SkState.e_rst, false)
-  # Plane check (row-repeat corruption hunt): non-zero red-plane bytes
-  # (0 expected in B/W mode) and an additive checksum of the black plane's
-  # rows 560..671, as "R<count> B<sum>".
-  red_nz = 0
-  rd = EPD.red
-  i = 0
-  while i < EPD::PLANE
-    red_nz = red_nz &+ 1 if rd[i] != 0_u8
-    i = i &+ 1
-  end
-  bsum = 0
-  bk = EPD.black
-  i = 560 &* EPD::ROW_BYTES
-  while i < EPD::PLANE
-    bsum = bsum &+ bk[i].to_i32!
-    i = i &+ 1
-  end
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x52_u8 # R
-  m = m &+ 2
-  m = m &+ put_decimal(buf + m.to_i64!, red_nz)
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x42_u8 # B
-  m = m &+ 2
-  m = m &+ put_decimal(buf + m.to_i64!, bsum)
-  # Copy test: canvas ink at row r (< 336) also present 336 rows lower in
-  # the ESP planes? CR = red-plane copies, CB = black-plane copies;
-  # W = non-zero red bytes inside the white screen box (should be 0).
-  cv = Sketch.canvas
-  cr = 0
-  cb = 0
-  i = 0
-  while i < 336 &* EPD::ROW_BYTES
-    v = cv[i]
-    if v != 0_u8
-      cr = cr &+ 1 if (rd[i &+ 40320] & v) != 0_u8
-      cb = cb &+ 1 if (bk[i &+ 40320] & v) == v
-    end
-    i = i &+ 1
-  end
-  wr = 0
-  row = Sketch::Y_MIN
-  while row <= Sketch::Y_MAX
-    c = Sketch::X_MIN.unsafe_shr(3) &+ 1
-    while c < Sketch::X_MAX.unsafe_shr(3)
-      wr = wr &+ 1 if rd[row &* EPD::ROW_BYTES &+ c] != 0_u8
-      c = c &+ 1
-    end
-    row = row &+ 1
-  end
-  band = 0
-  while band < 11
-    nz = 0
-    j = band &* 64 &* EPD::ROW_BYTES
-    e2 = j &+ 64 &* EPD::ROW_BYTES
-    e2 = EPD::PLANE if e2 > EPD::PLANE
-    while j < e2
-      nz = nz &+ 1 if rd[j] != 0_u8
-      j = j &+ 1
-    end
-    log2("sketch: red plane band (64 rows) / non-zero bytes", band, nz)
-    band = band &+ 1
-  end
-  log2("sketch: copy test CR (red copies) / CB (black copies)", cr, cb)
-  log("sketch: red bytes inside the white screen (W)", wr)
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x43_u8 # C
-  buf[m &+ 2] = 0x52_u8 # R
-  m = m &+ 3
-  m = m &+ put_decimal(buf + m.to_i64!, cr)
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x43_u8 # C
-  buf[m &+ 2] = 0x42_u8 # B
-  m = m &+ 3
-  m = m &+ put_decimal(buf + m.to_i64!, cb)
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x57_u8 # W
-  m = m &+ 2
-  m = m &+ put_decimal(buf + m.to_i64!, wr)
-  mism = RedCheck.run(colour)
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x4D_u8 # M = red bytes differing from the expected red plane
-  m = m &+ 2
-  if mism < 0
-    buf[m] = 0x3F_u8
-    m = m &+ 1
-  else
-    m = m &+ put_decimal(buf + m.to_i64!, mism)
-    if mism > 0
-      buf[m] = 0x40_u8 # '@' first row
-      m = m &+ 1
-      m = m &+ put_decimal(buf + m.to_i64!, RedCheck.first_row)
-    end
-  end
-  off = SkState.check_overlap
-  buf[m] = 0x20_u8
-  buf[m &+ 1] = 0x4F_u8 # O = canvas - red
-  m = m &+ 2
-  if off < 0
-    buf[m] = 0x2D_u8 # '-'
-    m = m &+ 1
-    off = 0 &- off
-  end
-  m = m &+ put_decimal(buf + m.to_i64!, off)
-  log2("sketch: plane check red nonzero / black rows 560+ sum", red_nz, bsum)
-  w = (n > m &- e ? n : m &- e) &* 12 &+ 6
-  w = 260 if w < 260
-  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, w, 3 &* 7 &* 2 &+ 14, EPD::WHITE)
-  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3, buf, n, EPD::BLACK, 2)
-  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3 &+ 18, buf + e.to_i64!, m &- e, EPD::BLACK, 2)
-  # Third line: the firmware version.
+  # Just the firmware version, top-left of the white screen (the pen stays
+  # below it: Sketch::PEN_Y_MIN). Timings are in the log.
+  log2("sketch: last ink latency / panel ms", wait, panel)
   v = LibIDF.cr_version
   k = 0
   while k < 40 && v[k] != 0_u8
     k = k &+ 1
   end
-  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 3 &+ 36, v, k, EPD::BLACK, 2)
+  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, k &* 12 &+ 6, 7 &* 2 &+ 4, EPD::WHITE)
+  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 2, v, k, EPD::BLACK, 2)
 end
 
 # Asymmetric marker for the window test: 120x80 outline (6 px), a solid
@@ -1350,7 +1223,7 @@ SK_HINT_Y = Sketch::Y_MAX - 22
 def draw_sketch_hint(ready : Bool) : Nil
   EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 20, 46 &* 12 &+ 8, 2 &* 7 &* 2 &+ 10, EPD::WHITE)
   draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y &- 18, "KNOBS: DRAW  A: ERASE  B: CLEAN  HOLD A: COLOR", EPD::BLACK, 2)
-  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y, "READY - TURN KNOBS TO DRAW (COLOR: AUTO 30S)", EPD::BLACK, 2) if ready
+  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y, "READY - TURN KNOBS TO DRAW", EPD::BLACK, 2) if ready
 end
 
 module Store
@@ -1373,8 +1246,9 @@ module Store
       LibIDF.nvs_get_u32(@@h, "boots".to_unsafe, pointerof(c))
       c = c &+ 1
       LibIDF.nvs_set_u32(@@h, "boots".to_unsafe, c)
-      v = 0_u8
-      @@sk_win = LibIDF.nvs_get_u8(@@h, "sk_win".to_unsafe, pointerof(v)) == 0 && v != 0_u8
+      v = 1_u8 # default ON when never stored
+      LibIDF.nvs_get_u8(@@h, "sk_win".to_unsafe, pointerof(v))
+      @@sk_win = v != 0_u8
       LibIDF.nvs_commit(@@h)
       @@boots = c.to_i32!
     end
@@ -1384,7 +1258,7 @@ module Store
 
   @@reset_reason = 0
   @@boots = 0
-  @@sk_win = false # value last stored in NVS
+  @@sk_win = true # value last stored in NVS (default on)
 
   def self.reset_reason : Int32
     @@reset_reason
@@ -1505,6 +1379,15 @@ module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
   @@red_frame = false # the red frame is still on the panel (survives re-entry)
   @@hint = false      # the "B: COLOR" hint is in the planes
+  @@after_colour = false # colour show-off on the panel, planes already B/W
+
+  def self.after_colour? : Bool
+    @@after_colour
+  end
+
+  def self.after_colour=(v : Bool) : Nil
+    @@after_colour = v
+  end
 
   def self.red_frame? : Bool
     @@red_frame
@@ -1738,9 +1621,17 @@ def sketch_colour : Nil
   # Label with the R/B/O plane check + version also on the colour frame
   # (and logged), so the colour render can be diagnosed from a photo.
   draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0, true)
-  ok = colour_refresh
-  SkState.colour = ok
-  SkState.red_frame = ok # stays on the panel until another screen replaces it
+  colour_refresh
+  # Show-off render only: drawing stays black/white. Back to the B/W planes
+  # (frame red -> black) now; the next stroke does one full B/W refresh
+  # (SkState.after_colour), then windows again.
+  Sketch.render(EPD.black, EPD.red)
+  red_to_black
+  draw_sketch_hint(false)
+  draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
+  SkState.colour = false
+  SkState.red_frame = false
+  SkState.after_colour = true
   SkState.hint = false
   SkState.mark_shown
 end
@@ -1980,12 +1871,6 @@ fun crystal_app_main : Void
       elsif Games.pressed?(inp, Games::BTN_B)
         window_test
       end
-    elsif scr == SCR_SKETCH && !SkState.colour? && now &- (colour_due &- last_input > AUTO_COLOUR_MS ? colour_due : last_input &+ AUTO_COLOUR_MS) >= 0
-      # 30 s without knob movement or a button: the red frame in colour,
-      # with the drawing, once. Hold B does the same at once; Menu aborts.
-      log("sketch: auto colour refresh", 0)
-      sketch_colour
-      colour_due = millis &+ AUTO_COLOUR_MS
     elsif scr == SCR_SKETCH
       ticked = Menu.tick(now, inp)
       if ticked && (Menu.needs_background? || Sketch.want_clean?)
@@ -2053,7 +1938,15 @@ fun crystal_app_main : Void
           Shared.led_mode = LED_CYAN
           kind = SkState.colour? ? red_ink_kind : WIN_LUT
           EPD.fast_pulls = 1
-          if Shared.sk_win? && !hint_gone
+          if SkState.after_colour?
+            # First stroke after the colour show-off: one full B/W refresh
+            # (2 pulls: the red frame turns black), then windows again.
+            SkState.after_colour = false
+            EPD.fast_pulls = 2
+            EPD.raw = true
+            EPD.refresh(true, WIN_LUT)
+            EPD.raw = false
+          elsif Shared.sk_win? && !hint_gone
             # Rows-only window (mode 8): full width x the changed rows.
             EPD.refresh_window2(b[0], b[1], 0, EPD::HALF_BYTES &- 1,
               b[0], b[1], 0, EPD::HALF_BYTES &- 1, kind, 8)

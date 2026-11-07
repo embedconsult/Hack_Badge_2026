@@ -440,11 +440,11 @@ describe Sketch do
     Sketch.x.should eq Sketch::X_MAX - 3
     d = 1000
     6.times { |i| d = (d + 2000) & 4095; sk_tick(40 + i, (c + 30 - 52) & 4095, d) }
-    Sketch.y.should eq Sketch::Y_MIN
+    Sketch.y.should eq Sketch::PEN_Y_MIN
     d2 = 1000
     6.times { |i| d2 = (d2 - 2000) & 4095; sk_tick(60 + i, 0, 0) } # re-reference
-    Sketch.y.should be >= Sketch::Y_MIN
-    Sketch.y.should be <= Sketch::Y_MAX
+    Sketch.y.should be >= Sketch::PEN_Y_MIN
+    Sketch.y.should be <= Sketch::PEN_Y_MAX
     Games.get(Sketch.canvas, Sketch::X_MAX + 2, 322).should be_false
   end
 
