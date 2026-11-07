@@ -554,6 +554,16 @@ void tn_rx(rn_addr_t from, const uint8_t mac[6], const char *name, const uint8_t
         return;
     }
     if (sub == 'O') {
+        // Being asked to organize switches the screen too: same opt-in as joining.
+        if (!tn_busy() && s_io->may_join && !s_io->may_join(now)) {
+            // (an O carries no tournament id yet: mark it 1 for the TOURNEY NEARBY hint)
+            if (!s_near.tid || now - s_near.at > 10000)
+                printf("tourney: %s's tournament nearby, not joining (robot autojoin)\n", name);
+            s_near.tid = tid ? tid : 1, s_near.at = now;
+            snprintf(s_near.name, sizeof s_near.name, "%s", name);
+            event(TN_EV_STATUS);
+            return;
+        }
         if (!tn_busy() && !s_pend.on && n >= 5) { // in a moment: hear every badge's announce first
             s_pend.on = true;
             s_pend.at = now + HEAR_MS;
