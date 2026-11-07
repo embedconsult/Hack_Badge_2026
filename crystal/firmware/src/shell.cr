@@ -102,6 +102,7 @@ module Shell
       Shared.rendering? ? 1 : 0, EPD.busy? ? 1 : 0, EPD.session_open? ? 1 : 0)
     LibIDF.cr_log3("status: last kind / pulls / panel ms".to_unsafe, EPD.latched_kind, EPD.fast_pulls, EPD.panel_ms)
     LibIDF.cr_log3("status: upload ms / restart ms / session images".to_unsafe, EPD.upload_ms, EPD.restart_ms, EPD.session_images)
+    LibIDF.cr_log3("status: collapsed pulls redone / - / -".to_unsafe, EPD.collapsed, 0, 0)
     LibIDF.cr_log3("status: quick session / QUICK_OPEN / SKIP_ZERO_RED".to_unsafe,
       EPD.quick? ? 1 : 0, EPD.quick_open? ? 1 : 0, EPD.skip_zero_red? ? 1 : 0)
     LibIDF.cr_log3("status: SK_RED_INK_PLAIN / sketch colour / red frame".to_unsafe,

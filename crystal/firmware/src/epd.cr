@@ -165,6 +165,7 @@ module EPD
   REG45_B1    = 0x84_u8
   B_REFRESH_PULLS = 3 # epd97.cpp default for driver B fast refresh
   SESSION_IMAGES  = 20     # epd97_config.h EPD_SESSION_IMAGES
+  COLLAPSED_MS    = 300    # a full-screen fast pull shorter than this drove nothing
   # Quick session open for fast (0xB0) sessions, from yigitabi5444's
   # supercon26-badge-os (measured on this badge: open 348 ms instead of
   # 2443 ms, 0xB0 still latches): panel supply left on between fast sessions,
@@ -223,6 +224,7 @@ module EPD
   @@quick_open = true    # = QUICK_OPEN, switchable at run time
   @@skip_zero_red = false # = SKIP_ZERO_RED, switchable at run time
   @@session_images = 0
+  @@collapsed = 0        # collapsed fast pulls detected and redone
   @@quick = false        # current session opened with the quick waits
   @@powered = false      # panel supply (GPIO48) is on
   @@stop_pending = false # a refresh was aborted: wait for BUSY, then close
@@ -310,6 +312,10 @@ module EPD
 
   def self.quick? : Bool
     @@quick
+  end
+
+  def self.collapsed : Int32
+    @@collapsed
   end
 
   def self.panel_ms : Int32
@@ -1639,6 +1645,27 @@ module EPD
 
     first = !@@lut_latched
     rc = first ? do_refresh(fast) : trigger(false, fast ? FAST_TIMEOUT_MS : SLOW_TIMEOUT_MS)
+    # Backstop: a full-screen fast pull is ~1.16 s on driver B. A pull that
+    # finishes in < COLLAPSED_MS drove (almost) nothing (seen: 72 ms right
+    # after a session open). Close the session with a power cycle, reopen it
+    # with the reference waits and redo this image once.
+    if fast && @@driver_b && rc >= 0 && rc < COLLAPSED_MS
+      @@collapsed = @@collapsed &+ 1
+      log2("EPD: collapsed pull ms / first-of-session", rc, first ? 1 : 0)
+      log2("EPD:   session quick / supply powered", @@quick ? 1 : 0, @@powered ? 1 : 0)
+      save_quick = @@quick_open
+      @@quick_open = false # the stop powers the supply off; reopen the slow way
+      @@quick = false
+      cog_stop
+      cog_initial(false)
+      @@session_open = true
+      @@lut_latched = false
+      write_planes(have_red && !draw_red, draw_red)
+      rc = do_refresh(fast)
+      @@quick_open = save_quick
+      first = true
+      log("EPD: collapsed pull redone, panel ms", rc)
+    end
     t_ref_end = millis
     # Restart cost: power-up/reset before the upload plus, for the first image
     # of a session, the register/soft-start time ahead of the first pull.

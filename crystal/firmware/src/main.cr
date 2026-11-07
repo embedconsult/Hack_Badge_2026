@@ -1844,6 +1844,8 @@ fun crystal_app_main : Void
       log("shell: clean (slow white, zero red)", 0)
       EPD.fill(EPD::WHITE)
       colour_refresh
+      SkState.red_frame = false # the panel is white now
+      SkState.colour = false
       Shared.rendering = true
       enter_screen(scr, false)
       Shared.rendering = false
@@ -1916,6 +1918,7 @@ fun crystal_app_main : Void
         log("diag: hold A, slow white clean", 0)
         EPD.fill(EPD::WHITE)
         colour_refresh
+        SkState.red_frame = false
         show_diag
       elsif Games.pressed?(inp, Games::BTN_A)
         lut_timing
