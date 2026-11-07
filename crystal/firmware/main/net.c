@@ -31,6 +31,9 @@ bool cr_wifi_connected(void);
 const char *cr_wifi_ip(void);
 int32_t cr_wifi_channel(void);
 int32_t cr_wifi_rssi(void);
+bool cr_wifi_ap_start(const char *ssid, const char *pass, int32_t ch);
+void cr_wifi_ap_stop(void);
+int32_t cr_wifi_ap_clients(void);
 void cr_notify_main(void);             // main/main.c
 
 #define PORT 4626
@@ -119,6 +122,11 @@ static volatile uint32_t s_ver;  // status text changes
 static int s_sock = -1;
 static uint8_t s_seq;
 static bool s_espnow;
+static bool s_ap;              // `net ap on`: own access point on AP_CHANNEL (NVS net/ap)
+static char s_ap_ssid[33];
+#define AP_CHANNEL 1           // badge os's ESP-NOW channel
+#define AP_PASS_DEFAULT "supercon"
+#define IFX (s_ap ? WIFI_IF_AP : WIFI_IF_STA)
 static char s_name[2][13] = {"Jason", "Kridner"};
 static char s_state[40] = "off";
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -328,7 +336,7 @@ static void espnow_to(const uint8_t *mac, const void *d, int n)
 {
     if (!s_espnow) return;
     if (!esp_now_is_peer_exist(mac)) {
-        esp_now_peer_info_t pi = {.ifidx = WIFI_IF_STA, .channel = 0};
+        esp_now_peer_info_t pi = {.ifidx = IFX, .channel = 0};
         memcpy(pi.peer_addr, mac, 6);
         esp_now_add_peer(&pi);
     }
@@ -649,21 +657,33 @@ static void on_espnow(const enow_t *r, int64_t now)
 
 static void net_task(void *arg)
 {
-    snprintf(s_state, sizeof s_state, "joining wifi");
+    char ap_pass[65] = AP_PASS_DEFAULT;
+    if (s_ap) {
+        nvs_handle_t h;
+        size_t n = sizeof ap_pass;
+        if (nv(&h, false)) {
+            if (nvs_get_str(h, "ap_pass", ap_pass, &n) != ESP_OK) snprintf(ap_pass, sizeof ap_pass, AP_PASS_DEFAULT);
+            nvs_close(h);
+        }
+        uint8_t m[6];
+        esp_read_mac(m, ESP_MAC_WIFI_STA);
+        snprintf(s_ap_ssid, sizeof s_ap_ssid, "BADGE-LINK-%02X%02X", m[4], m[5]);
+    }
+    snprintf(s_state, sizeof s_state, s_ap ? "starting access point" : "joining wifi");
     s_ver++;
-    while (s_run && !cr_wifi_hold()) {
+    while (s_run && !(s_ap ? cr_wifi_ap_start(s_ap_ssid, ap_pass, AP_CHANNEL) : cr_wifi_hold())) {
         snprintf(s_state, sizeof s_state, "no wifi, retrying");
         s_ver++;
         for (int i = 0; i < 100 && s_run; i++) vTaskDelay(pdMS_TO_TICKS(100));
     }
     if (!s_run) goto out;
     esp_wifi_set_ps(WIFI_PS_NONE);
-    esp_read_mac(s_me, ESP_MAC_WIFI_STA);
+    esp_read_mac(s_me, s_ap ? ESP_MAC_WIFI_SOFTAP : ESP_MAC_WIFI_STA); // the MAC our ESP-NOW frames carry
     s_rxq = xQueueCreate(8, sizeof(enow_t));
     s_espnow = esp_now_init() == ESP_OK;
     if (s_espnow) {
         esp_now_register_recv_cb(espnow_cb);
-        esp_now_peer_info_t bc = {.ifidx = WIFI_IF_STA, .channel = 0};
+        esp_now_peer_info_t bc = {.ifidx = IFX, .channel = 0};
         memcpy(bc.peer_addr, bcast6, 6);
         esp_now_add_peer(&bc);
     }
@@ -705,6 +725,14 @@ static void net_task(void *arg)
         if (now >= next_hello) {
             for (int i = 0; i < PEERS; i++)
                 if (s_peer[i].seen && now - s_peer[i].seen > 60000) s_peer[i].seen = 0, s_ver++, promisc_sync();
+            if (s_ap) { // AP: the clients' RSSI as the AP sees them
+                wifi_sta_list_t l;
+                if (esp_wifi_ap_get_sta_list(&l) == ESP_OK)
+                    for (int i = 0; i < l.num; i++) {
+                        peer_t *p = peer_find(l.sta[i].mac, false);
+                        if (p) peer_rssi(p, l.sta[i].rssi, now);
+                    }
+            }
             send_hello(now);
             next_hello = now + HELLO_MS + esp_random() % 250;
             s_ver++; // ages on the LINK screen
@@ -718,7 +746,8 @@ static void net_task(void *arg)
     vQueueDelete(s_rxq);
     s_rxq = NULL;
 out:
-    cr_wifi_release();
+    if (s_ap) cr_wifi_ap_stop();
+    else cr_wifi_release();
     P.state = L_FREE;
     snprintf(s_state, sizeof s_state, "off");
     s_ver++;
@@ -738,6 +767,20 @@ static void start(void)
 }
 
 bool cr_net_on(void) { return s_run; }
+bool cr_net_ap(void) { return s_ap; }
+
+// `net ap on|off`: saved; restarts network mode if it is on.
+void cr_net_set_ap(bool on)
+{
+    nvs_handle_t h;
+    if (nv(&h, true)) { nvs_set_u8(h, "ap", on); nvs_commit(h); nvs_close(h); }
+    bool was = s_run;
+    s_run = false;
+    for (int i = 0; i < 100 && s_task_alive; i++) vTaskDelay(pdMS_TO_TICKS(50));
+    s_ap = on;
+    if (was) start();
+    s_ver++;
+}
 
 void cr_net_set(bool on)
 {
@@ -752,8 +795,10 @@ void cr_net_boot(void)
 {
     nvs_handle_t h;
     uint8_t on = 0;
+    uint8_t ap = 0;
     load_name();
-    if (nv(&h, false)) { nvs_get_u8(h, "on", &on); nvs_close(h); }
+    if (nv(&h, false)) { nvs_get_u8(h, "on", &on); nvs_get_u8(h, "ap", &ap); nvs_close(h); }
+    s_ap = ap;
     if (on) start();
 }
 
@@ -782,7 +827,10 @@ int32_t cr_net_status_text(char *buf, int32_t max)
 {
     int64_t now = now_ms();
     int n = snprintf(buf, max, "NET %s%s\n", s_run ? "ON: " : "OFF", s_run ? s_state : "  (A: TURN ON)");
-    if (s_run && cr_wifi_connected())
+    if (s_run && s_ap && cr_wifi_connected())
+        n += snprintf(buf + n, max - n, "AP %s CH %d IP 192.168.4.1 CLIENTS %ld\n", s_ap_ssid, AP_CHANNEL,
+                      (long)cr_wifi_ap_clients());
+    else if (s_run && cr_wifi_connected())
         n += snprintf(buf + n, max - n, "IP %s CH %ld RSSI %ld\n", cr_wifi_ip(), (long)cr_wifi_channel(),
                       (long)cr_wifi_rssi());
     n += snprintf(buf + n, max - n, "ME %02X%02X  NAME %s\n", s_me[4], s_me[5], s_name[0]);

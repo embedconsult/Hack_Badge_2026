@@ -137,7 +137,7 @@ Body: `mac[6]`, `rssi` int8, then an ESP-NOW payload (<= 200 bytes).
 - It parses `BOSR` beacons (name, shared FTM ranges) and lists those badges as kind 3 in its own
   announces (via = itself).
 - ESP-NOW runs on the station's channel. **Bridging badge os needs channel 1**: either the access point is
-  on channel 1, or (planned) `net ap`, where the Crystal badge hosts a SoftAP on channel 1 that the
+  on channel 1, or `net ap on`, where the Crystal badge hosts a soft AP on channel 1 that the
   BeagleBadge joins. With tonight's hotspot on channel 6 the bridge only reaches badges on channel 6.
 
 ## 6. Network mode on the Crystal badge
@@ -147,6 +147,31 @@ Body: `mac[6]`, `rssi` int8, then an ESP-NOW payload (<= 200 bytes).
 - While on: Wi-Fi stays connected (reconnects forever), power save off (ESP-NOW would drop frames),
   promiscuous RX on, announces every second.
 - LINK screen: network state, IP, channel, and the peers it knows with kind, RSSI and age.
+
+### Access point mode (`net ap on`): one channel for everyone
+
+The ESP32-S3 has one radio on one channel. In station mode it follows the access point (a phone hotspot
+picks 1, 6 or 11 by itself), and badge os badges are fixed on channel 1, so they only meet when the
+hotspot happens to be on 1. `net ap on` makes the Crystal badge the network instead:
+
+- The badge runs a soft AP **`BADGE-LINK-xxxx`** (xxxx = last two bytes of its station MAC) on
+  **channel 1**, WPA2 with password `supercon` (NVS `net/ap_pass` overrides; 8+ chars, else open),
+  DHCP server, badge at **192.168.4.1/24**, up to 4 clients. No station meanwhile, so no internet and
+  no OTA (`ota` says so; `net ap off` goes back to station mode). Saved as NVS `net/ap`.
+- The BeagleBadge joins it (`crystal/net/beagle_wifi.sh badge`; `beagle_wifi.sh home` to go back).
+  The protocol is unchanged: UDP 4626 broadcasts on 192.168.4.255/255.255.255.255.
+- ESP-NOW runs on the AP interface, channel 1: badge os badges hear our `BOSR` beacons and Pong
+  packets, and the bridge forwards theirs to the BeagleBadge. Our ESP-NOW identity becomes the
+  **soft-AP MAC** (station MAC + 1), which is also our badge link identity in this mode, so badge os
+  pairing and host election see one consistent address.
+- RSSI of the BeagleBadge: the AP's station list (`esp_wifi_ap_get_sta_list`) plus promiscuous RX.
+- The BeagleBadge's own ESP-NOW injection (`espnow_nl80211.py inject`) then also goes out on
+  channel 1, because its wlan0 follows the badge's AP.
+- Later: `ftm_responder = true` on this AP (needs `CONFIG_ESP_WIFI_FTM_ENABLE`) would let badge os
+  badges FTM-range the Crystal badge, as they do each other.
+- Coordination: the Settings app (apps-home branch) also starts a soft AP. Both use the one radio, so
+  they cannot run at once; this mode's keys live in the `net` namespace (`ap`, `ap_pass`) and the
+  Settings AP should stop network mode (`cr_net_set(false)`) before it starts and restart it after.
 
 ## 7. Open experiments
 

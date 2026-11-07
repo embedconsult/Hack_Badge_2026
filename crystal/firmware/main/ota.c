@@ -187,9 +187,13 @@ static void wifi_down(void)
     printf("wifi: off (internal heap free %u)\n", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 
+void cr_wifi_ap_stop(void);
+static esp_netif_t *s_ap_netif;          // `net ap on`: the badge's own access point (main/net.c)
+
 static bool wifi_up(void)
 {
     char ssid[33], pass[65];
+    if (s_ap_netif) { fail("net ap is on: no station (net ap off)"); return false; }
     if (s_netif) { // already up (network mode): just wait for the link
         EventBits_t b = xEventGroupWaitBits(s_eg, BIT_UP, pdFALSE, pdFALSE, pdMS_TO_TICKS(25000));
         if (!(b & BIT_UP)) { fail("wifi: not connected"); return false; }
@@ -279,7 +283,62 @@ void cr_wifi_release(void)
     if (!__atomic_load_n(&s_busy, __ATOMIC_SEQ_CST)) wifi_down(); // an OTA job downs it when done
 }
 
-bool cr_wifi_connected(void) { return s_netif && s_eg && (xEventGroupGetBits(s_eg) & BIT_UP); }
+// `net ap on`: an access point on `ch` (badge os uses channel 1), DHCP server
+// 192.168.4.1/24. No station meanwhile (an ESP32 radio is on one channel).
+bool cr_wifi_ap_start(const char *ssid, const char *pass, int32_t ch)
+{
+    if (s_netif || s_ap_netif) return false;
+    if (!s_net_inited) {
+        esp_err_t e = esp_netif_init();
+        if (e == ESP_OK) e = esp_event_loop_create_default();
+        if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return false;
+        s_net_inited = true;
+    }
+    s_ap_netif = esp_netif_create_default_wifi_ap();
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    if (!s_ap_netif || esp_wifi_init(&cfg) != ESP_OK) {
+        if (s_ap_netif) esp_netif_destroy_default_wifi(s_ap_netif);
+        s_ap_netif = NULL;
+        return false;
+    }
+    esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    esp_wifi_set_mode(WIFI_MODE_AP);
+    wifi_config_t wc = {0};
+    size_t n = strlen(ssid) > 32 ? 32 : strlen(ssid);
+    memcpy(wc.ap.ssid, ssid, n);
+    wc.ap.ssid_len = n;
+    memcpy(wc.ap.password, pass, strlen(pass) > 63 ? 63 : strlen(pass));
+    wc.ap.channel = ch;
+    wc.ap.authmode = strlen(pass) >= 8 ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
+    wc.ap.max_connection = 4;
+    wc.ap.beacon_interval = 100;
+    esp_wifi_set_config(WIFI_IF_AP, &wc);
+    if (esp_wifi_start() != ESP_OK) { cr_wifi_ap_stop(); return false; }
+    s_channel = ch;
+    snprintf(s_last_ip, sizeof s_last_ip, "192.168.4.1");
+    printf("wifi: access point \"%s\" on channel %ld\n", ssid, (long)ch);
+    return true;
+}
+
+void cr_wifi_ap_stop(void)
+{
+    if (!s_ap_netif) return;
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    esp_netif_destroy_default_wifi(s_ap_netif);
+    s_ap_netif = NULL;
+    s_last_ip[0] = 0;
+}
+
+bool cr_wifi_ap_on(void) { return s_ap_netif != NULL; }
+
+int32_t cr_wifi_ap_clients(void)
+{
+    wifi_sta_list_t l;
+    return s_ap_netif && esp_wifi_ap_get_sta_list(&l) == ESP_OK ? l.num : 0;
+}
+
+bool cr_wifi_connected(void) { return s_ap_netif || (s_netif && s_eg && (xEventGroupGetBits(s_eg) & BIT_UP)); }
 const char *cr_wifi_ip(void) { return s_last_ip; }
 int32_t cr_wifi_channel(void) { return s_channel; }
 int32_t cr_wifi_rssi(void)
