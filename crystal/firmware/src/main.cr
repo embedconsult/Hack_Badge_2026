@@ -1730,10 +1730,10 @@ def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Ni
   Shared.led_mode = LED_CYAN
   if Menu.want_clean?
     EPD.raw = true
-    sketch_clean(WIN_LUT) # same kind as live ink: no COG restart
-    EPD.raw = false
+    sketch_clean(EPD::LUT_BASE) # real full drive with the shake: incremental
+    EPD.raw = false              # (diff/window) updates never clean residue
   else
-    fast_bw(1, WIN_LUT)
+    fast_bw(2, EPD::LUT_BASE)
   end
 end
 
@@ -1770,11 +1770,13 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   # restart on the first frame). Static screens get 2 pulls (HALF60 erases
   # black -> white weakly), game screens 1 so they are usable at once.
   static_scr = scr == SCR_NAMETAG || scr == SCR_PORTRAIT || scr == SCR_DIAG
-  pulls = boot ? 3 : (static_scr ? 3 : 1)
+  pulls = boot ? 3 : (static_scr ? 3 : 2)
   # Static screens: base LUT (with its shake) x3 so the B/W preview of a
   # dithered image comes out clean (no-shake previews never cleaned up). It
   # costs one COG restart when coming from a game; the screen is static.
-  kind = static_scr ? EPD::LUT_BASE : WIN_LUT
+  # Every entry is a real full-drive refresh (base LUT, shake, >= 2 pulls):
+  # the incremental modes (diff, diffwin, window) never clean film residue.
+  kind = EPD::LUT_BASE
   log2("main: screen / boot", scr, boot ? 1 : 0)
   if scr == SCR_NAMETAG
     draw_nametag_planes
@@ -1835,7 +1837,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
       draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
       draw_sketch_hint(true)
       SkState.hint = true
-      pulls = 2 # one clean entry frame: the second pull clears the old screen's ghosts
+      pulls = 3 # full-drive entry (base LUT, shake): cleans residue of earlier updates
     else
       Menu.render(EPD.black, EPD.red)
       draw_mode_label(Menu.mode, 0, 0, 0, 0)
@@ -2115,9 +2117,9 @@ fun crystal_app_main : Void
         if clean
           # Clean frame: new label, full 3-pull refresh with the shaking LUT.
           draw_mode_label(Menu.mode, lw, EPD.upload_ms, EPD.panel_ms, last_total)
-          EPD.fast_pulls = 3 # same LUT kind as normal frames (no COG restart), more pulls
+          EPD.fast_pulls = 3 # full drive with the shake (cleans residue)
           EPD.raw = true
-          EPD.refresh(true, WIN_LUT)
+          EPD.refresh(true, EPD::LUT_BASE)
           EPD.raw = false
           SkState.mark_shown
         else
