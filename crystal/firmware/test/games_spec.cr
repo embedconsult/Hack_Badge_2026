@@ -631,3 +631,5 @@ describe Menu do
     Menu.dirty_rects(rr, 3).should eq 2
   end
 end
+
+require "./arcade_spec"
