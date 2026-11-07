@@ -118,3 +118,23 @@ Notes:
   polarity, so an old/new differential via LUT edits alone is not possible; use the window instead.
 - Slow refreshes can be aborted (`EPD.abortable=`, `request_abort` from the button poll): the BUSY wait
   returns, the COG is stopped and powered down.
+
+## From yigitabi5444/supercon26-badge-os (main.c, panel_lab; read Nov 2026, credit to its author)
+- 0xB0 group layout: `[levels a|b|c|d (2 bits each), TPa, TPb, SRab, TPc, TPd, SRcd, RP]`, 5 tables x 10 groups.
+  Their shortest pull: every group `{lvl,1,1,0,1,1,1,1}` (phases a/b skipped with SRab 0, c and d 1 frame each)
+  = 20 frames. A zero TP, RP 0 or SRab = SRcd = 0 hangs the CoG. Measured here: 580 ms full screen
+  (vs 1159 ms for our 45/1/1 x3 tables), and rows-only windows of ~40 rows in 41-62 ms (vs 77 ms).
+  Adopted as `EPD::LUT_WFAST` (window ink only; table 1 = new pixel black gets VDH for N of the 20 frames,
+  everything else GND, so ink never lightens). DIAG B "ink ladder" compares N = 19/12/8/5 with the old ink.
+- The CoG swaps 0x10 and 0x11 after every pull. Their partial update keeps the previous frame in 0x11 and the
+  new one in 0x10, table = (old << 1) | new: only changed pixels are driven (white->black VDH,
+  black->white VDL), unchanged ones GND. They keep DRFW = whole panel ("a shorter y1 copies the top rows
+  down") and write only the changed box through DUW + RAM_RW ([59 - x0, y0 lo, 0x14 | y0 >> 8], PDi byte
+  order), so there are no window edges and no seams; every update is one 20-frame pull (~0.48 s).
+  We keep rows-only windows (faster for small strokes) and write 0x11 = 0 in the window rows.
+- Session open with PDi Wide_Large waits: 348 ms instead of ~2.4 s (we use the same quick open). 0xB0 is
+  latched once per session ("rewriting it re-latches the slow one"): changing the table needs a new session.
+  They restart the session every 60 pulls; we do every 20 images.
+- Their 0x70 71 36 booster setting right after every reset matches errata 9.
+- Their firmware uses an OTA partition table (otadata at 0xf000, ota_0 at 0x20000). Flashing it replaces
+  our bootloader/partition table; restore the first 0x9000 bytes before flashing ours at 0x10000.

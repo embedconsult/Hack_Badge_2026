@@ -1077,6 +1077,76 @@ def wt_y(i : Int32) : Int32
   100 &+ i &* 120 # requested box top; padded by EPD to y-8 .. y+55
 end
 
+# Ink ladder (DIAG, User B): how short can the window ink waveform get?
+# White base (full, WIN_LUT x3, labels), then one 16-row black bar per band
+# (x 200..759, across the COG split), each drawn by a rows-only window with
+# a different LUT: CUR = WIN_LUT (current Sketch ink, ~1160 ms full-screen
+# pull), then WFAST (20-frame pull, ~475 ms full screen) with 19, 12, 8 and
+# 5 black drive frames. Before each WFAST bar the COG is restarted with that LUT by a
+# full refresh of an EMPTY black plane (paper is ground in WFAST: nothing on
+# the panel moves). Panel ms logged per step; the result stays on screen.
+LAD_STEPS = 5
+
+def lad_y(i : Int32) : Int32
+  90 &+ i &* 110
+end
+
+# WFAST drive frames (of the 20-frame pull) per ladder step 1..4.
+def lad_frames(i : Int32) : Int32
+  i == 1 ? 19 : (i == 2 ? 12 : (i == 3 ? 8 : 5))
+end
+
+def ink_ladder : Nil
+  log("ladder: white base", 0)
+  EPD.fill(EPD::WHITE)
+  draw_text(40, 20, "INK LADDER: BAR DARKNESS PER LUT", EPD::BLACK, 3)
+  draw_text(40, lad_y(0) &+ 20, "CUR", EPD::BLACK, 3)
+  draw_text(40, lad_y(1) &+ 20, "F19", EPD::BLACK, 3)
+  draw_text(40, lad_y(2) &+ 20, "F12", EPD::BLACK, 3)
+  draw_text(40, lad_y(3) &+ 20, "F8", EPD::BLACK, 3)
+  draw_text(40, lad_y(4) &+ 20, "F5", EPD::BLACK, 3)
+  fast_bw(3, WIN_LUT)
+  save = SketchFx.save_buf
+  bk = EPD.black
+  i = 0
+  while i < LAD_STEPS
+    y = lad_y(i)
+    kind = WIN_LUT
+    if i > 0
+      kind = EPD::LUT_WFAST
+      j = 0
+      while j < EPD::PLANE
+        save[j] = bk[j]
+        bk[j] = 0_u8
+        j = j &+ 1
+      end
+      EPD.cog_stop
+      EPD.wfast(lad_frames(i))
+      EPD.fast_pulls = 1
+      EPD.raw = true
+      EPD.refresh(true, kind)
+      EPD.raw = false
+      log2("ladder: step / full-screen WFAST pull ms", i &+ 1, EPD.panel_ms)
+      j = 0
+      while j < EPD::PLANE
+        bk[j] = save[j]
+        j = j &+ 1
+      end
+    end
+    EPD.fill_rect(200, y &+ 20, 560, 16, EPD::BLACK)
+    EPD.fast_pulls = 1
+    t = millis
+    EPD.refresh_window2(y &+ 20, y &+ 35, 0, EPD::HALF_BYTES &- 1, y &+ 20, y &+ 35, 0, EPD::HALF_BYTES &- 1, kind, 8)
+    log2("ladder: step / window panel ms", i &+ 1, EPD.panel_ms)
+    log2("ladder: step / window total ms (upload+panel)", i &+ 1, millis &- t)
+    delay_ms(300)
+    i = i &+ 1
+  end
+  EPD.cog_stop # next refresh reopens with its own LUT
+  EPD.wfast(SK_INK_FRAMES)
+  log("ladder: done, result stays on screen", 0)
+end
+
 def window_test : Nil
   log("wtest v10: seam test, white base", 0)
   EPD.fill(EPD::WHITE)
@@ -1144,10 +1214,10 @@ def show_diag : Nil
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_version(EPD::WIDTH &- 12, 12)
   draw_text(40, 200, "A: LUT TIMING  HOLD A: CLEAN (SLOW)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: SEAM TEST (~15 S)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: INK LADDER (~40 S)", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 370, "LED: STEADY = READY, PULSING = BUSY", EPD::BLACK, 3)
-  draw_text(40, 420, "WINDOW TEST: SEAM TEST V10, RESULT", EPD::BLACK, 3)
+  draw_text(40, 420, "INK LADDER: CUR, F19, F12, F8, F5. RESULT", EPD::BLACK, 3)
   draw_text(40, 460, "STAYS ON SCREEN", EPD::BLACK, 3)
   EPD.fast_pulls = 3
   EPD.raw = true
@@ -1217,6 +1287,7 @@ def red_ink_kind : Int32
 end
 
 SK_HINT_Y = Sketch::Y_MAX - 22
+SK_INK_FRAMES = 19 # WFAST black drive frames (of 20) for Sketch window ink
 
 # Help strip at the bottom of Sketch's white area; `ready` adds the
 # "READY" line (entry frame only, removed on the first stroke).
@@ -1743,6 +1814,7 @@ fun crystal_app_main : Void
   # Browsing never waits for the slow waveform: no red-clearing promotion.
   EPD.promote = false
   EPD.keep_awake = true
+  EPD.wfast(SK_INK_FRAMES)
   Menu.init(Menu::NAMETAG)
   scr = Store.screen
   Shared.target = scr
@@ -1869,7 +1941,7 @@ fun crystal_app_main : Void
       elsif Games.pressed?(inp, Games::BTN_A)
         lut_timing
       elsif Games.pressed?(inp, Games::BTN_B)
-        window_test
+        ink_ladder
       end
     elsif scr == SCR_SKETCH
       ticked = Menu.tick(now, inp)
@@ -1937,6 +2009,10 @@ fun crystal_app_main : Void
           t = millis
           Shared.led_mode = LED_CYAN
           kind = SkState.colour? ? red_ink_kind : WIN_LUT
+          # Window ink uses the 20-frame WFAST table (yigitabi5444's pull):
+          # ~2x less time per scanned row. Its first stroke after a full
+          # (WIN_LUT) frame reopens the session with it (one slower stroke).
+          kind = EPD::LUT_WFAST if !SkState.colour? && Shared.sk_win? && !hint_gone && !SkState.after_colour?
           EPD.fast_pulls = 1
           if SkState.after_colour?
             # First stroke after the colour show-off: one full B/W refresh

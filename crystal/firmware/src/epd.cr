@@ -99,6 +99,10 @@ def log2(msg : String, a : Int32, b : Int32) : Nil
   LibIDF.cr_log2(msg.to_unsafe, a, b)
 end
 
+def log3(msg : String, a : Int32, b : Int32, c : Int32) : Nil
+  LibIDF.cr_log3(msg.to_unsafe, a, b, c)
+end
+
 def millis : Int32
   LibIDF.esp_timer_get_time.unsafe_div(1000_i64).to_i32!
 end
@@ -994,8 +998,47 @@ module EPD
   # table (VCOM included), so this is as long as one BASE pull but turns
   # white solid black in ONE pull. Red tables ground.
   LUT_HALF60          = 6
+  # WFAST (window ink only), after yigitabi5444/supercon26-badge-os
+  # (main.c part_table, panel_lab experiments 05-10). Group bytes are
+  # [levels a|b|c|d, TPa, TPb, SRab, TPc, TPd, SRcd, RP]; every group runs
+  # only phases c and d (SRab 0) for 1 frame each: 10 groups x 2 = 20
+  # frames, the shortest pull this CoG runs (~475 ms full screen vs ~1160
+  # for our 45/1/1 x3 tables). Table 1 (new pixel black, as 0x11 = 0 in the
+  # window rows) gets VDH for the first @@wf_frames frames, then GND; every
+  # other table and VCOM GND: pixels only move towards black (no lightening).
+  # A zero TP, RP 0 or SRab = SRcd = 0 hangs the CoG (their findings).
+  LUT_WFAST           = 7
+  @@wf_frames = 19
+
+  def self.wfast(frames : Int32) : Nil
+    frames = 1 if frames < 1
+    frames = 19 if frames > 19 # the last frame stays GND
+    @@wf_frames = frames
+  end
+
+  def self.build_wfast : Nil
+    k = 0
+    while k < 50
+      q = @@lut + (k &* 8).to_i64!
+      q[0] = 0_u8; q[1] = 1_u8; q[2] = 1_u8; q[3] = 0_u8
+      q[4] = 1_u8; q[5] = 1_u8; q[6] = 1_u8; q[7] = 1_u8
+      k = k &+ 1
+    end
+    f = 0
+    while f < @@wf_frames
+      g = f.unsafe_div(2)
+      shift = (f & 1) == 1 ? 0 : 2 # phase c: bits 3-2, phase d: bits 1-0
+      q = @@lut + ((10 &+ g) &* 8).to_i64!
+      q[0] = q[0] | 1.unsafe_shl(shift).to_u8!
+      f = f &+ 1
+    end
+  end
 
   def self.build_lutb(kind : Int32) : Nil
+    if kind == LUT_WFAST
+      build_wfast
+      return
+    end
     if kind == LUT_HALF60
       t = 0
       while t < 5
@@ -1344,8 +1387,7 @@ module EPD
       y0 = a0
       y1 = a1
       rows_total = rows_total &+ (y1 &- y0 &+ 1)
-      log2("EPD: window x0 x1 (bytes in half)", x0, x1)
-      log2("EPD: window y0 y1 (rows)", y0, y1)
+      # (no per-COG logs here: console output sits in the stroke latency)
       if wmode == 2 || wmode == 4 || wmode == 5
         send_otp_to(t, 0x13_u8, 0x16, 6) # DUW full
       else
@@ -1412,7 +1454,7 @@ module EPD
       pulls = pulls &+ 1
     end
     @@panel_ms = rc
-    log2("EPD: window rows (both COGs) / panel ms", rows_total, rc)
+    log3("EPD: window y0 / rows (both COGs) / panel ms", a0, rows_total, rc)
     if rc < 0 || @@spi_fail
       log("EPD: window refresh failed, COG powered down", rc)
       cog_stop # also clears session_open / lut_latched
@@ -1679,7 +1721,7 @@ module EPD
     # finishes in < COLLAPSED_MS drove (almost) nothing (seen: 72 ms right
     # after a session open). Close the session with a power cycle, reopen it
     # with the reference waits and redo this image once.
-    if fast && @@driver_b && rc >= 0 && rc < COLLAPSED_MS
+    if fast && @@driver_b && rc >= 0 && rc < COLLAPSED_MS && @@lut_kind != LUT_WFAST
       @@collapsed = @@collapsed &+ 1
       log2("EPD: collapsed pull ms / first-of-session", rc, first ? 1 : 0)
       log2("EPD:   session quick / supply powered", @@quick ? 1 : 0, @@powered ? 1 : 0)
