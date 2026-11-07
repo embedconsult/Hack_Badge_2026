@@ -193,7 +193,7 @@ module Shared
   @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
   # Per-app update mode (UPD_*), shell `upd`, saved in NVS: Sketch ink,
   # Life frames, Snake frames.
-  @@upd_sk = UPD_WIN
+  @@upd_sk = UPD_DIFF
   @@upd_li = UPD_DIFF
   @@upd_sn = UPD_DIFF
   @@req = 0_u32        # REQ_* bits for the main loop (atomic)
@@ -1359,7 +1359,7 @@ module Store
 
   @@reset_reason = 0
   @@boots = 0
-  @@saved_sk = UPD_WIN # values last stored in NVS
+  @@saved_sk = UPD_DIFF # values last stored in NVS
   @@saved_li = UPD_DIFF
   @@saved_sn = UPD_DIFF
 

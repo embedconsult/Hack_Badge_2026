@@ -210,8 +210,6 @@ module Sketch
     end
     @@knobs = knobs == 1 ? 1 : 2
     @@single_y = false
-    @@px = (X_MIN &+ X_MAX).unsafe_div(2)
-    @@py = (Y_MIN &+ Y_MAX).unsafe_div(2)
     @@fx = 0
     @@fy = 0
     @@phase_x = 0
@@ -237,6 +235,15 @@ module Sketch
   # with 3 white blinks).
   def self.blank : Nil
     Games.zero(@@canvas, Games::PLANE)
+    # Pen back to the centre of the drawable area, and the knob references
+    # forgotten: the next reading of each knob becomes its new zero, so the
+    # current knob angles map to the centre.
+    @@px = (X_MIN &+ X_MAX).unsafe_div(2)
+    @@py = (PEN_Y_MIN &+ PEN_Y_MAX).unsafe_div(2)
+    @@fx = 0
+    @@fy = 0
+    @@last_x = -1
+    @@last_y = -1
     pen_dot
     @@needs_bg = true
     @@pending_clean = true

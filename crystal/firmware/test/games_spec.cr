@@ -400,7 +400,7 @@ describe Sketch do
   it "starts mid-screen with a pen dot, needing the frame and a clean flash" do
     Sketch.init.should be_true
     Sketch.x.should eq 479
-    Sketch.y.should eq 322
+    Sketch.y.should eq 309
     Sketch.needs_background?.should be_true
     count_bits(Sketch.canvas).should eq 9
     Sketch.status_text.should eq ""
@@ -421,13 +421,13 @@ describe Sketch do
     sk_tick(10, 2024, 1000).should be_false
     Sketch.x.should eq 539 # 1024 counts * 240 / 4096
     sk_tick(20, 2024, 2024).should be_false
-    Sketch.y.should eq 262
+    Sketch.y.should eq 249
     sk_tick(30, 2041, 2024) # 17 counts = 0.996 px: remainder kept
     Sketch.x.should eq 539
     sk_tick(40, 2059, 2024) # +18 -> 35 counts = 2.05 px
     Sketch.x.should eq 541
-    Games.get(Sketch.canvas, 479, 322).should be_true
-    Games.get(Sketch.canvas, 539, 290).should be_true
+    Games.get(Sketch.canvas, 479, 309).should be_true
+    Games.get(Sketch.canvas, 539, 277).should be_true
   end
 
   it "keeps the pen inside the Etch screen and drops turns banked at a wall" do
@@ -477,15 +477,15 @@ describe Sketch do
     sk_fresh
     x0 = y0 = x1 = y1 = 0
     Sketch.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false # clean
-    sk_tick(10, 2024, 1000)  # 479 -> 539 at y 322
-    sk_tick(20, 2024, 2024)  # 322 -> 262 at x 539
+    sk_tick(10, 2024, 1000)  # 479 -> 539 at y 309
+    sk_tick(20, 2024, 2024)  # 309 -> 249 at x 539
     sk_tick(800, 2024, 2024).should be_true
     Sketch.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
-    {x0, y0, x1, y1}.should eq({478, 261, 540, 323})
+    {x0, y0, x1, y1}.should eq({478, 248, 540, 310})
     sk_tick(900, 1000, 2024) # back left 60 px: new box only
     sk_tick(1600, 1000, 2024).should be_true
     Sketch.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_true
-    {x0, y0, x1, y1}.should eq({478, 261, 540, 263})
+    {x0, y0, x1, y1}.should eq({478, 248, 540, 250})
     sk_tick(1700, 1000, 2024, Games::BTN_B).should be_true # clean: no window
     Sketch.dirty_box(pointerof(x0), pointerof(y0), pointerof(x1), pointerof(y1)).should be_false
   end
@@ -511,14 +511,14 @@ describe Sketch do
     Sketch.status_text.should eq "1 knob (SAO1/GPIO2) - B switches X/Y"
     sk_tick(10, 2024, 3000).should be_false
     Sketch.x.should eq 539
-    Sketch.y.should eq 322
+    Sketch.y.should eq 309
     sk_tick(20, 2024, 3000, Games::BTN_B).should be_false
     Sketch.single_axis_y?.should be_true
     Sketch.blink_request.should eq 2
     Sketch.blink_request.should eq 0
     sk_tick(30, 3048, 0)
     Sketch.x.should eq 539
-    Sketch.y.should eq 262
+    Sketch.y.should eq 249
   end
 
   it "animates the LEDs: spinning dot, red at walls, status colors when idle" do
@@ -554,8 +554,8 @@ describe Sketch do
     Games::PLANE.times { |i| r[i] = 0xFF_u8 }
     b[0] = 0x80_u8
     Sketch.render(b, r)
-    Games.get(b, 479, 322).should be_true
-    Games.get(r, 479, 322).should be_false
+    Games.get(b, 479, 309).should be_true
+    Games.get(r, 479, 309).should be_false
     Games.get(r, 10, 10).should be_true
     Games.get(b, 0, 0).should be_true
     count_bits(b).should eq 1 + 9
