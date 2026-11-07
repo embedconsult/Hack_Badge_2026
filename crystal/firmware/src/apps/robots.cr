@@ -18,7 +18,7 @@ require "../robots/roster"
 
 module RobotsApp
   include App
-  ORDER = 310
+  ORDER = 320
   NAME  = "ROBOTS"
   COLOR = 0xFF2020_u32
 
