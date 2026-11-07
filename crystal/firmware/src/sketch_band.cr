@@ -79,9 +79,11 @@ module SkBand
   P_LOG      = 38 # 1 = log every pull
   P_REGS     = 39 # 1 = apply the extra registers (drv2 reg)
   P_MAXROWS  = 40 # rows per band (0 = from budget / base / msrow)
-  P_COUNT    = 41
+  P_HOLD     = 41 # ms idle before the session is closed (power stays on)
+  P_BARF     = 42 # drv2 bars: VDH frames of the bars (command 3)
+  P_COUNT    = 43
 
-  NAMES = "strat twin wrap twincmd unit align pad d0 d1 sd0 sd1 x0 x1 umax win idleu duw stvm stvs tcon dctl dctlt osc f1 f3 fe f40 budget base msrow gap session clean cleanms barh barpulls qdevery ghost log regs maxrows"
+  NAMES = "strat twin wrap twincmd unit align pad d0 d1 sd0 sd1 x0 x1 umax win idleu duw stvm stvs tcon dctl dctlt osc f1 f3 fe f40 budget base msrow gap session clean cleanms barh barpulls qdevery ghost log regs maxrows hold barf"
 
   @@p = uninitialized StaticArray(Int32, 48)
   @@init = false
@@ -135,6 +137,8 @@ module SkBand
     q[P_LOG] = 1
     q[P_REGS] = 1
     q[P_MAXROWS] = 0
+    q[P_HOLD] = 20_000
+    q[P_BARF] = 12
   end
 
   def self.get(i : Int32) : Int32

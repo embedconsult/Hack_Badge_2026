@@ -15,7 +15,7 @@ end
 
 module Shell
   LINE_MAX = 300 # room for `ota url <long url>`
-  TOK_MAX  =  8
+  TOK_MAX  = 12 # `drv2 reg m open 61 01 02 03 04 05 06`
 
   @@line = Pointer(UInt8).null
   @@len = 0
@@ -131,7 +131,10 @@ module Shell
     say("  dump <red|black> <row0> <rows>\n")
     say("  sketch quickdraw         (Sketch: the six-shooter)\n")
     say("  usbflash                 (badge-to-badge USB update state)\n")
-    say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
+    say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>] | upd sketch drv2\n")
+    say("  drv2 | drv2 <param> <value> | drv2 reset | drv2 stats [reset] | drv2 close\n")
+    say("  drv2 reg [m|s|b] [open|pull] <idx> <bytes...> (hex) | drv2 reg list | drv2 reg clear\n")
+    say("  drv2 bars [y1 .. y6]      (Sketch band driver test, src/sketch_epd.cr)\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN|INK_WIN|FAST_ENTRY> <0|1>\n")
     say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
     say("  ota | ota force | ota url <url|default> | ota status\n")
@@ -255,16 +258,120 @@ module Shell
   def self.upd : Nil
     if @@nt >= 3
       app = tok_is(1, "sketch") ? SCR_SKETCH : (tok_is(1, "life") ? SCR_LIFE : (tok_is(1, "snake") ? SCR_SNAKE : -1))
-      m = tok_is(2, "full") ? UPD_FULL : (tok_is(2, "win") ? UPD_WIN : (tok_is(2, "diffwin") ? UPD_DIFFWIN : (tok_is(2, "diff") ? UPD_DIFF : (tok_is(2, "ink") ? UPD_INK : -1))))
+      m = tok_is(2, "full") ? UPD_FULL : (tok_is(2, "win") ? UPD_WIN : (tok_is(2, "diffwin") ? UPD_DIFFWIN : (tok_is(2, "diff") ? UPD_DIFF : (tok_is(2, "ink") ? UPD_INK : (tok_is(2, "drv2") && app == SCR_SKETCH ? UPD_DRV2 : -1)))))
       if app < 0 || m < 0
-        say("usage: upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
+        say("usage: upd [<sketch|life|snake> <full|win|diff|diffwin|ink>] | upd sketch drv2\n")
         return
       end
       Shared.set_upd(app, m)
       say("ok\n")
     end
-    LibIDF.cr_log3("upd: sketch / life / snake (0 full 1 win 2 diff 3 diffwin 4 ink)".to_unsafe,
+    LibIDF.cr_log3("upd: sketch / life / snake (0 full 1 win 2 diff 3 diffwin 4 ink 5 drv2)".to_unsafe,
       Shared.upd(SCR_SKETCH), Shared.upd(SCR_LIFE), Shared.upd(SCR_SNAKE))
+  end
+
+  # Hex token i ("61", "0x61"); `bad` if missing or not hex.
+  def self.tok_hex(i : Int32, bad : Int32) : Int32
+    return bad if i >= @@nt
+    s = @@ts[i]
+    e = s &+ @@tl[i]
+    s = s &+ 2 if e &- s > 2 && @@line[s] == 0x30_u8 && (@@line[s &+ 1] | 0x20_u8) == 0x78_u8
+    return bad if s >= e
+    v = 0
+    while s < e
+      c = @@line[s].to_i32! | 0x20
+      d = c >= 0x30 && c <= 0x39 ? c &- 0x30 : (c >= 0x61 && c <= 0x66 ? c &- 0x57 : -1)
+      return bad if d < 0
+      v = v &* 16 &+ d
+      s = s &+ 1
+    end
+    v
+  end
+
+  # drv2: the Sketch band driver's parameters and tests (src/sketch_epd.cr).
+  # Parameter changes take effect at the next pull (a new session).
+  def self.drv2 : Nil
+    if @@nt == 1
+      SkEPD.print_params
+    elsif tok_is(1, "bars")
+      ys = uninitialized StaticArray(Int32, 6)
+      q = pointerof(ys).as(Int32*)
+      n = 0
+      while n < 6 && 2 &+ n < @@nt
+        q[n] = tok_int(2 &+ n, 0)
+        n = n &+ 1
+      end
+      SkEPD.set_bars(q, n)
+      Shared.request(Shared::REQ_DRV2BARS)
+      LibIDF.cr_notify_main
+      say("ok\n")
+    elsif tok_is(1, "reg")
+      drv2_reg
+    elsif tok_is(1, "reset")
+      SkBand.reset
+      SkEPD.stale!
+      say("ok\n")
+    elsif tok_is(1, "stats")
+      SkEPD.stats_reset if tok_is(2, "reset")
+      SkEPD.print_stats
+    elsif tok_is(1, "close")
+      SkEPD.stale! # the main task closes and reopens it at the next pull
+      say("ok\n")
+    else
+      ni = tok_is(1, "set") ? 2 : 1
+      i = ni < @@nt ? SkBand.find(tok_ptr(ni), tok_len(ni)) : -1
+      bad = -0x7FFFFFFF
+      v = tok_int(ni &+ 1, bad)
+      if i < 0 || v == bad
+        say("usage: drv2 <param> <value> (drv2 lists them)\n")
+        return
+      end
+      SkBand.set(i, v)
+      SkEPD.stale!
+      LibIDF.cr_log3("drv2: param / value / -".to_unsafe, i, v, 0)
+    end
+  end
+
+  # drv2 reg [m|s|b] [open|pull] <idx> <bytes...> (hex), list, clear.
+  def self.drv2_reg : Nil
+    if tok_is(2, "list")
+      SkEPD.reg_print
+      return
+    end
+    if tok_is(2, "clear")
+      SkEPD.reg_clear
+      say("ok\n")
+      return
+    end
+    k = 2
+    tg = 0
+    if tok_is(k, "m") || tok_is(k, "s") || tok_is(k, "b")
+      tg = tok_is(k, "m") ? 1 : (tok_is(k, "s") ? 2 : 0)
+      k = k &+ 1
+    end
+    wh = 0
+    if tok_is(k, "open") || tok_is(k, "pull")
+      wh = tok_is(k, "pull") ? 1 : 0
+      k = k &+ 1
+    end
+    idx = tok_hex(k, -1)
+    d = uninitialized StaticArray(Int32, 6)
+    q = pointerof(d).as(Int32*)
+    n = 0
+    ok = idx >= 0 && idx <= 0xFF
+    while ok && n < 6 && k &+ 1 &+ n < @@nt
+      v = tok_hex(k &+ 1 &+ n, -1)
+      ok = false if v < 0 || v > 0xFF
+      q[n] = v
+      n = n &+ 1
+    end
+    ok = false if k &+ 1 &+ n < @@nt # more than 6 bytes
+    slot = ok ? SkEPD.reg_set(-1, tg, wh, idx, n, q) : -1
+    if slot < 0
+      say("usage: drv2 reg [m|s|b] [open|pull] <idx> <up to 6 bytes> (hex); 8 slots (drv2 reg clear)\n")
+      return
+    end
+    LibIDF.cr_log3("drv2 reg: slot / index / bytes".to_unsafe, slot, idx, n)
   end
 
   def self.flag : Nil
@@ -390,6 +497,8 @@ module Shell
     elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
+    elsif tok_is(0, "drv2")
+      drv2
     elsif tok_is(0, "wbar")
       WBar.set(tok_int(1, 8), tok_int(2, WIN_LUT), tok_int(3, -1), tok_int(4, 40))
       Shared.request(Shared::REQ_WBAR)

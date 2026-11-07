@@ -66,6 +66,7 @@ lib LibIDF
 end
 
 require "./epd"
+require "./sketch_epd" # Sketch only, `upd sketch drv2`
 require "./png"
 require "./leds"
 # Our own game_alloc (instead of games/badge.cr's newlib malloc): every
@@ -212,6 +213,7 @@ module Shared
   REQ_FORGET    = 32_u32 # knob override switched on/off: no pen jump
   REQ_WTEST     = 64_u32 # erase waveform test (WTest.codes)
   REQ_WBAR      = 128_u32 # window addressing test (wbar)
+  REQ_DRV2BARS  = 256_u32 # drv2 band test (drv2 bars)
 
   @@fake = 0_u32 # buttons the shell holds down (until @@fake_until)
   @@fake_until = 0
@@ -1576,7 +1578,8 @@ UPD_WIN     = 1 # rows-only window (EPD.refresh_window2 mode 8)
 UPD_DIFF    = 2 # whole-panel differential (EPD.refresh_diff, yigitabi5444)
 UPD_DIFFWIN = 3 # differential, DRFW rows 0 .. last changed row
 UPD_INK     = 4 # Sketch: ink commands with incremental strength (SkInk)
-UPD_COUNT   = 5
+UPD_DRV2    = 5 # Sketch: SkInk commands through the band driver (src/sketch_epd.cr)
+UPD_COUNT   = 6
 HOLD_MS      = 1000 # hold User A this long for the colour refresh
 AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this long idle
 
@@ -1987,6 +1990,7 @@ module SkInk
       tc[i] = 0_u8 unless tc.null?
       i = i &+ 1
     end
+    SkEPD.sync_canvas(cv) # drv2: what is inked now, no ghosts
   end
 
   # Marks byte i of the command planes as used.
@@ -2057,6 +2061,24 @@ module SkInk
       i = i &+ 1
     end
     any
+  end
+
+  # UPD_DRV2: the pending commands through the band driver (SkEPD), as
+  # bands of <= 250 ms; then the planes are cleared. Panel ms or -1.
+  def self.pull2 : Int32
+    rc = 0
+    if @@hi >= 0
+      rc = SkEPD.pull_cmds(@@cnew, @@cold, @@lo.unsafe_div(EPD::ROW_BYTES), @@hi.unsafe_div(EPD::ROW_BYTES))
+      i = @@lo
+      while i <= @@hi
+        @@cnew[i] = 0_u8
+        @@cold[i] = 0_u8
+        i = i &+ 1
+      end
+    end
+    @@hi = -1
+    @@pw0 = -1
+    rc
   end
 
   @@pw0 = -1 # rows of the previous windowed pull (both RAMs hold them)
@@ -2188,16 +2210,32 @@ def quick_draw : Nil
   t0 = millis
   base = QD_PTS.to_unsafe
   win = Shared.upd(SCR_SKETCH) == UPD_WIN # test the rows-only window path with quick draw
+  drv2 = Shared.upd(SCR_SKETCH) == UPD_DRV2 && SkEPD.ready? # band driver (src/sketch_epd.cr)
+  every = SkBand.get(SkBand::P_QDEVERY)
+  if drv2
+    SkEPD.stats_reset
+    SkEPD.qd = true # each band pull also logs "sketch: qd pull panel / upload ms"
+  end
   pulls = 0
   k = 0
   while k < QD_N
     p = base + (k &* 6).to_i64!
     x = qd_hex3(p)
+    if drv2 && x != 0xFFF && every > 0 && k.unsafe_mod(every) == every &- 1
+      SkInk.take_touches # drv2: also pull every `qdevery` points, like live drawing
+      SkInk.pull2
+      pulls = pulls &+ 1
+    end
     if win && x != 0xFFF && (k & 7) == 7
       qd_window_pull # window test path: a rows-only pull every 8 points, like live drawing
       pulls = pulls &+ 1
     end
-    if x == 0xFFF && win
+    if x == 0xFFF && drv2
+      Shared.led_mode = pulls & 1 == 0 ? LED_YELLOW : LED_CYAN
+      SkInk.take_touches
+      SkInk.pull2 # bands of <= 250 ms, each logged as a qd pull
+      pulls = pulls &+ 1
+    elsif x == 0xFFF && win
       qd_window_pull
       pulls = pulls &+ 1
     elsif x == 0xFFF
@@ -2215,6 +2253,10 @@ def quick_draw : Nil
   Sketch.forget_knobs
   SkState.pen_seen(Sketch.x, Sketch.y)
   log2("sketch: quick draw pulls / ms", pulls, millis &- t0)
+  if drv2
+    SkEPD.qd = false
+    SkEPD.print_stats
+  end
 end
 
 module SkState
@@ -2685,6 +2727,12 @@ fun crystal_app_main : Void
     # Debug shell requests (shell.cr): hold A, clean, scripted stroke.
     reqs = Shared.take_requests
     a_hold = true if (reqs & Shared::REQ_HOLD_A) != 0_u32
+    # drv2 (src/sketch_epd.cr) owns the CoG between its pulls: hand it back
+    # before anything else here may use EPD.
+    if SkEPD.open? && (scr != SCR_SKETCH || Shared.upd(SCR_SKETCH) != UPD_DRV2 || Shared.target != scr ||
+       raw_held != 0_u32 || (reqs & ((Shared::REQ_QUICKDRAW | Shared::REQ_DRV2BARS | Shared::REQ_FORGET) ^ 0xFFFFFFFF_u32)) != 0_u32)
+      SkEPD.release
+    end
     if (reqs & Shared::REQ_CLEAN) != 0_u32
       log("shell: clean (slow white, zero red)", 0)
       EPD.fill(EPD::WHITE)
@@ -2707,6 +2755,11 @@ fun crystal_app_main : Void
     end
     wtest if (reqs & Shared::REQ_WTEST) != 0_u32
     wbar_test if (reqs & Shared::REQ_WBAR) != 0_u32
+    if (reqs & Shared::REQ_DRV2BARS) != 0_u32
+      Shared.rendering = true
+      SkEPD.bars_run
+      Shared.rendering = false
+    end
     if (reqs & Shared::REQ_QUICKDRAW) != 0_u32 && scr == SCR_SKETCH
       Shared.rendering = true
       quick_draw
@@ -2810,7 +2863,7 @@ fun crystal_app_main : Void
         lat = SkState.last_lat
         # A (erase) shakes the drawing away first: two ink pulls dissolve
         # the lines (speckled, then gone), then the clean below.
-        SkInk.shake if Menu.needs_background? && Shared.upd(SCR_SKETCH) == UPD_INK && SkInk.ready?
+        SkInk.shake if Menu.needs_background? && (Shared.upd(SCR_SKETCH) == UPD_INK || Shared.upd(SCR_SKETCH) == UPD_DRV2) && SkInk.ready?
         if SkState.colour?
           sketch_frame(false, lat, EPD.upload_ms, EPD.panel_ms, last_total)
         else
@@ -2818,6 +2871,42 @@ fun crystal_app_main : Void
         end
         SkState.mark_shown
         last_total = millis &- t
+      elsif Shared.upd(SCR_SKETCH) == UPD_DRV2 && SkInk.ready? && SkEPD.ready?
+        # Band driver (src/sketch_epd.cr): the pen's ink commands as row
+        # bands of <= 250 ms each, at once; idle cleanup one band at a time
+        # while the knobs rest (knob motion always comes first).
+        SkEPD.sync_canvas(Sketch.canvas) if SkEPD.need_sync? # first use: what is inked already
+        if SkState.after_colour?
+          SkEPD.release
+          SkState.after_colour = false
+          Sketch.render(EPD.black, EPD.red)
+          fast_bw(2, EPD::LUT_BASE)
+          SkState.mark_shown
+        end
+        SkState.hint = false
+        if now &- Sketch.last_motion_ms >= SkInk::DWELL_MS && SkState.dwell_at != Sketch.last_motion_ms
+          SkState.dwell_at = Sketch.last_motion_ms
+          SkInk.dwell_ink(Sketch.x, Sketch.y)
+        end
+        if SkInk.take_touches
+          t = millis
+          Shared.led_mode = LED_CYAN
+          SkTrack.reset
+          EPD.hook = true
+          SkInk.pull2
+          EPD.hook = false
+          SkState.pen_seen(Sketch.x, Sketch.y)
+          last_total = millis &- t
+          SkState.last_lat = millis &- last_input
+          log3("sketch: drv2 upload / panel / latency ms", SkEPD.last_up, SkEPD.last_ms, SkState.last_lat)
+        elsif now &- Sketch.last_motion_ms >= SkBand.get(SkBand::P_CLEANMS) && SkEPD.cleanup_pending?
+          SkTrack.reset
+          EPD.hook = true
+          SkEPD.cleanup_step
+          EPD.hook = false
+        else
+          SkEPD.idle_release(now)
+        end
       elsif Shared.upd(SCR_SKETCH) == UPD_INK && SkInk.ready?
         # Ink with incremental strength (SkInk): only the pixels the pen
         # covered get driven, each a step darker per pass.
@@ -2992,12 +3081,14 @@ fun crystal_app_main : Void
        raw_held == 0_u32 && millis &- last_input >= SK_IDLE_COLOUR_MS && !Ota.running?
       log("sketch: idle, colour frame", 0)
       Shared.idle_job = true # input frees the main loop (the waveform completes)
+      SkEPD.release
       sketch_colour
       Shared.idle_job = false
       last_input = millis
     end
     if RedRes.residue? && Shared.target == scr && !Shared.rendering? && raw_held == 0_u32 &&
        millis &- last_input >= RES_IDLE_MS && !Ota.running?
+      SkEPD.release
       red_residue_clean(scr)
       last_input = millis
     end
