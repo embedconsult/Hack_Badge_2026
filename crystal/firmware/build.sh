@@ -33,8 +33,9 @@ if ! cmp -s "$HERE/sdkconfig.defaults" "$ROOTFS$WORK/sdkconfig.defaults"; then
   echo "build.sh: sdkconfig.defaults changed, regenerating sdkconfig"
   rm -f "$ROOTFS$WORK/sdkconfig"
 fi
-rm -rf "$ROOTFS$WORK/main" "$ROOTFS$WORK/src"
+rm -rf "$ROOTFS$WORK/main" "$ROOTFS$WORK/src" "$ROOTFS$WORK/components"
 cp -a "$HERE/CMakeLists.txt" "$HERE/sdkconfig.defaults" "$HERE/partitions.csv" "$HERE/main" "$HERE/src" "$ROOTFS$WORK/"
+[ -d "$HERE/components" ] && cp -a "$HERE/components" "$ROOTFS$WORK/"
 
 chroot "$ROOTFS" /usr/bin/env -i HOME=/root TERM=dumb LANG=C.UTF-8 \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \

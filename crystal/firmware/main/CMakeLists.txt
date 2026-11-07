@@ -1,7 +1,8 @@
-idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c" "qr.c" "settings.c"
+idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c" "qr.c" "settings.c" "b2b.c"
                        EMBED_FILES "hello_i_am_blank.png" "portrait.png" "sketch_frame.png" "EtchASketch.png" "schedule.csv"
                        PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_driver_rmt esp_adc nvs_flash esp_timer esp_rom heap freertos
-                                     esp_wifi esp_netif lwip esp_event esp_http_client esp_http_server esp_https_ota app_update esp_app_format mbedtls)
+                                     esp_wifi esp_netif lwip esp_event esp_http_client esp_http_server esp_https_ota app_update esp_app_format mbedtls
+                                     usb usb_host_cdc_acm spi_flash esp_partition bootloader_support)
 
 # --- Crystal -> Xtensa object --------------------------------------------------
 # Needs the xtensa-patched Crystal compiler (see ../../toolchain/README.md).
