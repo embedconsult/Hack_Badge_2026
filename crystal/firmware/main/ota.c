@@ -89,9 +89,12 @@ static esp_netif_t *s_netif;
 static esp_event_handler_instance_t s_h_wifi, s_h_ip;
 static int s_retries;
 static volatile bool s_hold;            // network mode (main/net.c) keeps Wi-Fi up
+static volatile int s_apps;             // content apps (main/apps_net.c) using the station
 static uint8_t s_channel;
 #define BIT_UP   BIT0
 #define BIT_FAIL BIT1
+
+void cr_wifi_unacquire(void);
 
 static void set_state(int32_t st, const char *msg)
 {
@@ -174,7 +177,7 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 
 static void wifi_down(void)
 {
-    if (!s_netif || s_hold) return; // network mode owns the radio now
+    if (!s_netif || s_hold || s_apps) return; // network mode / an app owns the radio now
     esp_wifi_disconnect();
     esp_wifi_stop();
     esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_h_wifi);
@@ -339,6 +342,39 @@ int32_t cr_wifi_ap_clients(void)
 }
 
 bool cr_wifi_connected(void) { return s_ap_netif || (s_netif && s_eg && (xEventGroupGetBits(s_eg) & BIT_UP)); }
+// ---- content apps (main/apps_net.c) ---------------------------------------
+// Like cr_wifi_hold, but counted and independent of network mode: the
+// station stays up while network mode holds it or any app uses it.
+// Blocking (up to 25 s); call from a worker task, never the main task.
+bool cr_wifi_acquire(void)
+{
+    // An OTA job may be bringing Wi-Fi up or down right now: wait for it.
+    for (int i = 0; i < 300 && __atomic_load_n(&s_busy, __ATOMIC_SEQ_CST) && !s_netif; i++)
+        vTaskDelay(pdMS_TO_TICKS(100));
+    if (s_netif) { // up already (network mode or another app): wait for the link
+        __atomic_add_fetch(&s_apps, 1, __ATOMIC_SEQ_CST);
+        EventBits_t b = s_eg ? xEventGroupWaitBits(s_eg, BIT_UP, pdFALSE, pdFALSE, pdMS_TO_TICKS(20000)) : 0;
+        if (b & BIT_UP) return true;
+        cr_wifi_unacquire();
+        return false;
+    }
+    bool ok = wifi_up(); // s_apps is 0 here, so its failure path tears down
+    if (ok) {
+        __atomic_add_fetch(&s_apps, 1, __ATOMIC_SEQ_CST);
+        set_state(ST_IDLE, "");
+    }
+    return ok;
+}
+
+void cr_wifi_unacquire(void)
+{
+    if (__atomic_sub_fetch(&s_apps, 1, __ATOMIC_SEQ_CST) <= 0) {
+        s_apps = 0;
+        if (!s_hold && !__atomic_load_n(&s_busy, __ATOMIC_SEQ_CST)) wifi_down();
+    }
+}
+
+bool cr_wifi_connected(void) { return s_netif && s_eg && (xEventGroupGetBits(s_eg) & BIT_UP); }
 const char *cr_wifi_ip(void) { return s_last_ip; }
 int32_t cr_wifi_channel(void) { return s_channel; }
 int32_t cr_wifi_rssi(void)
