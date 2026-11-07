@@ -197,7 +197,7 @@ module Shared
   @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
   # Per-app update mode (UPD_*), shell `upd`, saved in NVS: Sketch ink,
   # Life frames, Snake frames.
-  @@upd_sk = UPD_INK
+  @@upd_sk = UPD_WIN # the user: "sketch with artifacts is better than sketch that is slow" (GOALS.md)
   @@upd_li = UPD_DIFF
   @@upd_sn = UPD_DIFF
   @@req = 0_u32        # REQ_* bits for the main loop (atomic)
@@ -1639,7 +1639,7 @@ module Store
 
   @@reset_reason = 0
   @@boots = 0
-  @@saved_sk = UPD_INK # values last stored in NVS
+  @@saved_sk = UPD_WIN # values last stored in NVS
   @@saved_li = UPD_DIFF
   @@saved_sn = UPD_DIFF
 
@@ -2643,7 +2643,7 @@ fun crystal_app_main : Void
   b_fired = false
   forget_until = millis # knob references dropped until then (REQ_FORGET)
   while true
-    Ota.ui(scr) if Ota.running? # OTA (shell or DIAG): no other e-paper work meanwhile
+    Ota.ui(scr) if Ota.ui_now? # OTA (shell, DIAG, or an automatic one installing): no other e-paper work meanwhile
     held = Shared.take_buttons
     now = millis
     raw_held = held
@@ -3001,6 +3001,7 @@ fun crystal_app_main : Void
       red_residue_clean(scr)
       last_input = millis
     end
+    Ota.auto_tick(scr, millis &- last_input)
     # Erase settling (EPD.diff_settle): when an app's diff updates pause,
     # the pixels they erased get their remaining VDL pulls (no pink).
     if EPD.settle_pending? && Shared.target == scr && raw_held == 0_u32 && millis &- EPD.diff_last_ms >= 400

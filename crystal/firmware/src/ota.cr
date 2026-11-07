@@ -18,6 +18,8 @@ lib LibIDF
   fun cr_ota_msg : UInt8*
   fun cr_ota_boot_ok : Int32
   fun cr_ota_boot_failed : Void
+  fun cr_ota_auto : Bool
+  fun cr_ota_auto_set(on : Bool) : Void
 end
 
 module Shared
@@ -37,6 +39,39 @@ module Ota
   JOB_WIFI_FORGET = 6
   JOB_URL_SET     = 7
   JOB_STATUS      = 8
+  JOB_AUTO        = 9  # automatic, newer-only, silent unless it installs
+  JOB_WIFI2_SET   = 10
+
+  # Automatic update check (`ota auto on|off`, NVS, default on): 2 min
+  # after boot, then every 20 min, only after 2 min untouched on a quiet
+  # screen (Home, NAMETAG, PORTRAIT): never mid-game, in Sketch or a demo.
+  AUTO_FIRST_MS = 120_000
+  AUTO_EVERY_MS = 1_200_000
+  AUTO_IDLE_MS  = 120_000
+  @@auto_due = AUTO_FIRST_MS
+  @@auto_job = false
+
+  def self.auto_job? : Bool
+    @@auto_job
+  end
+
+  def self.auto_tick(scr : Int32, idle_ms : Int32) : Nil
+    @@auto_job = false unless running?
+    return if running? || millis &- @@auto_due < 0
+    return unless LibIDF.cr_ota_auto
+    return unless scr == SCR_HOME || scr == SCR_NAMETAG || scr == SCR_PORTRAIT
+    return if idle_ms < AUTO_IDLE_MS
+    @@auto_due = millis &+ AUTO_EVERY_MS
+    log("ota: automatic check (newer-only)", 0)
+    @@auto_job = cmd(JOB_AUTO, Pointer(UInt8).null, 0, Pointer(UInt8).null, 0) == 0
+  end
+
+  # The update screen: always for shell / DIAG jobs, for an automatic one
+  # only once it is downloading (a check that finds nothing stays silent).
+  def self.ui_now? : Bool
+    return false unless running?
+    !@@auto_job || LibIDF.cr_ota_state >= ST_DOWNLOADING
+  end
 
   ST_CONNECTING  = 1
   ST_CHECKING    = 2

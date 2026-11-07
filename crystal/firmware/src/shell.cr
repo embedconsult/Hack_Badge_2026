@@ -133,8 +133,8 @@ module Shell
     say("  usbflash                 (badge-to-badge USB update state)\n")
     say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN|INK_WIN|FAST_ENTRY> <0|1>\n")
-    say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
-    say("  ota | ota force | ota url <url|default> | ota status\n")
+    say("  wifi <ssid> <password> | wifi2 <ssid> <password> | wifi off | wifi forget | wifi status\n")
+    say("  ota | ota force | ota url <url|default> | ota status | ota auto [on|off]\n")
   end
 
   # wifi / ota (src/ota.cr): the work runs on the OTA worker task, which
@@ -191,8 +191,11 @@ module Shell
       ota_job(Ota::JOB_URL_SET, 2, false)
     elsif tok_is(1, "status")
       ota_job(Ota::JOB_STATUS, -1, false)
+    elsif tok_is(1, "auto")
+      LibIDF.cr_ota_auto_set(tok_is(2, "on")) if tok_is(2, "on") || tok_is(2, "off")
+      say(LibIDF.cr_ota_auto ? "ota: auto on: newer releases install by themselves (checked 2 min after boot, then every 20 min, when idle 2 min on Home/NAMETAG/PORTRAIT)\n" : "ota: auto off\n")
     else
-      say("usage: ota | ota force | ota url <url|default> | ota status\n")
+      say("usage: ota | ota force | ota url <url|default> | ota status | ota auto [on|off]\n")
     end
   end
 
@@ -443,6 +446,8 @@ module Shell
       LibIDF.cr_log3("reg: osc / tcon / -".to_unsafe, EPD.x_osc, EPD.x_tcon, 0)
     elsif tok_is(0, "usbflash")
       B2bApp.report # src/apps/b2b.cr (read-only: starting needs the badge's buttons)
+    elsif tok_is(0, "wifi2") && @@nt >= 2
+      ota_job(Ota::JOB_WIFI2_SET, 1, true) # second network, tried when the first fails
     elsif tok_is(0, "wifi")
       wifi
     elsif tok_is(0, "ota")

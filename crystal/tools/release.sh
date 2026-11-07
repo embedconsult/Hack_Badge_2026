@@ -8,7 +8,8 @@
 # of this checkout (the same string build.sh compiles into CR_VERSION), at
 # HEAD, marked latest, with two assets:
 #   badge-app.bin       the app image (what esp_https_ota writes to the other slot)
-#   badge-version.txt   the tag; a badge whose CR_VERSION starts with it skips the update
+#   badge-version.txt   "<tag> <build number>" (git rev-list --count); a badge installs
+#                       only a release whose build number is greater than its own
 # The badge fetches .../releases/latest/download/<asset>, so the newest
 # release is what every badge installs. HEAD must be pushed first.
 set -eu
@@ -41,7 +42,9 @@ fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cp "$BIN" "$TMP/badge-app.bin"
-printf '%s\n' "$VER" >"$TMP/badge-version.txt"
+# "<tag> <build number>": badges install only a greater build number (main/ota.c)
+BUILDNO=$(git rev-list --count HEAD)
+printf '%s %s\n' "$VER" "$BUILDNO" >"$TMP/badge-version.txt"
 echo "release: $VER ($SIZE bytes) -> $REPO"
 gh release create "$VER" -R "$REPO" --target "$HEAD" --latest \
   --title "Badge firmware $VER" \

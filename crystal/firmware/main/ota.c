@@ -59,6 +59,8 @@ enum {
     JOB_WIFI_FORGET = 6,
     JOB_URL_SET = 7,      // a = url ("default" resets)
     JOB_STATUS = 8,       // ota status: url, partitions, last result
+    JOB_AUTO = 9,         // automatic check: newer-only, silent unless it installs
+    JOB_WIFI2_SET = 10,   // a = ssid, b = password: the second network slot
 };
 
 // Status for the UI; keep in sync with src/ota.cr.
@@ -193,6 +195,8 @@ static void wifi_down(void)
 void cr_wifi_ap_stop(void);
 static esp_netif_t *s_ap_netif;          // `net ap on`: the badge's own access point (main/net.c)
 
+static bool wifi_try(const char *ssid, char *pass);
+
 static bool wifi_up(void)
 {
     char ssid[33], pass[65];
@@ -203,8 +207,22 @@ static bool wifi_up(void)
         return true;
     }
     if (nv_u8("wifi_off", 0)) { fail("wifi is off (wifi <ssid> <pass>)"); return false; }
-    if (!nv_str("ssid", ssid, sizeof ssid) || !ssid[0]) { fail("no wifi set (wifi <ssid> <pass>)"); return false; }
-    nv_str("pass", pass, sizeof pass);
+    bool any = false;
+    for (int slot = 0; slot < 2; slot++) { // `wifi`, then `wifi2` when the first fails
+        if (!nv_str(slot ? "ssid2" : "ssid", ssid, sizeof ssid) || !ssid[0]) continue;
+        pass[0] = 0;
+        nv_str(slot ? "pass2" : "pass", pass, sizeof pass);
+        any = true;
+        if (wifi_try(ssid, pass)) return true;
+        if (s_hold) break; // network mode keeps retrying the slot it is on
+    }
+    memset(pass, 0, sizeof pass);
+    if (!any) fail("no wifi set (wifi <ssid> <pass>)");
+    return false;
+}
+
+static bool wifi_try(const char *ssid, char *pass)
+{
 
     size_t fr = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t lb = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
@@ -450,6 +468,22 @@ static bool same_version(const char *v)
     return strlen(v) == cl && strncmp(v, cur, cl) == 0;
 }
 
+// The release's build number: badge-version.txt is "<describe> <build>"
+// (release.sh); a release without a number counts as older (0).
+static long release_build(const char *v)
+{
+    const char *sp = strchr(v, ' ');
+    return sp ? strtol(sp + 1, NULL, 10) : 0;
+}
+
+bool cr_ota_auto(void) { return nv_u8("auto_off", 0) == 0; }
+
+void cr_ota_auto_set(bool on)
+{
+    nvs_handle_t h;
+    if (nv_open(&h, true)) { nvs_set_u8(h, "auto_off", on ? 0 : 1); nvs_commit(h); nvs_close(h); }
+}
+
 // ---- update --------------------------------------------------------------
 
 static void do_update(bool force)
@@ -465,8 +499,10 @@ static void do_update(bool force)
         printf("ota: checking version (running %s)\n", CR_VERSION);
         if (!fetch_version(url, ver, sizeof ver)) { fail(s_msg[0] ? s_msg : "version check"); wifi_down(); return; }
         printf("ota: latest %s\n", ver);
-        if (same_version(ver)) {
-            printf("ota: up to date\n");
+        long rb = release_build(ver);
+        if (same_version(ver) || rb <= CR_BUILD) {
+            // newer-only: never install an older (or unnumbered) release
+            printf("ota: release build %ld not newer than this build %d, skipped\n", rb, CR_BUILD);
             set_state(ST_UP_TO_DATE, ver);
             wifi_down();
             return;
@@ -550,6 +586,7 @@ static void worker(void *arg)
     nvs_handle_t h;
     switch (s_job) {
     case JOB_UPDATE:
+    case JOB_AUTO:
     case JOB_FORCE:
         do_update(s_job == JOB_FORCE);
         break;
@@ -561,6 +598,17 @@ static void worker(void *arg)
             nvs_set_str(h, "pass", s_b);
             nvs_set_u8(h, "wifi_off", 0);
             printf("wifi: saved \"%s\" (%s), used for ota\n", s_a, s_b[0] ? "with password" : "open");
+            nvs_commit(h);
+            nvs_close(h);
+        }
+        break;
+    case JOB_WIFI2_SET:
+        if (strlen(s_a) > 32 || strlen(s_b) > 63 || (s_b[0] && strlen(s_b) < 8)) {
+            printf("wifi2: ssid must be <= 32 chars, password 8..63 (or none)\n");
+        } else if (nv_open(&h, true)) {
+            nvs_set_str(h, "ssid2", s_a);
+            nvs_set_str(h, "pass2", s_b);
+            printf("wifi2: saved \"%s\" (%s), tried when the first network fails\n", s_a, s_b[0] ? "with password" : "open");
             nvs_commit(h);
             nvs_close(h);
         }
@@ -623,7 +671,7 @@ int32_t cr_ota_cmd(int32_t job, const uint8_t *a, int32_t alen, const uint8_t *b
     s_job = job;
     copy_arg(s_a, sizeof s_a, a, alen);
     copy_arg(s_b, sizeof s_b, b, blen);
-    if (job == JOB_UPDATE || job == JOB_FORCE) {
+    if (job == JOB_UPDATE || job == JOB_FORCE || job == JOB_AUTO) {
         s_msg[0] = 0;
         s_pct = 0;
         s_state = ST_CONNECTING;
@@ -631,7 +679,7 @@ int32_t cr_ota_cmd(int32_t job, const uint8_t *a, int32_t alen, const uint8_t *b
     }
     if (xTaskCreatePinnedToCore(worker, "ota", OTA_STACK, NULL, 3, NULL, 0) != pdPASS) {
         s_update_job = false;
-        if (job == JOB_UPDATE || job == JOB_FORCE) set_state(ST_FAILED, "no memory for task");
+        if (job == JOB_UPDATE || job == JOB_FORCE || job == JOB_AUTO) set_state(ST_FAILED, "no memory for task");
         __atomic_store_n(&s_busy, 0, __ATOMIC_SEQ_CST);
         return 2;
     }
