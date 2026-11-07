@@ -131,7 +131,7 @@ module Shell
     say("  sketch quickdraw         (Sketch: the six-shooter)\n")
     say("  usbflash                 (badge-to-badge USB update state)\n")
     say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
-    say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
+    say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN|INK_WIN|FAST_ENTRY> <0|1>\n")
     say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
     say("  ota | ota force | ota url <url|default> | ota status\n")
   end
@@ -269,7 +269,7 @@ module Shell
   def self.flag : Nil
     v = tok_int(2, -1)
     if v < 0 || v > 1
-      say("usage: flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
+      say("usage: flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN|INK_WIN|FAST_ENTRY> <0|1>\n")
       return
     end
     on = v == 1
@@ -281,6 +281,8 @@ module Shell
       Shared.ink_win = on
     elsif tok_is(1, "SK_WIN")
       Shared.sk_win = on
+    elsif tok_is(1, "FAST_ENTRY")
+      Apps.fast_entry = on
     elsif tok_is(1, "SKIP_ZERO_RED")
       EPD.skip_zero_red = on
     else

@@ -33,6 +33,7 @@ module EPD
   class_property fast_pulls = 1
   def self.refresh_diff; Render.frame("diff"); 0; end
   def self.diff_prepare; end
+  def self.diff_shown_valid?; true; end
 end
 
 module Shared

@@ -173,7 +173,47 @@ module Apps
   end
 
   # Full clean refresh (3 pulls, shaking base LUT): scene changes, ~3.5 s.
-  def self.show_clean : Nil
+  # FAST_ENTRY (shell `flag FAST_ENTRY 1`, off by default until checked on
+  # camera): entering an app or Home from another app or Home is one diff
+  # update (~0.65 s, erases settled by EPD's settle pulls) instead of the
+  # 3-pull clean (~4.5 s). A real clean still runs when red was on the panel,
+  # when the previous screen isn't a registry app / Home (Sketch ink, colour
+  # images: the diff baseline would be stale), after FAST_MAX fast entries
+  # in a row, or when the app passes force = true.
+  FAST_MAX = 8
+  @@fast_entry = false
+  @@entering = false
+  @@entry_ok = false
+  @@fast_n = 0
+
+  def self.fast_entry? : Bool
+    @@fast_entry
+  end
+
+  def self.fast_entry=(v : Bool) : Nil
+    @@fast_entry = v
+  end
+
+  # enter_screen: around the app's enter (prev_ok = the previous screen
+  # was a registry app or Home and no red is involved).
+  def self.begin_entry(prev_ok : Bool) : Nil
+    @@entering = true
+    @@entry_ok = prev_ok
+  end
+
+  def self.end_entry : Nil
+    @@entering = false
+  end
+
+  def self.show_clean(force : Bool = false) : Nil
+    if @@entering && @@fast_entry && @@entry_ok && !force && @@fast_n < FAST_MAX && EPD.diff_shown_valid?
+      @@fast_n = @@fast_n &+ 1
+      t0 = millis
+      show
+      log2("apps: fast entry ms / fast entries in a row", millis &- t0, @@fast_n)
+      return
+    end
+    @@fast_n = 0
     Shared.rendering = true
     fast_bw(3, EPD::LUT_BASE)
     # Open the diff session now (~0.6-3.6 s) so the first Apps.show after a

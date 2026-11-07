@@ -2422,6 +2422,9 @@ end
 
 # Shows a screen on entry: always a fast black/white frame.
 def enter_screen(scr : Int32, boot : Bool) : Nil
+  prev = Shared.screen
+  fast_prev_ok = prev == SCR_HOME || (prev >= 0 && prev < Apps.count && !Apps.builtin?(prev))
+  red_before = RedRes.on_panel? || RedRes.residue?
   Shared.screen = scr
   LibIDF.cr_net_screen(scr)
   SkState.red_frame = false unless scr == SCR_SKETCH # another screen replaces it
@@ -2439,10 +2442,16 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   # the incremental modes (diff, diffwin, window) never clean film residue.
   kind = EPD::LUT_BASE
   log2("main: screen / boot", scr, boot ? 1 : 0)
+  if scr == SCR_HOME || !Apps.builtin?(scr)
+    # FAST_ENTRY: only from another registry app / Home, never after red.
+    Apps.begin_entry(!boot && fast_prev_ok && !red_before)
+  end
   if scr == SCR_HOME
     Home.enter
+    Apps.end_entry
   elsif !Apps.builtin?(scr)
     Apps.enter(scr) # registry app (src/apps/)
+    Apps.end_entry
   elsif scr == SCR_NAMETAG
     draw_nametag_planes
     red_to_checker

@@ -1068,7 +1068,20 @@ module EPD
   end
 
   # The film now shows the planes (after a full refresh): black | red.
+  # diff_shown matches the film (set by full refreshes and diff pulls;
+  # ink pulls and window refreshes don't track it).
+  @@shown_valid = false
+
+  def self.diff_shown_valid? : Bool
+    @@shown_valid
+  end
+
+  def self.diff_shown_valid=(v : Bool) : Nil
+    @@shown_valid = v
+  end
+
   def self.diff_mark_shown : Nil
+    @@shown_valid = true
     @@settle_any = false # a full refresh drove every pixel
     unless @@s1.null?
       zero(@@s1, PLANE)
@@ -1489,6 +1502,7 @@ module EPD
   # One ink pull: cmd_new -> 0x10, cmd_old -> 0x11 (whole planes, both
   # COGs), whole-panel DUW/DRFW. Returns panel ms or -1.
   def self.refresh_ink(cmd_new : UInt8*, cmd_old : UInt8*) : Int32
+    @@shown_valid = false # ink commands change the film behind diff_shown's back
     finish_aborted
     @@spi_fail = false
     if @@diff_open && (@@diff_n >= DIFF_SESSION || @@latched_kind != LUT_INK)
