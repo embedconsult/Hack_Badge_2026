@@ -113,20 +113,35 @@ class Keys:
         return ev, (key if pressed else None)
 
 
-class RowList:
-    """Up to `rows` text rows with an inverted focus row; scrolls with the focus."""
+def symbol(name, fallback):
+    try:
+        return getattr(lv.SYMBOL, name)
+    except AttributeError:
+        return fallback
 
-    def __init__(self, parent, x, y, w, row_h=30, rows=7, size=16):
+
+class RowList:
+    """Up to `rows` rows with an inverted focus row (the launcher menu's look);
+    scrolls with the focus. An item is a string, or a tuple of column texts
+    placed at `cols` x offsets."""
+
+    def __init__(self, parent, x, y, w, row_h=30, rows=7, size=16, cols=None):
         self.items = []
         self.sel = 0
         self.top = 0
         self.rows = rows
         self.objs = []
         self.shown = None
+        self.cols = cols or [0]
+        self.full_w = w - 12
+        self.col0_w = max(10, (self.cols[1] if len(self.cols) > 1 else w - 12) - 4)
         for i in range(rows):
             b = box(parent, x, y + i * row_h, w, row_h - 2, filled=False)
-            l = label(b, "", 6, (row_h - 2 - size) // 2 - 2, size, w - 12)
-            self.objs.append((b, l))
+            ls = []
+            for k, cx in enumerate(self.cols):
+                nxt = self.cols[k + 1] if k + 1 < len(self.cols) else w - 12
+                ls.append(label(b, "", 6 + cx, (row_h - 2 - size) // 2 - 2, size, max(10, nxt - cx - 4)))
+            self.objs.append((b, ls))
 
     def set_items(self, items):
         self.items = items
@@ -148,10 +163,17 @@ class RowList:
         if state == self.shown:
             return  # e-paper: touch nothing that did not change
         self.shown = state
-        for i, (b, l) in enumerate(self.objs):
+        for i, (b, ls) in enumerate(self.objs):
             k = self.top + i
-            focus = k == self.sel and k < len(self.items)
+            have = k < len(self.items)
+            focus = k == self.sel and have
             b.set_style_bg_color(lv.color_black() if focus else lv.color_white(), 0)
-            b.set_style_border_width(1 if k < len(self.items) else 0, 0)
-            l.set_style_text_color(lv.color_white() if focus else lv.color_black(), 0)
-            l.set_text(self.items[k] if k < len(self.items) else "")
+            b.set_style_border_width(1 if have else 0, 0)
+            it = self.items[k] if have else ""
+            if not isinstance(it, tuple):
+                it = (it,)
+            if len(self.cols) > 1:
+                ls[0].set_width(self.col0_w if len(it) > 1 else self.full_w)
+            for c, l in enumerate(ls):
+                l.set_style_text_color(lv.color_white() if focus else lv.color_black(), 0)
+                l.set_text(it[c] if c < len(it) else "")

@@ -360,6 +360,7 @@ static void send_hello(int64_t now)
     for (int i = 0; i < PEERS; i++) {
         peer_t *p = &s_peer[i];
         if (!p->seen || p->kind != K_BADGEOS || now - p->seen > STALE_MS) continue;
+        if (memcmp(p->via, zero6, 6)) continue; // learned from another bridge's announce: not ours to repeat
         uint8_t o[23 + 9];
         memset(o, 0, sizeof o);
         o[0] = K_BADGEOS, o[1] = CAP_PONG, o[2] = 255;

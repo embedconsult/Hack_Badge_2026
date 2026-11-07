@@ -203,6 +203,9 @@ class Link:
             if p is None:
                 p = Peer(src)
                 self.peers[src] = p
+            if b[0] == K_BADGEOS and p.kind == K_BADGEOS and bytes(b[4:10]) != p.via and b[22] >= 1 \
+                    and b[29] == 127 and p.rssi_of(p.via) is not None and tdiff(now, p.seen) < 5000:
+                return  # a second bridge that cannot hear it: keep the one that measures it
             p.kind, p.caps, p.screen, p.flags = b[0], b[1], b[2], b[3]
             p.via = bytes(b[4:10])
             p.name = bytes(b[10:22]).split(b"\x00")[0].decode()

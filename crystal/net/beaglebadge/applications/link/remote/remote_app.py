@@ -75,7 +75,7 @@ class RemoteApp(app.App):
     def show_pick(self):
         self.mode = "pick"
         p = self.new_pane()
-        self.list = ui.RowList(p, 4, 4, 392, row_h=34, rows=6, size=16)
+        self.list = ui.RowList(p, 4, 4, 392, row_h=34, rows=6, size=16, cols=[0, 160, 290])
         self.peers = []
         self.hint.set_text("pick a Supercon badge   SELECT  BACK")
         self.refresh_pick()
@@ -85,7 +85,7 @@ class RemoteApp(app.App):
             return
         self.peers = [q for q in self.link.live_peers((bn.K_CRYSTAL,)) if q.caps & bn.CAP_REMOTE]
         scr = lambda q: bn.SCREENS[q.screen] if q.screen < len(bn.SCREENS) else "?"
-        self.list.set_items(["%-14s %s  %s" % (q.label()[:14], bn.addr_ip(q.addr), scr(q)) for q in self.peers]
+        self.list.set_items([(q.label()[:14], bn.addr_ip(q.addr), scr(q)) for q in self.peers]
                             or ["no Supercon badge found yet", "(its LINK screen, A = net on)"])
 
     def show_actions(self):
