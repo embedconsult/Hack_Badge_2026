@@ -1239,6 +1239,14 @@ module EPD
   # into 0x10 (the box-only write there is an upload optimisation). rows <
   # HEIGHT: UPD_DIFFWIN, DRFW limited to rows 0..rows-1 (4-aligned).
   # Returns panel ms or -1.
+  # Opens the differential session now (after a full refresh), so the next
+  # refresh_diff is a single pull instead of paying the session open.
+  def self.diff_prepare : Nil
+    return if @@diff_open && @@latched_kind == LUT_DIFF && @@diff_n < DIFF_SESSION
+    cog_stop if @@diff_open
+    diff_open
+  end
+
   def self.refresh_diff(rows : Int32 = HEIGHT) : Int32
     finish_aborted
     @@spi_fail = false

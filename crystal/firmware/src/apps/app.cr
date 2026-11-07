@@ -176,6 +176,9 @@ module Apps
   def self.show_clean : Nil
     Shared.rendering = true
     fast_bw(3, EPD::LUT_BASE)
+    # Open the diff session now (~0.6-3.6 s) so the first Apps.show after a
+    # clean is one ~0.65 s pull, not a session open plus the pull.
+    EPD.diff_prepare
     Shared.rendering = false
   end
 
