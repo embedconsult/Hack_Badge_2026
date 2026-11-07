@@ -20,6 +20,11 @@ sketch win`, mode 8, ~72 ms median per pull), accepting its known artifacts
 the clean 580 ms whole-panel ink. The whole-panel path stays available:
 `upd sketch ink`.
 
+Open items noted by the user: "lines are too thick" (Sketch LINE_W 3; not
+changed yet). Quick draw on the window path takes ~5.8 min (783 pulls, a
+pull per 8 points) and every ~20th pull is a 1.16 s full-refresh fallback
+when the COG session restarts, which breaks the 250 ms goal.
+
 ## How a change becomes the default
 
 - **Primary test: quick draw** (`python3 crystal/tools/morning_checks.py quickdraw`), the Colt the user shows in demos. A change must keep the gun as clean as the baseline (9e163f2, `/tmp/claude-0/sk/qd_base.png`: whole outline, no missing segments, seams or copies), with no pull over 250 ms. Baseline today: 14 pulls of 580 ms, 9.9 s total.
