@@ -5,7 +5,7 @@
 
 #define NCHUNK ((RN_SRC_MAX + RN_CHUNK - 1) / RN_CHUNK)
 #define RETRY_MS 400
-#define TRIES 15
+#define TRIES 50 // 20 s: a peer may be busy redrawing its e-paper
 #define Z_EVERY_MS 1000
 #define Z_FOR_MS 120000
 

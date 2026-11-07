@@ -57,7 +57,7 @@ necessarily zero terminated.
 | Offset | Size | Field |
 |---|---|---|
 | 12 | 1 | kind: 1 = BeagleBadge, 2 = Supercon/Crystal, 3 = Supercon/badge os (sent *by a bridge* for it) |
-| 13 | 1 | caps bits: 1 remote control, 2 pong, 4 ESP-NOW bridge, 8 sketch |
+| 13 | 1 | caps bits: 1 remote control, 2 pong, 4 ESP-NOW bridge, 8 sketch, 16 robot battles (G J B K Z) |
 | 14 | 1 | screen id (Crystal: 0 nametag 1 portrait 2 sketch 3 life 4 snake 5 diag 6 link 7 pong; else 255) |
 | 15 | 1 | flags: 1 = in a pong game |
 | 16 | 6 | `via`: the bridge's MAC for kind 3, else zero. The badge itself has the MAC in the header |
@@ -153,14 +153,22 @@ seeds are below 2^31.
 
 Flow (the challenger is A):
 
-1. A sends `G` (every 400 ms until answered, 15 tries). B answers `J`: 0 if it has every robot and is
-   free, 1 with the bit mask of the robots it lacks, 2 if a battle is going on.
+0. Only peers announcing caps bit 16 (robot battles) are challenged. They are reached at the source
+   address and **port** of their announces: a badge's is 4626, a simulator's its own (4627 by
+   default). The badges broadcast their announces to 4626, so a simulator binds its own port and also
+   listens on 4626 (receive only, `SO_REUSEADDR`, shared with the BeagleBadge's launcher apps).
+1. A sends `G` (every 400 ms until answered, for 20 s: a badge may be busy redrawing its e-paper).
+   B answers `J`: 0 if it has every robot and is free, 1 with the bit mask of the robots it lacks,
+   2 if a battle is going on.
 2. On `J` 1, A sends the missing sources as `B` chunks, one at a time, each repeated every 400 ms
-   until B's matching `K`; then `G` again. B assembles the chunks and keeps a source when its CRC-32
-   checks out.
+   until B's matching `K` (again 20 s at most per chunk); then `G` again. B assembles the chunks and
+   keeps a source when its CRC-32 checks out.
 3. On `J` 0 both badges switch to ROBOTS and play the battle (the Crystal badge: the same as
-   `robot run`, with the given seed and limit).
-4. When its battle ends, each badge sends `Z` and repeats it every second until it has the peer's `Z`.
+   `robot run`, with the given seed and limit). The Crystal badge simulates the whole battle at once
+   (well under a second), sends its `Z`, and only then shows it, replaying the same battle frame by
+   frame; so its result does not wait for the 5-9 s of e-paper refreshes.
+4. Each badge sends `Z` as soon as it has its result and repeats it every second until it has the
+   peer's `Z` (the Crystal badge gives up after 120 s; a simulator waits as long as it runs).
    A badge answers a `Z` whose `have` is 0 with its own `Z`. With both, each compares cycles, winner,
    damages and `hash` (FNV-1a 32 of cycles, robot count, and per robot x, y, damage, restarts,
    cycles run, active, failed: `RB.result_hash` in `src/robots/battle.cr`) and shows
@@ -169,16 +177,25 @@ Flow (the challenger is A):
 On the Crystal badge: `robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]` in the USB shell (network
 mode on; `<badge>` = the start of its announced name, or the last hex digits of its MAC). Host test:
 `crystal/firmware/test/robonet/run.sh` runs the badge's `robonet.c` against `sim_badge.py` over UDP
-on localhost (both directions, a peer with a different result, 30 % packet loss).
+on localhost: both directions, a peer with a different result, 30 % packet loss, and the real port
+layout (badge code on its link port, broadcasting to it; simulator on its own port listening on the
+link port too) with a badge that holds its result back 10 s.
 
 On a BeagleBadge, against a real Supercon badge:
 
 ```sh
 # the badge engine for the BeagleBadge (aarch64): RB_STATIC=1 crystal/firmware/test/robonet/run.sh
 # builds crystal/firmware/test/robonet/bin/rb statically; copy it and the robot files over, then
+# with sim_badge.py: robonet.py and the repo's _badgenet.py (the launcher's installed copy in
+# /opt/badge_launcher may be too old; sim_badge.py says so and stops)
 python3 sim_badge.py 120 --name Beagle --engine ./rb                      # answer: badge runs `robot challenge Beagle sniper rook`
 python3 sim_badge.py 120 --name Beagle --engine ./rb --challenge <badge> sniper.cr rook.cr --seed 42
 ```
+
+The simulator binds 4627 and listens on 4626 next to the launcher apps. Caveat: while it runs, a
+unicast to the BeagleBadge's port 4626 (a badge's `R` reply to a launcher app) may reach the
+simulator's listener instead of the app (Linux gives a shared port's unicast to one socket);
+broadcasts reach both.
 
 `sim_badge.py` prints each step and the verdict (exit 0 same, 3 different, 4 failed). Without
 `--engine` it still transfers robots and answers, but cannot compare.

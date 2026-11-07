@@ -139,6 +139,18 @@ RobotsApp.request(2, 0)
 RobotsApp.request_run(3, 77)
 RobotsApp.tick(1, inp)
 4.times { RobotsApp.tick(1, inp) }
+# a badge-to-badge battle (robonet stubbed): result sent at once, then shown
+Render.name = "robotslink"
+lib LibIDF
+  fun stub_rn_offer : Void
+end
+sn = Roster.source(0)
+LibIDF.cr_rn_add(sn.to_unsafe, sn.bytesize)
+rk = Roster.source(1)
+LibIDF.cr_rn_add(rk.to_unsafe, rk.bytesize)
+LibIDF.stub_rn_offer
+RobotsApp.tick(1, inp)
+RobotsApp.tick(1, press.call(Games::BTN_B))
 
 # SNAKES: lobby, a 4-house-snake game after 12 and 40 turns, the result
 Render.name = "snakes"
