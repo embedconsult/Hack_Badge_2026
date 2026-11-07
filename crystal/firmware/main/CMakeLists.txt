@@ -26,13 +26,13 @@ set(CRYSTAL_OBJ "${CRYSTAL_OBJ_BASE}.o")
 # "Literal pools"). build.sh writes crystal_flags.cmake from the env vars
 # CRYSTAL_OPT, CRYSTAL_SPLIT and CRYSTAL_LLC_FLAGS; a plain idf.py build reads
 # the env directly.
-#   CRYSTAL_OPT    crystal optimisation flags, default -O2. --release (-O3)
+#   CRYSTAL_OPT    crystal optimisation flags, default --release (-O3), which
 #                  needs CRYSTAL_SPLIT=1: Xtensa L32R reaches literals at most
 #                  256 KiB back and Crystal emits one .literal + one .text
 #                  section, so at -O3 (305 KiB) the link fails with
 #                  "dangerous relocation: l32r: literal target out of range".
-#   CRYSTAL_SPLIT  0 (default): Crystal writes the object itself.
-#                  1: Crystal emits its optimised LLVM IR, crystal_sections.py
+#   CRYSTAL_SPLIT  0: Crystal writes the object itself (CRYSTAL_SPLIT=0 -O2 = old build).
+#                  1 (default): Crystal emits its optimised LLVM IR, crystal_sections.py
 #                  gives each function a .text.<name> section (so its literal
 #                  pool gets .literal.<name>, which the IDF linker script keeps
 #                  right before it; --gc-sections then also drops unused
@@ -49,7 +49,10 @@ else()
   set(CRYSTAL_FLAGS_FILE "")
 endif()
 if(CRYSTAL_OPT STREQUAL "")
-  set(CRYSTAL_OPT "-O2")
+  set(CRYSTAL_OPT "--release")   # -O3 (A/B on the badge Nov 2026: equal or better, no faults)
+endif()
+if(CRYSTAL_SPLIT STREQUAL "")
+  set(CRYSTAL_SPLIT "1")         # needed by --release (L32R range)
 endif()
 separate_arguments(CRYSTAL_OPT_LIST UNIX_COMMAND "${CRYSTAL_OPT}")
 separate_arguments(CRYSTAL_LLC_LIST UNIX_COMMAND "${CRYSTAL_LLC_FLAGS}")
