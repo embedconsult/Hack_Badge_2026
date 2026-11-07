@@ -88,6 +88,8 @@ static EventGroupHandle_t s_eg;
 static esp_netif_t *s_netif;
 static esp_event_handler_instance_t s_h_wifi, s_h_ip;
 static int s_retries;
+static volatile bool s_hold;            // network mode (main/net.c) keeps Wi-Fi up
+static uint8_t s_channel;
 #define BIT_UP   BIT0
 #define BIT_FAIL BIT1
 
@@ -152,7 +154,8 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *d = data;
-        if (++s_retries <= 4) {
+        if (s_eg) xEventGroupClearBits(s_eg, BIT_UP);
+        if (s_hold || ++s_retries <= 4) { // network mode: retry forever
             printf("wifi: disconnected (reason %d), retry %d\n", d->reason, s_retries);
             esp_wifi_connect();
         } else {
@@ -162,13 +165,16 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = data;
         snprintf(s_last_ip, sizeof s_last_ip, IPSTR, IP2STR(&e->ip_info.ip));
+        wifi_second_chan_t sc;
+        esp_wifi_get_channel(&s_channel, &sc);
+        s_retries = 0;
         xEventGroupSetBits(s_eg, BIT_UP);
     }
 }
 
 static void wifi_down(void)
 {
-    if (!s_netif) return;
+    if (!s_netif || s_hold) return; // network mode owns the radio now
     esp_wifi_disconnect();
     esp_wifi_stop();
     esp_event_handler_instance_unregister(WIFI_EVENT, ESP_EVENT_ANY_ID, s_h_wifi);
@@ -184,6 +190,11 @@ static void wifi_down(void)
 static bool wifi_up(void)
 {
     char ssid[33], pass[65];
+    if (s_netif) { // already up (network mode): just wait for the link
+        EventBits_t b = xEventGroupWaitBits(s_eg, BIT_UP, pdFALSE, pdFALSE, pdMS_TO_TICKS(25000));
+        if (!(b & BIT_UP)) { fail("wifi: not connected"); return false; }
+        return true;
+    }
     if (nv_u8("wifi_off", 0)) { fail("wifi is off (wifi <ssid> <pass>)"); return false; }
     if (!nv_str("ssid", ssid, sizeof ssid) || !ssid[0]) { fail("no wifi set (wifi <ssid> <pass>)"); return false; }
     nv_str("pass", pass, sizeof pass);
@@ -243,6 +254,38 @@ static bool wifi_up(void)
     s_last_rssi = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
     printf("wifi: up, ip %s rssi %d\n", s_last_ip, s_last_rssi);
     return true;
+}
+
+// ---- network mode (main/net.c) ------------------------------------------
+
+// Brings Wi-Fi up (blocking, up to 25 s) and keeps it up until cr_wifi_release.
+// Runs on the net task; the OTA worker then reuses the connection.
+bool cr_wifi_hold(void)
+{
+    s_hold = true;
+    if (s_netif) return (xEventGroupGetBits(s_eg) & BIT_UP) != 0;
+    s_hold = false; // wifi_up's failure path must be able to tear down
+    bool ok = wifi_up();
+    if (ok) {
+        s_hold = true;
+        set_state(ST_IDLE, "");
+    }
+    return ok;
+}
+
+void cr_wifi_release(void)
+{
+    s_hold = false;
+    if (!__atomic_load_n(&s_busy, __ATOMIC_SEQ_CST)) wifi_down(); // an OTA job downs it when done
+}
+
+bool cr_wifi_connected(void) { return s_netif && s_eg && (xEventGroupGetBits(s_eg) & BIT_UP); }
+const char *cr_wifi_ip(void) { return s_last_ip; }
+int32_t cr_wifi_channel(void) { return s_channel; }
+int32_t cr_wifi_rssi(void)
+{
+    wifi_ap_record_t ap;
+    return cr_wifi_connected() && esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
 
 // ---- version check -------------------------------------------------------

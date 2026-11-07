@@ -80,6 +80,7 @@ end
 require "./games/menu"
 require "./shell"
 require "./ota"
+require "./net"
 
 STATUS_LED       = 1
 GPIO_MODE_OUTPUT = 2 # GPIO_MODE_DEF_OUTPUT (BIT1)
@@ -400,6 +401,10 @@ def mode_rgb(m : Int32, rgb : UInt8*) : Nil
     r = 0; g = 190; b = 255
   elsif m == 5
     r = 200; g = 200; b = 200
+  elsif m == 6
+    r = 0; g = 0; b = 255
+  elsif m == 7
+    r = 255; g = 255; b = 255
   end
   rgb[0] = r.to_u8!
   rgb[1] = g.to_u8!
@@ -531,6 +536,7 @@ fun crystal_knob_task(arg : Void*) : Void
       end
     end
     Shared.set_knobs(mv_l, mv_r, btns)
+    LibIDF.cr_net_input(mv_l, mv_r, btns) # Pong paddle (main/net.c)
     # Wake the main loop on a button change or knob motion past the deadband.
     dl = mv_l &- woke_l
     dr = mv_r &- woke_r
@@ -1338,7 +1344,9 @@ SCR_SKETCH   = 2
 SCR_LIFE     = 3
 SCR_SNAKE    = 4
 SCR_DIAG     = 5
-SCR_COUNT    = 6
+SCR_LINK     = 6 # src/net.cr
+SCR_PONG     = 7
+SCR_COUNT    = 8
 
 # Partial-update modes (per app, `upd` in the shell).
 UPD_FULL    = 0 # full-screen fast refresh (WIN_LUT)
@@ -1516,7 +1524,7 @@ def draw_nametag_planes : Nil
   EPD.fill(EPD::WHITE)
   ok = PNG.draw(LibIDF.cr_hello_png, LibIDF.cr_hello_png_size, EPD.black, EPD.red, 0, 0, true)
   draw_pattern(0, true) unless ok
-  draw_name("Jason", "Kridner")
+  draw_name_net # src/net.cr: `text first|last`
 end
 
 def draw_portrait_planes : Nil
@@ -1952,6 +1960,7 @@ end
 # Shows a screen on entry: always a fast black/white frame.
 def enter_screen(scr : Int32, boot : Bool) : Nil
   Shared.screen = scr
+  LibIDF.cr_net_screen(scr)
   SkState.red_frame = false unless scr == SCR_SKETCH # another screen replaces it
   # Every preview uses WIN_LUT (HALF60), the kind game frames and Sketch ink
   # use too, so the COG session stays latched across screen switches (no ~5 s
@@ -1980,6 +1989,8 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
     fast_bw(pulls, kind)
   elsif scr == SCR_DIAG
     show_diag
+  elsif scr == SCR_LINK || scr == SCR_PONG
+    LinkUI.enter(scr)
   else
     Menu.enter(menu_mode_for(scr))
     SkState.colour = false
@@ -2116,6 +2127,11 @@ fun crystal_app_main : Void
       enter_screen(scr, false)
       Shared.rendering = false
     end
+    if (reqs & Shared::REQ_REDRAW) != 0_u32 && Shared.target == scr
+      Shared.rendering = true
+      enter_screen(scr, false) # new nametag text (net.cr)
+      Shared.rendering = false
+    end
     if (reqs & Shared::REQ_STROKE) != 0_u32 && scr == SCR_SKETCH
       Sketch.line(Sketch.canvas, Shared.sx0, Shared.sy0, Shared.sx1, Shared.sy1)
       Menu.render(EPD.black, EPD.red)
@@ -2176,6 +2192,8 @@ fun crystal_app_main : Void
         colour_shown = colour_refresh
         colour_due = millis &+ AUTO_COLOUR_MS
       end
+    elsif scr == SCR_LINK || scr == SCR_PONG
+      LinkUI.tick(scr, now, inp)
     elsif scr == SCR_DIAG
       if a_hold
         # Clean the panel: a full OTP (slow) refresh of a white screen with
