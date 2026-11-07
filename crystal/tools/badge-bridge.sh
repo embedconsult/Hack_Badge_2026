@@ -33,7 +33,7 @@ server_pid=""
 start_server() {
   [ -e "$PORT_DEV" ] || return
   if [ "$BRIDGE" = socat ]; then
-    socat -d TCP-LISTEN:$TCP_PORT,reuseaddr,fork "FILE:$PORT_DEV,raw,echo=0,nonblock,b$BAUD" >"$REQ/$LOG" 2>&1 &
+    socat -d TCP-LISTEN:$TCP_PORT,reuseaddr,fork "FILE:$PORT_DEV,raw,echo=0,nonblock,ispeed=$BAUD,ospeed=$BAUD" >"$REQ/$LOG" 2>&1 &
   else
     python3 "$SERVER" -p $TCP_PORT "$PORT_DEV" >"$REQ/$LOG" 2>&1 &
   fi
