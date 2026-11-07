@@ -50,7 +50,7 @@ static int32_t s_who[4];
 void cr_snk_begin(int32_t n, const int32_t *who, uint32_t seed, const int32_t *snap, int32_t nsnap) { memcpy(s_who, who, n * 4); }
 void cr_snk_turn(const int32_t *snap, int32_t n) {}
 void cr_snk_end(const int32_t *snap, int32_t n) {}
-int32_t cr_snk_move(int32_t i) { return -1; }
+int32_t cr_snk_move(int32_t i) { return -1; } // every bot move missed: auto moves
 int32_t cr_snk_err(int32_t i) { return i == 3 ? 3 : 0; }
 int32_t cr_snk_ms(int32_t i) { return 20 + 7 * i; }
 int32_t cr_snk_misses(int32_t i) { return i == 3 ? 2 : 0; }
