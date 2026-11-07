@@ -1463,7 +1463,55 @@ module EPD
     end
   end
 
+  # INK40 (shell `flag INK40 1`): the ink table with phases a and b on
+  # (SRab 1), 4 frames per group = 40 frames per pull, the structure of the
+  # HALF60 / window LUTs. Hypothesis (EPD_NOTES): the 20-frame tables
+  # (SRab 0) are what makes rows-only windows copy +336 rows and leave
+  # seams. Frame f: group f / 4, phase f % 4 (a b c d = bits 7-6 .. 1-0).
+  @@ink40 = false
+
+  def self.ink40? : Bool
+    @@ink40
+  end
+
+  def self.ink40=(v : Bool) : Nil
+    @@ink40 = v
+    cog_stop if @@diff_open && @@latched_kind == LUT_INK && !busy? # new table: new session
+  end
+
+  def self.build_ink40 : Nil
+    k = 0
+    while k < 50
+      q = @@lut + (k &* 8).to_i64!
+      q[0] = 0_u8; q[1] = 1_u8; q[2] = 1_u8; q[3] = 1_u8
+      q[4] = 1_u8; q[5] = 1_u8; q[6] = 1_u8; q[7] = 1_u8
+      k = k &+ 1
+    end
+    f = 0
+    while f < 40
+      g = f.unsafe_div(4)
+      shift = 6 &- 2 &* (f & 3)
+      if f < @@ink_f1
+        q = @@lut + ((10 &+ g) &* 8).to_i64!
+        q[0] = q[0] | 1.unsafe_shl(shift).to_u8!
+      end
+      if f < @@ink_fe
+        q = @@lut + ((20 &+ g) &* 8).to_i64!
+        q[0] = q[0] | 2.unsafe_shl(shift).to_u8!
+      end
+      if f < @@ink_f3
+        q = @@lut + ((30 &+ g) &* 8).to_i64!
+        q[0] = q[0] | 1.unsafe_shl(shift).to_u8!
+      end
+      f = f &+ 1
+    end
+  end
+
   def self.build_ink : Nil
+    if @@ink40 && @@ink_custom.null?
+      build_ink40
+      return
+    end
     k = 0
     while k < 50
       q = @@lut + (k &* 8).to_i64!

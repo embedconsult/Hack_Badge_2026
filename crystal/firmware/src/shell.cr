@@ -282,6 +282,8 @@ module Shell
       Shared.ink_win = on
     elsif tok_is(1, "SK_WIN")
       Shared.sk_win = on
+    elsif tok_is(1, "INK40")
+      EPD.ink40 = on
     elsif tok_is(1, "FAST_ENTRY")
       Apps.fast_entry = on
     elsif tok_is(1, "SKIP_ZERO_RED")
