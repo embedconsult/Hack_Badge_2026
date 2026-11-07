@@ -390,6 +390,12 @@ module Shell
     elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
+    elsif tok_is(0, "stv")
+      # stv <mode> [tcon]: STV_DIR / TCON experiment (EPD.stv); prints OTP bytes
+      EPD.stv(tok_int(1, 0), tok_int(2, -1), tok_int(3, -1)) if @@nt >= 2
+      LibIDF.cr_log3("stv: OTP STV_DIR 0x1C / TCON 0x0B / DCTL 0x10".to_unsafe, EPD.otp_byte(0x1C), EPD.otp_byte(0x0B), EPD.otp_byte(0x10))
+      LibIDF.cr_log3("stv: OTP DRFW 0x0C..0x0F".to_unsafe, EPD.otp_byte(0x0C) &* 256 &+ EPD.otp_byte(0x0D), EPD.otp_byte(0x0E), EPD.otp_byte(0x0F))
+      LibIDF.cr_log3("stv: OTP RAM_RW 0x13 0x14 0x15".to_unsafe, EPD.otp_byte(0x13), EPD.otp_byte(0x14), EPD.otp_byte(0x15))
     elsif tok_is(0, "wbar")
       WBar.set(tok_int(1, 8), tok_int(2, WIN_LUT), tok_int(3, -1), tok_int(4, 40))
       Shared.request(Shared::REQ_WBAR)

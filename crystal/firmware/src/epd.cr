@@ -1241,7 +1241,7 @@ module EPD
     # DCTL from the OTP, as write_planes: yigitabi's sequence has no 0x01 and
     # writes RAM bit-reversed from x 0x3B down (PDi order); without it our
     # OTP-order writes land mirrored within each COG half (ink test photo).
-    cmd1(0x01_u8, @@otp[0x10]) if @@driver_b
+    cmd1(0x01_u8, dctl) if @@driver_b
     # Differential: both RAMs = what the film shows. Ink commands: both
     # zero (table 0 = no drive everywhere).
     sh = kind == LUT_DIFF ? diff_shown : Pointer(UInt8).null
@@ -2099,6 +2099,27 @@ module EPD
     @@hook = v
   end
 
+  @@stv_mode = 0
+  @@x_tcon2 = -1
+
+  @@x_dctl = -1
+
+  # DCTL (0x01) actually sent: the OTP value unless overridden (shell stv).
+  def self.dctl : UInt8
+    @@x_dctl >= 0 ? @@x_dctl.to_u8! : @@otp[0x10]
+  end
+
+  def self.stv(mode : Int32, tcon : Int32, dctl : Int32 = -1) : Nil
+    @@stv_mode = mode
+    @@x_tcon2 = tcon
+    @@x_dctl = dctl
+    cog_stop if (@@session_open || @@diff_open) && !busy?
+  end
+
+  def self.otp_byte(i : Int32) : Int32
+    @@otp[i].to_i32!
+  end
+
   def self.busy? : Bool
     LibIDF.gpio_get_level(BUSY1) == 0 || LibIDF.gpio_get_level(BUSY2) == 0
   end
@@ -2121,7 +2142,7 @@ module EPD
   end
 
   def self.write_planes(fast_ink_red : Bool, draw_red : Bool) : Nil
-    cmd1(0x01_u8, @@otp[0x10]) if @@driver_b # DCTL before the windows on driver B
+    cmd1(0x01_u8, dctl) if @@driver_b # DCTL before the windows on driver B
     # Full-screen DUW and DRFW on every upload, so no window left by a
     # window test (or window mode) can survive into a full refresh: once to
     # both COGs (as epd97.cpp), then to each COG on its own.
@@ -2232,8 +2253,24 @@ module EPD
     cmd1(0x45_u8, b ? REG45_B1 : REG45_084) # temperature: 0x50 + 2 x degC (0x84 = 26 C)
     cmd1(0xA7_u8, 0x10_u8); delay_ms(hi)
     cmd1(0xA7_u8, 0x00_u8); delay_ms(q ? lo : T_PRE_SS) # 0xB0 latches ~10 ms after this strobe
-    cmd1(0x60_u8, @@otp[0x0B]) # TCON
-    cmd1(0x61_u8, @@otp[0x1C]) # STV_DIR
+    cmd1(0x60_u8, @@x_tcon2 >= 0 ? @@x_tcon2.to_u8! : @@otp[0x0B]) # TCON
+    # STV_DIR (gate start / direction). Experiment (shell `stv`): 0 = OTP
+    # value to both CoGs (default), 1 = OTP value master only, 2 = 0x01
+    # master only (PDi), 3 = 0x01 both, 4 = OTP ^ 1 both, 5 = 0x00 both.
+    sv = @@otp[0x1C]
+    if @@stv_mode == 0
+      cmd1(0x61_u8, sv)
+    elsif @@stv_mode == 1
+      cmd(LEFT, 0x61_u8, 1, sv)
+    elsif @@stv_mode == 2
+      cmd(LEFT, 0x61_u8, 1, 0x01_u8)
+    elsif @@stv_mode == 3
+      cmd1(0x61_u8, 0x01_u8)
+    elsif @@stv_mode == 4
+      cmd1(0x61_u8, sv ^ 0x01_u8)
+    else
+      cmd1(0x61_u8, 0x00_u8)
+    end
     cmd1(0x01_u8, @@otp[0x10]) unless b # DCTL
     cmd1(0x02_u8, @@otp[0x11]) # VCOM
   end
