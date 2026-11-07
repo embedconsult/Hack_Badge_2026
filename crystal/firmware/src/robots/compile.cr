@@ -19,7 +19,8 @@ module RC
   SLOTS      = MAX_ROBOTS + 1
   # Deepest parse tree accepted. The checker and the compiler recurse once
   # per tree level, and they also run on the shell and HTTP tasks (small
-  # stacks). Real robots stay far below this (the upstream ones: <= 21).
+  # stacks). Real robots stay far below this (upstream examples: <= 13,
+  # test/robots/depth.cr).
   MAX_DEPTH = 48
   CODE_MAX   = 16384
   SYM_MAX    = 1024
