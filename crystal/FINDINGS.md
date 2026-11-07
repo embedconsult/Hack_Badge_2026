@@ -29,6 +29,7 @@ This file collects what we found while porting the Supercon 2026 Billboard Badge
 - **Speeds now:**
   - A diff update takes about 0.65 s.
   - Opening an app takes 4.2–4.8 s. FAST_ENTRY (off by default) cuts it to 0.66–0.99 s.
+- **Partial row windows drive twin rows:** a window over rows r..r+h also drives the rows about 336 lower (half the panel) with the same data: the `wbar` test, 2026-11-07. This is the source of the "displaced copies". Addressing is correct. Hackaday's driver never solved it either, and yigitabi5444's keeps full-height windows (~0.5 s). Whole-panel pulls are clean, but at 580 ms they miss Sketch's 250 ms goal ([GOALS](GOALS.md)).
 - **Still open, with camera checks ready:** the faint grey trail in games, Sketch's first-stroke strength, and ghosts under FAST_ENTRY (`python3 crystal/tools/morning_checks.py trail|ink|fast`).
 
 ## Crystal on Xtensa ([toolchain/README](toolchain/README.md))
