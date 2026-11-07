@@ -75,22 +75,16 @@ module Shell
     end
   end
 
+  # App by registry NAME (src/apps/app.cr), or "home"; -1 if none.
   def self.screen_of(i : Int32) : Int32
-    return SCR_NAMETAG if tok_is(i, "nametag")
-    return SCR_PORTRAIT if tok_is(i, "portrait")
-    return SCR_SKETCH if tok_is(i, "sketch")
-    return SCR_LIFE if tok_is(i, "life")
-    return SCR_SNAKE if tok_is(i, "snake")
-    return SCR_DIAG if tok_is(i, "diag")
-    return SCR_LINK if tok_is(i, "link")
-    return SCR_PONG if tok_is(i, "pong")
-    -1
+    return -1 if i >= @@nt
+    Apps.find(@@line + @@ts[i].to_i64!, @@tl[i])
   end
 
   def self.help : Nil
     say("commands:\n")
     say("  help | version | status | reboot\n")
-    say("  mode <nametag|portrait|sketch|life|snake|diag|link|pong>\n")
+    say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
     say("  text <first>[|<last>]           (nametag name, saved)\n")
@@ -275,7 +269,7 @@ module Shell
     elsif tok_is(0, "mode")
       s = screen_of(1)
       if s < 0
-        say("usage: mode <nametag|portrait|sketch|life|snake|diag|link|pong>\n")
+        say("usage: mode <home|nametag|portrait|sketch|...|any app name>\n")
       else
         Shared.target = s
         LibIDF.cr_notify_main
@@ -284,8 +278,7 @@ module Shell
     elsif tok_is(0, "press")
       if tok_is(1, "plus") || tok_is(1, "minus")
         t = Shared.target
-        t = tok_is(1, "plus") ? (t &+ 1 == SCR_COUNT ? 0 : t &+ 1) : (t == 0 ? SCR_COUNT &- 1 : t &- 1)
-        Shared.target = t
+        Shared.target = step_screen(t, tok_is(1, "plus"))
       elsif tok_is(1, "a")
         Shared.inject_buttons(Games::BTN_A)
       elsif tok_is(1, "b")
