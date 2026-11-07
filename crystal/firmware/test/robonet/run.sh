@@ -84,4 +84,37 @@ kill $SIM 2>/dev/null || true
 wait $SIM 2>/dev/null || true
 check "30 % packet loss, same result" 0 $H
 
+# 5. ports as on the real network: the badge code binds its link port and
+#    broadcasts its announces to it (as a badge on 4626); the simulator binds
+#    its own port (as 4627) and shares the link port with listen-only
+#    SO_REUSEADDR. The badge code also holds its result back 10 s (a badge
+#    redrawing its e-paper). Both directions. On one PC the badge code binds
+#    the PC's network address (--ip) so its port's unicast is its own, as on
+#    a separate badge.
+IP=$(hostname -i 2>/dev/null | cut -d' ' -f1)
+case "$IP" in 127.*|"") IP=$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p') ;; esac
+bin/host_badge --port 4651 --ip "$IP" --secs 45 --slow 10 > bin/host5a.log 2>&1 &
+HOST=$!
+set +e
+python3 "$NET/sim_badge.py" 40 --port 4652 --link-port 4651 --name SimBeagle --engine bin/rb \
+  --challenge HostBadge "$R1" "$R2" --seed 42 > bin/sim5a.log 2>&1
+S=$?
+wait $HOST
+H=$?
+set -e
+check "badge ports, slow badge, sim challenges (sim)" 0 $S
+check "badge ports, slow badge, sim challenges (badge)" 0 $H
+python3 "$NET/sim_badge.py" 45 --port 4654 --link-port 4653 --name SimBeagle --engine bin/rb \
+  > bin/sim5b.log 2>&1 &
+SIM=$!
+set +e
+bin/host_badge --port 4653 --ip "$IP" --secs 40 --slow 10 --challenge SimBeagle --seed 8 "$R3" "$R1" "$R4" \
+  > bin/host5b.log 2>&1
+H=$?
+set -e
+kill $SIM 2>/dev/null || true
+wait $SIM 2>/dev/null || true
+check "badge ports, slow badge, badge challenges" 0 $H
+grep -q "VERDICT: SAME" bin/sim5b.log || { echo "FAIL sim did not agree (5b)"; fail=1; }
+
 [ $fail = 0 ] && echo "robonet: all passed" || { tail -n 20 bin/*.log; exit 1; }

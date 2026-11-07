@@ -82,10 +82,30 @@ void vTaskDelay(uint32_t t) {}
 void cr_print(const char *s) { fputs(s, stdout); }
 void cr_notify_main(void) {}
 
-// Badge-to-badge battles (main/robonet.c via net.c): nothing going on.
-int32_t cr_rn_add(const uint8_t *s, int32_t n) { return -1; }
-int32_t cr_rn_read(int32_t i, uint8_t *b, int32_t max) { return -1; }
+// Badge-to-badge battles (main/robonet.c via net.c): a two-entry cache;
+// stub_rn_offer() makes the next cr_rn_take_match return a match of them.
+static char s_rn[2][8192];
+static int s_rn_len[2], s_rn_n, s_rn_offer, s_rn_state;
+int32_t cr_rn_add(const uint8_t *s, int32_t n) {
+    if (s_rn_n >= 2) return -1;
+    memcpy(s_rn[s_rn_n], s, n);
+    s_rn_len[s_rn_n] = n;
+    return s_rn_n++;
+}
+int32_t cr_rn_read(int32_t i, uint8_t *b, int32_t max) { memcpy(b, s_rn[i], s_rn_len[i]); return s_rn_len[i]; }
 int32_t cr_rn_challenge(const uint8_t *nm, int32_t nl, const int32_t *idx, int32_t n, uint32_t seed, uint32_t limit) { return -4; }
-int32_t cr_rn_take_match(uint32_t *id, uint32_t *seed, uint32_t *limit, int32_t *n, int32_t *idx) { return 0; }
-void cr_rn_result(uint32_t id, uint32_t cycles, int32_t winner, int32_t n, const uint8_t *dmg, uint32_t hash) {}
-int32_t cr_rn_status(char *buf, int32_t max) { buf[0] = 0; return 0; }
+void stub_rn_offer(void) { s_rn_offer = 1; }
+int32_t cr_rn_take_match(uint32_t *id, uint32_t *seed, uint32_t *limit, int32_t *n, int32_t *idx) {
+    if (!s_rn_offer) return 0;
+    s_rn_offer = 0, s_rn_state = 1;
+    *id = 0x1234, *seed = 42, *limit = 500000, *n = 2, idx[0] = 0, idx[1] = 1;
+    return 1;
+}
+void cr_rn_result(uint32_t id, uint32_t cycles, int32_t winner, int32_t n, const uint8_t *dmg, uint32_t hash) {
+    printf("stub: result sent: cycles %u winner %d hash %08x\n", cycles, winner, hash);
+    s_rn_state = 2;
+}
+int32_t cr_rn_status(char *buf, int32_t max) {
+    snprintf(buf, max, s_rn_state == 2 ? "SimBeagle got the same result" : s_rn_state ? "battle with SimBeagle" : "");
+    return s_rn_state == 2 ? 4 : s_rn_state ? 2 : 0;
+}

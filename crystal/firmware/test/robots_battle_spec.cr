@@ -231,6 +231,17 @@ describe "RB battle" do
     end
   end
 
+  it "replays the same battle after RB.start without reloading (ROBOTS link battles)" do
+    names = %w(sniper rook counter chatty)
+    names.each_with_index { |n, r| RB.load(r, robot_source(n).to_unsafe, robot_source(n).bytesize) }
+    RB.start(4, 42_u64, 500_000)
+    RB.run
+    first = {RB.cycles, RB.winner, RB.result_hash, rb_frame}
+    RB.start(4, 42_u64, 500_000)
+    RB.run
+    {RB.cycles, RB.winner, RB.result_hash, rb_frame}.should eq first
+  end
+
   it "accepts every upstream robot and rejects only absurdly deep nesting" do
     corpus.each { |(name, src)| {name, RC.load(0, src.to_unsafe, src.bytesize)}.should eq({name, true}) }
     deep = "main(\"D\") do\n  x = " + (["1"] * 60).join(" - ") + "\nend\n"

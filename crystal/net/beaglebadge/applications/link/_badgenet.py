@@ -25,7 +25,7 @@ except AttributeError:  # CPython
 PORT = 4626
 K_BEAGLE, K_CRYSTAL, K_BADGEOS = 1, 2, 3
 KIND_NAME = {1: "BeagleBadge", 2: "Supercon", 3: "badge os"}
-CAP_REMOTE, CAP_PONG, CAP_BRIDGE, CAP_SKETCH = 1, 2, 4, 8
+CAP_REMOTE, CAP_PONG, CAP_BRIDGE, CAP_SKETCH, CAP_ROBOTS = 1, 2, 4, 8, 16
 SCREENS = ["nametag", "portrait", "sketch", "life", "snake", "diag", "link", "pong"]
 BCAST6 = b"\xff" * 6
 ZERO6 = b"\x00" * 6
@@ -108,7 +108,7 @@ class Peer:
 class Link:
     """One socket, the peer table, and handlers. Call poll() often."""
 
-    def __init__(self, name="Beagle", kind=K_BEAGLE, caps=0, mac=None, port=PORT, bcast_port=PORT):
+    def __init__(self, name="Beagle", kind=K_BEAGLE, caps=0, mac=None, port=PORT, bcast_port=PORT, listen_bcast=False):
         self.me = mac or my_mac()
         self.name = name
         self.kind = kind
@@ -132,12 +132,24 @@ class Link:
         s.setblocking(False)
         self.sock = s
         self.bcast = _sockaddr("255.255.255.255", bcast_port)
+        # listen_bcast: also hear the announces broadcast to bcast_port while
+        # bound to another port (the badges broadcast to 4626; a simulator on
+        # 4627 shares 4626 with the launcher's apps; SO_REUSEADDR on both
+        # sockets gets every broadcast to each of them)
+        self.socks = [s]
+        if listen_bcast and bcast_port != port:
+            r = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            r.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            r.bind(_sockaddr("0.0.0.0", bcast_port))
+            r.setblocking(False)
+            self.socks.append(r)
 
     def close(self):
-        try:
-            self.sock.close()
-        except Exception:
-            pass
+        for s in self.socks:
+            try:
+                s.close()
+            except Exception:
+                pass
 
     # ---- send ----------------------------------------------------------
     def _hdr(self, t, src=None):
@@ -181,12 +193,13 @@ class Link:
         if tdiff(now, self.next_hello) >= 0:
             self.hello()
             self.next_hello = now + 1000
-        for _ in range(32):
-            try:
-                data, addr = self.sock.recvfrom(2048)
-            except Exception:
-                break
-            self._rx(data, addr, now)
+        for s in self.socks:
+            for _ in range(32):
+                try:
+                    data, addr = s.recvfrom(2048)
+                except Exception:
+                    break
+                self._rx(data, addr, now)
 
     def _rx(self, d, addr, now):
         if len(d) < 12 or d[0:3] != b"BLK" or d[3] != 1:

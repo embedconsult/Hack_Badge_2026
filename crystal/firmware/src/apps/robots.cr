@@ -226,6 +226,16 @@ module RobotsApp
       r = r &+ 1
     end
     RB.start(@@n, @@seed.to_u64!, @@limit)
+    if @@net_id != 0_u32
+      # badge to badge: play it to the end at once and send the result, so
+      # the peer is not kept waiting by our e-paper; then replay it to show
+      # (the engine is deterministic: the same battle again)
+      t0 = millis
+      RB.run
+      report
+      log2("robots: link battle result sent: cycles / sim ms", RB.cycles, millis &- t0)
+      RB.start(@@n, @@seed.to_u64!, @@limit)
+    end
     @@ended = false
     @@trail_n = 0
     @@ms = 0
@@ -432,17 +442,19 @@ module RobotsApp
       end
       r = r &+ 1
     end
-    y = ARENA_Y &+ 4 &* h &+ 8
+    # three lines fit under four robots (the panel ends at 672)
+    y = ARENA_Y &+ 4 &* h &+ 4
     x = Gfx.text(PANEL_X, y, "CYCLE ", 2)
     number(x, y, RB.cycles, 2)
-    x = Gfx.text(PANEL_X, y &+ 24, "SEED ", 2)
-    number(x, y &+ 24, (@@seed & 0x7FFFFFFF_u32).to_i32!, 2)
+    x = Gfx.text(PANEL_X &+ 200, y &+ 4, "SEED ", 1)
+    number(x, y &+ 4, (@@seed & 0x7FFFFFFF_u32).to_i32!, 1)
     if RB.over?
-      Gfx.text(PANEL_X, y &+ 48, win >= 0 ? "BATTLE OVER" : "DRAW", 2)
+      Gfx.text(PANEL_X, y &+ 22, win >= 0 ? "BATTLE OVER" : "DRAW", 2)
     end
-    if @@net
+    if @@net # badge link: "<peer> got the same result", up to two lines
       n = net_status
-      draw_bytes(PANEL_X, y &+ 72, @@line, n > 50 ? 50 : n, EPD::BLACK, 1)
+      draw_bytes(PANEL_X, y &+ 44, @@line, n > 52 ? 52 : n, EPD::BLACK, 1)
+      draw_bytes(PANEL_X, y &+ 54, @@line + 52_i64, n &- 52, EPD::BLACK, 1) if n > 52
     end
   end
 

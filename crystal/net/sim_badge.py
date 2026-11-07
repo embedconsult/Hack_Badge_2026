@@ -2,13 +2,16 @@
 """Pretend to be a Crystal Supercon badge (and one bridged badge os badge) on
 the badge link protocol, for testing the BeagleBadge apps without the ESP32.
 
-    python3 sim_badge.py [seconds] [--port 4627] [--name SimCrystal] [--bcast host:port]
-                         [--engine path/to/rb] [--challenge BADGE robot.cr robot.cr [...]] [--seed N]
+    python3 sim_badge.py [seconds] [--port 4627] [--link-port 4626] [--name SimCrystal]
+                         [--bcast host:port] [--engine path/to/rb]
+                         [--challenge BADGE robot.cr robot.cr [...]] [--seed N]
 
 Binds its own port (default 4627, so it can run next to a launcher app on
-the same BeagleBadge; peers reply to the source address), announces to the
-broadcast port 4626 (or --bcast), accepts remote commands (prints them), and
-plays Pong with a simple AI paddle when it gets a `pong` command.
+the same BeagleBadge; peers reply to the source address), and also listens on
+the link port 4626 (shared with the launcher apps) for the badges' broadcast
+announces. It announces to the link port's broadcast address (or --bcast),
+accepts remote commands (prints them), and plays Pong with a simple AI paddle
+when it gets a `pong` command.
 
 Robot battles (robonet.py; PROTOCOL.md B K G J Z): it answers challenges
 (a badge's `robot challenge <its name> ...`), receiving the robots it lacks,
@@ -24,7 +27,9 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-for d in (os.path.join(HERE, "beaglebadge", "applications", "link"), "/opt/badge_launcher/applications/link"):
+# The repo's _badgenet first (or one copied next to this file): an installed
+# launcher's copy may be older than the robot battle hooks.
+for d in (os.path.join(HERE, "beaglebadge", "applications", "link"), HERE, "/opt/badge_launcher/applications/link"):
     if os.path.exists(os.path.join(d, "_badgenet.py")):
         sys.path.insert(0, d)
         break
@@ -32,8 +37,17 @@ import _badgenet as bn  # noqa: E402
 sys.path.insert(0, HERE)
 import robonet  # noqa: E402
 
+_probe = bn.Link(port=0)
+_ok = hasattr(_probe, "on_packet") and hasattr(bn, "CAP_ROBOTS")
+_probe.close()
+if not _ok:
+    sys.exit("sim: %s is too old for robot battles (no on_packet / CAP_ROBOTS); copy the repo's "
+             "crystal/net/beaglebadge/applications/link/_badgenet.py next to sim_badge.py" % bn.__file__)
+print("sim: using", bn.__file__, flush=True)
+
 secs = 120.0
 port = 4627
+link_port = bn.PORT
 name = "SimCrystal"
 bcast = None
 engine = None
@@ -44,6 +58,8 @@ while args:
     a = args.pop(0)
     if a == "--port":
         port = int(args.pop(0))
+    elif a == "--link-port":
+        link_port = int(args.pop(0))
     elif a == "--name":
         name = args.pop(0)
     elif a == "--bcast":
@@ -65,8 +81,8 @@ while args:
 ME = bytes.fromhex("f412fa%06x" % (port & 0xFFFFFF))  # fake Crystal badge
 OS_MAC = bytes.fromhex("f412fa0000aa")  # fake badge os badge behind it
 link = bn.Link(name=name, kind=bn.K_CRYSTAL,
-               caps=bn.CAP_REMOTE | bn.CAP_PONG | bn.CAP_BRIDGE | bn.CAP_SKETCH,
-               mac=ME, port=port)
+               caps=bn.CAP_REMOTE | bn.CAP_PONG | bn.CAP_BRIDGE | bn.CAP_SKETCH | bn.CAP_ROBOTS,
+               mac=ME, port=port, bcast_port=link_port, listen_bcast=True)
 if bcast:
     link.bcast = bcast
 robots = robonet.RoboNet(lambda addr, t, body: link.send(addr, t, body), engine=engine)
@@ -124,8 +140,9 @@ while time.time() < end:
     robots.tick()
     if challenge and not challenged:
         for p in link.live_peers((bn.K_CRYSTAL, bn.K_BEAGLE)):
-            if p.addr and (p.name.lower().startswith(challenge[0].lower()) or
-                           bn.mac_str(p.mac).replace(":", "").endswith(challenge[0].lower())):
+            if p.addr and p.caps & bn.CAP_ROBOTS and (
+                    p.name.lower().startswith(challenge[0].lower()) or
+                    bn.mac_str(p.mac).replace(":", "").endswith(challenge[0].lower())):
                 robots.challenge(p.addr, p.mac, sources, seed or (int(time.time()) & 0x7FFFFFFF) | 1)
                 challenged = True
                 break

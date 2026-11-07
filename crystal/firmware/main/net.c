@@ -58,7 +58,7 @@ void cr_notify_main(void);             // main/main.c
 #define SCR_PONG 7
 
 enum { K_BEAGLE = 1, K_CRYSTAL = 2, K_BADGEOS = 3 };
-enum { CAP_REMOTE = 1, CAP_PONG = 2, CAP_BRIDGE = 4, CAP_SKETCH = 8 };
+enum { CAP_REMOTE = 1, CAP_PONG = 2, CAP_BRIDGE = 4, CAP_SKETCH = 8, CAP_ROBOTS = 16 };
 
 // ---- Pong: badge os's link.h and app_pong.c rules ---------------------------
 #define W 960
@@ -373,7 +373,7 @@ static void send_hello(int64_t now)
     uint8_t b[23 + 1 + 9 * 8];
     memset(b, 0, sizeof b);
     b[0] = K_CRYSTAL;
-    b[1] = CAP_REMOTE | CAP_PONG | CAP_BRIDGE | CAP_SKETCH;
+    b[1] = CAP_REMOTE | CAP_PONG | CAP_BRIDGE | CAP_SKETCH | CAP_ROBOTS;
     b[2] = (uint8_t)s_screen;
     b[3] = P.state == L_PAIRED ? 1 : 0;
     memcpy(b + 10, s_name[0], strlen(s_name[0]));
@@ -654,8 +654,12 @@ static bool same_ci(const char *a, const uint8_t *b, int n)
     return true;
 }
 
-// Challenge the live peer whose name starts with name[0, nl] (or whose MAC
-// ends with those hex digits) to a battle of cache entries idx[0..n-1].
+// Challenge a live peer that plays robot battles (announces CAP_ROBOTS) to a
+// battle of cache entries idx[0..n-1]: the one named name[0, nl] exactly,
+// else the first whose name starts with it or whose MAC ends with those hex
+// digits. (A BeagleBadge's launcher apps announce too, from the same IP but
+// without CAP_ROBOTS, so they are never picked.) It is reached at the source
+// port of its announces.
 // 0 started, -1 bad robots, -2 a match is going on, -3 no such badge,
 // -4 network mode off.
 int32_t cr_rn_challenge(const uint8_t *name, int32_t nl, const int32_t *idx, int32_t n, uint32_t seed, uint32_t limit)
@@ -663,13 +667,17 @@ int32_t cr_rn_challenge(const uint8_t *name, int32_t nl, const int32_t *idx, int
     if (!s_run || s_sock < 0) return -4;
     int64_t now = now_ms();
     peer_t *hit = NULL;
-    for (int i = 0; i < PEERS && !hit; i++) {
-        peer_t *p = &s_peer[i];
-        if (!p->seen || now - p->seen > STALE_MS || !p->ip || p->kind == K_BADGEOS) continue;
-        char hex[13];
-        snprintf(hex, sizeof hex, "%02x%02x%02x%02x%02x%02x", MAC2STR(p->mac));
-        if ((nl > 0 && same_ci(p->name, name, nl)) || (nl >= 4 && nl <= 12 && same_ci(hex + 12 - nl, name, nl))) hit = p;
-    }
+    for (int pass = 0; pass < 2 && !hit; pass++)
+        for (int i = 0; i < PEERS && !hit; i++) {
+            peer_t *p = &s_peer[i];
+            if (!p->seen || now - p->seen > STALE_MS || !p->ip || !(p->caps & CAP_ROBOTS)) continue;
+            char hex[13];
+            snprintf(hex, sizeof hex, "%02x%02x%02x%02x%02x%02x", MAC2STR(p->mac));
+            bool exact = nl > 0 && nl <= 12 && (int)strlen(p->name) == nl && same_ci(p->name, name, nl);
+            bool prefix = (nl > 0 && same_ci(p->name, name, nl)) ||
+                          (nl >= 4 && nl <= 12 && same_ci(hex + 12 - nl, name, nl));
+            if (pass == 0 ? exact : prefix) hit = p;
+        }
     if (!hit) return -3;
     int ix[RN_ROBOTS];
     for (int k = 0; k < n && k < RN_ROBOTS; k++) ix[k] = idx[k];

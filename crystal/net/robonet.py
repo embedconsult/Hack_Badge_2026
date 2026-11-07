@@ -19,7 +19,7 @@ import zlib
 CHUNK = 512
 SRC_MAX = 8160
 RETRY_MS = 400
-TRIES = 15
+TRIES = 50  # 20 s: a badge may be busy redrawing its e-paper
 
 
 def ticks():

@@ -4,7 +4,15 @@
 // For test/robonet/run.sh against crystal/net/sim_badge.py.
 //
 //   host_badge --port P --engine bin/rb [--name N] [--bcast host:port] [--secs S]
-//              [--loss PERCENT] [--challenge BADGE [--seed N] robot.cr robot.cr ...]
+//              [--loss PERCENT] [--slow S] [--ip A] [--challenge BADGE [--seed N] robot.cr ...]
+//
+// Like the badge, it binds one port and announces (with CAP_ROBOTS) to the
+// broadcast address on that same port unless --bcast says otherwise; peers
+// are answered at the source port of their packets. --slow S holds its
+// result back S seconds (a badge busy redrawing its e-paper). --ip A binds
+// the socket to address A (plus a receive-only 0.0.0.0 socket for the
+// broadcasts), so that on one PC it owns its port's unicast like a badge on
+// its own IP, while a simulator also listens on that port for broadcasts.
 //
 // Exit: 0 same result as the peer, 3 different, 4 failed, 5 timed out.
 #include <arpa/inet.h>
@@ -19,12 +27,20 @@
 #include <unistd.h>
 #include "robonet.h"
 
-static int s_sock;
+static int s_sock, s_rx2 = -1; // s_rx2: broadcasts, with --ip
 static uint8_t s_me[6] = {0xf4, 0x12, 0xfa, 0xc0, 0, 0};
 static uint8_t s_seq;
 static const char *s_engine = "bin/rb";
 static int s_events;
 static int s_loss; // percent of sent packets dropped (--loss), to test the retries
+static int s_slow; // seconds before the result is handed over (--slow)
+static struct {
+    bool due;
+    int64_t at;
+    uint32_t id, cycles, hash;
+    int winner, n;
+    uint8_t dmg[RN_ROBOTS];
+} s_res;
 
 static int64_t now_ms(void)
 {
@@ -88,8 +104,11 @@ static void play(void)
         unlink(f);
     }
     rmdir(dir);
-    printf("host: match %08x seed %u: cycles %u winner %d hash %08x\n", id, seed, cycles, winner, hash);
-    rn_result(id, cycles, winner, n, dmg, hash, now_ms());
+    printf("host: match %08x seed %u: cycles %u winner %d hash %08x%s\n", id, seed, cycles, winner, hash,
+           s_slow ? " (result held back)" : "");
+    s_res.due = true, s_res.at = now_ms() + s_slow * 1000LL;
+    s_res.id = id, s_res.cycles = cycles, s_res.hash = hash, s_res.winner = winner, s_res.n = n;
+    memcpy(s_res.dmg, dmg, sizeof dmg);
 }
 
 int main(int argc, char **argv)
@@ -97,13 +116,16 @@ int main(int argc, char **argv)
     int port = 4626, secs = 60, nfiles = 0;
     const char *name = "HostBadge", *badge = NULL, *files[RN_ROBOTS];
     uint32_t seed = 12345;
-    rn_addr_t bcast = {htonl(INADDR_BROADCAST), 4626};
+    rn_addr_t bcast = {htonl(INADDR_BROADCAST), 0}; // port 0: our own port, as the badge
+    const char *bind_ip = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--engine") && i + 1 < argc) s_engine = argv[++i];
         else if (!strcmp(argv[i], "--name") && i + 1 < argc) name = argv[++i];
         else if (!strcmp(argv[i], "--secs") && i + 1 < argc) secs = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--loss") && i + 1 < argc) s_loss = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--slow") && i + 1 < argc) s_slow = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--ip") && i + 1 < argc) bind_ip = argv[++i];
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = strtoul(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--bcast") && i + 1 < argc) {
             char *c = strrchr(argv[++i], ':');
@@ -113,6 +135,7 @@ int main(int argc, char **argv)
         else if (nfiles < RN_ROBOTS) files[nfiles++] = argv[i];
     }
     s_me[4] = port >> 8, s_me[5] = port;
+    if (!bcast.port) bcast.port = port;
     s_sock = socket(AF_INET, SOCK_DGRAM, 0);
     int one = 1;
     setsockopt(s_sock, SOL_SOCKET, SO_BROADCAST, &one, sizeof one);
@@ -120,6 +143,14 @@ int main(int argc, char **argv)
     struct timeval tv = {0, 10000};
     setsockopt(s_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons(port), .sin_addr.s_addr = htonl(INADDR_ANY)};
+    if (bind_ip) {
+        s_rx2 = socket(AF_INET, SOCK_DGRAM, 0);
+        setsockopt(s_rx2, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        struct timeval t0 = {0, 1000};
+        setsockopt(s_rx2, SOL_SOCKET, SO_RCVTIMEO, &t0, sizeof t0);
+        if (bind(s_rx2, (struct sockaddr *)&a, sizeof a) < 0) { perror("bind broadcast"); return 2; }
+        a.sin_addr.s_addr = inet_addr(bind_ip);
+    }
     if (bind(s_sock, (struct sockaddr *)&a, sizeof a) < 0) {
         perror("bind");
         return 2;
@@ -144,7 +175,7 @@ int main(int argc, char **argv)
     while (now_ms() < end) {
         int64_t now = now_ms();
         if (now >= next_hello) { // announce, as net.c does (kind 2, no heard list)
-            uint8_t h[23] = {2, 1, 255, 0};
+            uint8_t h[23] = {2, 1 | 16, 255, 0}; // CAP_REMOTE | CAP_ROBOTS
             snprintf((char *)h + 10, 13, "%s", name);
             send_to(bcast, 'H', h, 23);
             next_hello = now + 1000;
@@ -153,10 +184,14 @@ int main(int argc, char **argv)
         struct sockaddr_in from;
         socklen_t fl = sizeof from;
         int n = recvfrom(s_sock, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
+        if (n <= 0 && s_rx2 >= 0) {
+            fl = sizeof from;
+            n = recvfrom(s_rx2, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
+        }
         if (n >= 12 && !memcmp(b, "BLK", 3) && b[3] == 1 && memcmp(b + 6, s_me, 6)) {
             rn_addr_t src = {from.sin_addr.s_addr, ntohs(from.sin_port)};
             char t = b[4];
-            if (t == 'H' && n >= 12 + 23 && b[12] != 3) {
+            if (t == 'H' && n >= 12 + 23 && b[12] != 3 && (b[13] & 16)) {
                 memcpy(peer_mac, b + 6, 6);
                 memcpy(peer_name, b + 22, 12);
                 peer_name[12] = 0;
@@ -172,6 +207,10 @@ int main(int argc, char **argv)
             challenged = true;
         }
         play();
+        if (s_res.due && now_ms() >= s_res.at) {
+            s_res.due = false;
+            rn_result(s_res.id, s_res.cycles, s_res.winner, s_res.n, s_res.dmg, s_res.hash, now_ms());
+        }
         char st[96];
         int v = rn_status(st, sizeof st);
         if (strcmp(st, last)) {
