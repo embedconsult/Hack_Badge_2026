@@ -97,6 +97,7 @@ module Shell
     say("  knob <l|r> <mV> | knob off\n")
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
+    say("  sketch quickdraw         (Sketch: the six-shooter)\n")
     say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
     say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
@@ -343,6 +344,9 @@ module Shell
       flag
     elsif tok_is(0, "upd")
       upd
+    elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
+      Shared.request(Shared::REQ_QUICKDRAW)
+      say("ok\n")
     elsif tok_is(0, "reg")
       # reg <osc> <tcon> (decimal): session timing experiment (EPD.x_regs)
       EPD.x_regs(tok_int(1, EPD.x_osc), tok_int(2, EPD.x_tcon)) if @@nt >= 3

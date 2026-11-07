@@ -230,6 +230,18 @@ module Sketch
     true
   end
 
+  # Moves the pen to (x, y) as if the knobs had been turned: a line on the
+  # canvas and the touch plane (Quick draw). Clamped to the pen area.
+  def self.pen_to(x : Int32, y : Int32) : Nil
+    nx = x < X_MIN ? X_MIN : (x > X_MAX ? X_MAX : x)
+    ny = y < PEN_Y_MIN ? PEN_Y_MIN : (y > PEN_Y_MAX ? PEN_Y_MAX : y)
+    return if nx == @@px && ny == @@py
+    line(@@canvas, @@px, @@py, nx, ny)
+    line(@@touch, @@px, @@py, nx, ny)
+    @@px = nx
+    @@py = ny
+  end
+
   # Forget the knob references (and sub-pixel remainders): the next reading
   # of each knob becomes its zero. Called after long full refreshes so turns
   # made while the panel was busy don't make the pen jump.

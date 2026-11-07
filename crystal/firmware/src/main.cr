@@ -206,6 +206,7 @@ module Shared
   REQ_HOLD_A = 1_u32
   REQ_CLEAN  = 2_u32
   REQ_STROKE = 4_u32
+  REQ_QUICKDRAW = 16_u32 # (8 = REQ_REDRAW, src/net.cr)
 
   def self.ovr_l : Int32
     @@ovr_l
@@ -241,7 +242,10 @@ module Shared
     @@upd_sk = v ? UPD_WIN : UPD_FULL
   end
 
-  @@ink_win = true # Sketch ink pulls scan only the stroke's rows (flag INK_WIN)
+  # Sketch ink pulls scan only the stroke's rows (flag INK_WIN). OFF: the
+  # windowed RAM writes did not show and the window edges left seams
+  # (camera, 7:5x); whole-panel ink pulls are clean.
+  @@ink_win = false
 
   def self.ink_win? : Bool
     @@ink_win
@@ -1377,6 +1381,7 @@ def red_ink_kind : Int32
 end
 
 SK_HINT_Y = Sketch::Y_MAX - 16 # help strip text top (rows 506..519)
+QD_HOLD_MS = 2000 # Sketch: hold B this long for Quick draw
 SK_INK_FRAMES = 19 # WFAST black drive frames (of 20) for Sketch window ink
 SK_INK_WFAST  = false # WFAST windows copy ink ~336 rows lower: keep OFF (DIAG B only)
 
@@ -1386,7 +1391,7 @@ def draw_sketch_hint(ready : Bool) : Nil
   # One small centred line at the bottom of the white screen; the pen
   # stays above it (Sketch::PEN_Y_MAX). `ready` is no longer drawn.
   EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 4, Sketch::X_MAX &- Sketch::X_MIN, 7 &* 2 &+ 6, EPD::WHITE)
-  t = "KNOBS: DRAW   A: ERASE   B: CLEAN   HOLD A: COLOR"
+  t = "A: ERASE   B: CLEAN   HOLD A: COLOR   HOLD B: QUICK DRAW"
   x = Sketch::X_MIN &+ (Sketch::X_MAX &- Sketch::X_MIN &- t.bytesize &* 12).unsafe_div(2)
   draw_text(x, SK_HINT_Y, t, EPD::BLACK, 2)
 end
@@ -1724,6 +1729,57 @@ module SkInk
     @@hi = -1
     rc
   end
+end
+
+# "Quick draw" (hold B 2 s in Sketch, shell `sketch quickdraw`): a six-
+# shooter drawn in one continuous Etch-a-Sketch path of straight segments,
+# fast, three passes so it ends darker (our own drawing, facing left).
+# Points in a 100 x 64 box, scaled x5 and centred on the pen area.
+QD_PTS = "0012000E040E040C070C070E2C0E2C0A400A420C480C4C0650064E0E52125A265E36563A4C384628421E402438263420341C381C3A213C1C401C400A401C361C360A361C2C1C2C1600160012" # x, y pairs as hex bytes
+QD_N     = 38 # points
+QD_SCALE = 5
+
+def qd_hex(i : Int32) : Int32
+  p = QD_PTS.to_unsafe + (i &* 2).to_i64!
+  h = p[0].to_i32!
+  l = p[1].to_i32!
+  (h >= 65 ? h &- 55 : h &- 48) &* 16 &+ (l >= 65 ? l &- 55 : l &- 48)
+end
+
+def qd_x(k : Int32) : Int32
+  479 &- 50 &* QD_SCALE &+ qd_hex(k &* 2) &* QD_SCALE
+end
+
+def qd_y(k : Int32) : Int32
+  (Sketch::PEN_Y_MIN &+ Sketch::PEN_Y_MAX).unsafe_div(2) &- 32 &* QD_SCALE &+ qd_hex(k &* 2 &+ 1) &* QD_SCALE
+end
+
+def quick_draw : Nil
+  return unless SkInk.ready?
+  log("sketch: quick draw", 0)
+  t0 = millis
+  pass = 0
+  while pass < 3
+    # first pass in three pulls (it "draws"), the others in one each
+    parts = pass == 0 ? 3 : 1
+    part = 0
+    k = 0
+    while part < parts
+      last = (QD_N &* (part &+ 1)).unsafe_div(parts)
+      while k < last
+        Sketch.pen_to(qd_x(k), qd_y(k))
+        k = k &+ 1
+      end
+      Shared.led_mode = (part &+ pass) & 1 == 0 ? LED_YELLOW : LED_CYAN
+      SkInk.take_touches
+      SkInk.pull
+      part = part &+ 1
+    end
+    pass = pass &+ 1
+  end
+  Sketch.forget_knobs
+  SkState.pen_seen(Sketch.x, Sketch.y)
+  log("sketch: quick draw ms", millis &- t0)
 end
 
 module SkState
@@ -2126,6 +2182,8 @@ fun crystal_app_main : Void
   colour_due = millis &+ AUTO_COLOUR_MS
   a_down = 0      # when User A went down (0 = up)
   a_fired = false # the hold already fired (no tap on release)
+  b_down = 0      # Sketch: User B down since (Quick draw hold)
+  b_fired = false
   while true
     Ota.ui(scr) if Ota.running? # OTA (shell or DIAG): no other e-paper work meanwhile
     held = Shared.take_buttons
@@ -2149,6 +2207,23 @@ fun crystal_app_main : Void
     end
     held = held & (Games::BTN_A ^ 0xFFFFFFFF_u32)
     held = held | Games::BTN_A if a_tap
+    # Sketch: B tap = clean (on release), B held QD_HOLD_MS = Quick draw.
+    if scr == SCR_SKETCH
+      b_tap = false
+      if (held & Games::BTN_B) != 0_u32
+        b_down = now if b_down == 0
+        if !b_fired && now &- b_down >= QD_HOLD_MS
+          b_fired = true
+          Shared.request(Shared::REQ_QUICKDRAW)
+        end
+      elsif b_down != 0
+        b_tap = !b_fired
+        b_down = 0
+        b_fired = false
+      end
+      held = held & (Games::BTN_B ^ 0xFFFFFFFF_u32)
+      held = held | Games::BTN_B if b_tap
+    end
     # Debug shell requests (shell.cr): hold A, clean, scripted stroke.
     reqs = Shared.take_requests
     a_hold = true if (reqs & Shared::REQ_HOLD_A) != 0_u32
@@ -2165,6 +2240,11 @@ fun crystal_app_main : Void
     if (reqs & Shared::REQ_REDRAW) != 0_u32 && Shared.target == scr
       Shared.rendering = true
       enter_screen(scr, false) # new nametag text (net.cr)
+      Shared.rendering = false
+    end
+    if (reqs & Shared::REQ_QUICKDRAW) != 0_u32 && scr == SCR_SKETCH
+      Shared.rendering = true
+      quick_draw
       Shared.rendering = false
     end
     if (reqs & Shared::REQ_STROKE) != 0_u32 && scr == SCR_SKETCH
