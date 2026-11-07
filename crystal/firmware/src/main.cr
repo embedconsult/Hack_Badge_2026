@@ -2037,7 +2037,17 @@ fun crystal_app_main : Void
           SkState.render_box(by0, by1, w0 &* 4, w1 &* 4 &+ 3)
           changed = SkState.diff_words(by0, by1, w0, w1)
         end
-        if changed
+        # SK_WIN: re-tracing existing ink (pen moved, no new pixels) still
+        # refreshes those rows, so going over a line darkens it like a real
+        # Etch-a-Sketch. The ink LUTs never drive black pixels white (table
+        # 1 is black drive or ground only), so a pass can't lighten ink.
+        retrace = moved && !changed && Shared.sk_win? && !hint_gone
+        if retrace
+          b = SkState.box
+          b[0] = by0
+          b[1] = by1
+        end
+        if changed || retrace
           b = SkState.box
           t = millis
           Shared.led_mode = LED_CYAN
@@ -2056,7 +2066,7 @@ fun crystal_app_main : Void
           end
           last_total = millis &- t
           SkState.last_lat = millis &- last_input
-          log2("sketch: ink rows / latency ms", b[1] &- b[0] &+ 1, SkState.last_lat)
+          log2(retrace ? "sketch: retrace rows / latency ms" : "sketch: ink rows / latency ms", b[1] &- b[0] &+ 1, SkState.last_lat)
         end
       end
     elsif Menu.tick(now, inp)
