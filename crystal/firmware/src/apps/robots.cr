@@ -190,16 +190,38 @@ module RobotsApp
 
   # ---- drawing -------------------------------------------------------------
   # Robot marker r (0 disc, 1 ring, 2 square, 3 hollow square) at (x, y).
-  def self.marker(r : Int32, x : Int32, y : Int32, s : Int32) : Nil
+  # In the arena (clip = true) everything is clipped to its inside.
+  def self.marker(r : Int32, x : Int32, y : Int32, s : Int32, clip : Bool = false) : Nil
     if r == 0
-      Gfx.disc(x, y, s, true)
+      disc(x, y, s, true, clip)
     elsif r == 1
-      Gfx.disc(x, y, s, true)
-      Gfx.disc(x, y, s.unsafe_div(2), false)
+      disc(x, y, s, true, clip)
+      disc(x, y, s.unsafe_div(2), false, clip)
     elsif r == 2
-      Gfx.box(x &- s, y &- s, s &* 2 &+ 1, s &* 2 &+ 1, true)
+      pbox(x &- s, y &- s, s &* 2 &+ 1, s &* 2 &+ 1, true, clip)
     else
-      Gfx.frame(x &- s, y &- s, s &* 2 &+ 1, s &* 2 &+ 1, 3)
+      w = s &* 2 &+ 1
+      pbox(x &- s, y &- s, w, 3, true, clip)
+      pbox(x &- s, y &+ s &- 2, w, 3, true, clip)
+      pbox(x &- s, y &- s, 3, w, true, clip)
+      pbox(x &+ s &- 2, y &- s, 3, w, true, clip)
+    end
+  end
+
+  def self.pbox(x : Int32, y : Int32, w : Int32, h : Int32, black : Bool, clip : Bool) : Nil
+    clip ? abox(x, y, w, h, black) : Gfx.box(x, y, w, h, black)
+  end
+
+  # Filled disc (as Gfx.disc), optionally clipped to the arena.
+  def self.disc(cx : Int32, cy : Int32, r : Int32, black : Bool, clip : Bool) : Nil
+    dy = 0 &- r
+    while dy <= r
+      dx = 0
+      while (dx &+ 1) &* (dx &+ 1) &+ dy &* dy <= r &* r
+        dx = dx &+ 1
+      end
+      pbox(cx &- dx, cy &+ dy, dx &* 2 &+ 1, 1, black, clip)
+      dy = dy &+ 1
     end
   end
 
@@ -241,7 +263,7 @@ module RobotsApp
       k = 0
       while k < @@trail_n &- 1
         b = (r &* TRAIL &+ k) &* 2
-        Gfx.box(@@trail[b] &- 1, @@trail[b &+ 1] &- 1, 3, 3, true) if (k & 1) == 0 || r == 0
+        abox(@@trail[b] &- 1, @@trail[b &+ 1] &- 1, 3, 3, true) if (k & 1) == 0 || r == 0
         k = k &+ 1
       end
       r = r &+ 1
@@ -257,9 +279,9 @@ module RobotsApp
           y = py(RB.missile_y(r, k))
           if st == RB::EXPLODING
             aframe(x &- 24, y &- 24, 49, 2) # 40 m damage radius
-            Gfx.box(x &- 3, y &- 3, 7, 7, true)
+            abox(x &- 3, y &- 3, 7, 7, true)
           else
-            Gfx.disc(x, y, 4, true)
+            disc(x, y, 4, true, true)
           end
         end
         k = k &+ 1
@@ -274,13 +296,13 @@ module RobotsApp
       if RB.active?(r)
         ray(x, y, RB.scan_dir(r), 30, 1)
         ray(x, y, RB.heading(r), 18, 4)
-        marker(r, x, y, 10)
+        marker(r, x, y, 10, true)
       elsif !RB.failed?(r)
         # wreck: an X
         k = -10
         while k <= 10
-          Gfx.box(x &+ k &- 1, y &+ k &- 1, 3, 3, true)
-          Gfx.box(x &+ k &- 1, y &- k &- 1, 3, 3, true)
+          abox(x &+ k &- 1, y &+ k &- 1, 3, 3, true)
+          abox(x &+ k &- 1, y &- k &- 1, 3, 3, true)
           k = k &+ 1
         end
       end
