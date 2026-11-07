@@ -16,7 +16,7 @@
 
 #define RN_CHUNK 512      // source bytes per B message
 #define RN_SRC_MAX 8160   // largest robot source (a flash slot)
-#define RN_CACHE 8        // sources kept (received or sent)
+#define RN_CACHE 56       // sources kept (received or sent; tournaments need many), 8 KB each in PSRAM
 #define RN_ROBOTS 4
 
 typedef struct {
@@ -42,6 +42,20 @@ uint32_t rn_crc32(const uint8_t *p, int n);
 int rn_add(const uint8_t *src, int len);
 // Source of cache entry i into buf; its length, or -1.
 int rn_read(int i, uint8_t *buf, int max);
+
+// For tournaments (main/tourney_net.c), same lock as the rest:
+// the complete entry with this CRC and length, or -1;
+int rn_find(uint32_t crc, int len);
+// its chunks received so far (bit k = chunk k; all ones when complete, 0 none);
+uint32_t rn_got(uint32_t crc, int len);
+// CRC and length of complete entry i;
+bool rn_info(int i, uint32_t *crc, int *len);
+// keep entry i (not evicted) / let all go;
+void rn_pin(int i, bool on);
+void rn_unpin_all(void);
+// send up to max of its chunks not in got to `to` as B messages (the peer
+// stores them, as for a challenge); the number sent, -1 if we lack it.
+int rn_push(rn_addr_t to, uint32_t crc, int len, uint32_t got, int max);
 
 // Challenge the badge at `to` (name for messages) to a battle of the cached
 // sources idx[0..n-1], in that order, with this seed and cycle limit.

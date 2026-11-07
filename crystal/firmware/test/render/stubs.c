@@ -123,3 +123,36 @@ int32_t cr_rn_status(char *buf, int32_t max) {
     snprintf(buf, max, s_rn_state == 2 ? "SimBeagle got the same result" : s_rn_state ? "battle with SimBeagle" : "");
     return s_rn_state == 2 ? 4 : s_rn_state ? 2 : 0;
 }
+
+// Link tournaments (main/tourney_net.c via net.c): stub_tn_offer() makes the
+// next cr_tn_take_run return a tournament of the two cached robots; the
+// result comes back as the organizer's standings.
+static int s_tn_offer, s_tn_state;
+static uint8_t s_tn_table[64];
+static int s_tn_len;
+void stub_tn_offer(void) { s_tn_offer = 1; }
+int32_t cr_tn_start(uint32_t seed, int32_t seeds) { return -4; }
+int32_t cr_tn_peers(void) { return 0; }
+int32_t cr_tn_take_run(uint32_t *tid, uint32_t *seed, int32_t *seeds, int32_t *n, int32_t *idx, uint8_t *owner) {
+    if (!s_tn_offer) return 0;
+    s_tn_offer = 0, s_tn_state = 1;
+    *tid = 0x5678, *seed = 9, *seeds = 2, *n = 2;
+    idx[0] = 0, idx[1] = 1, owner[0] = 1, owner[1] = 255;
+    return 1;
+}
+void cr_tn_result(uint32_t tid, uint32_t hash, const uint8_t *t, int32_t len) {
+    printf("stub: tournament result %08x, %d bytes\n", hash, len);
+    memcpy(s_tn_table, t, len < 64 ? len : 64);
+    s_tn_len = len, s_tn_state = 2;
+}
+int32_t cr_tn_standings(uint32_t *tid, uint32_t *hash, uint8_t *t, int32_t max) {
+    if (s_tn_state != 2) return 0;
+    *tid = 0x5678, *hash = 1;
+    memcpy(t, s_tn_table, s_tn_len);
+    return s_tn_len;
+}
+int32_t cr_tn_status(char *buf, int32_t max) {
+    snprintf(buf, max, s_tn_state == 2 ? "all 3 badges got the same result" : s_tn_state ? "my tournament: 2 robots, 3 badges" : "");
+    return s_tn_state == 2 ? 4 : s_tn_state ? 2 : 0;
+}
+void cr_tn_badge(int32_t k, char *out) { snprintf(out, 13, "%s", k == 1 ? "SimBeagle" : "Organizer"); }

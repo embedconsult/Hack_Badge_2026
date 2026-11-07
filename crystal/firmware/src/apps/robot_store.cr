@@ -27,6 +27,14 @@ lib LibIDF
   fun cr_robot_tbl_save(which : Int32, p : UInt8*, n : Int32) : Bool
   fun cr_robot_tbl_load(which : Int32, p : UInt8*, max : Int32) : Int32
   fun cr_robot_tbl_print(which : Int32) : Void
+  # main/net.c + main/tourney_net.c: badge-link tournaments
+  fun cr_tn_start(seed : UInt32, seeds : Int32) : Int32
+  fun cr_tn_peers : Int32
+  fun cr_tn_take_run(tid : UInt32*, seed : UInt32*, seeds : Int32*, n : Int32*, idx : Int32*, owner : UInt8*) : Int32
+  fun cr_tn_result(tid : UInt32, hash : UInt32, table : UInt8*, len : Int32) : Void
+  fun cr_tn_standings(tid : UInt32*, hash : UInt32*, table : UInt8*, max : Int32) : Int32
+  fun cr_tn_status(buf : UInt8*, max : Int32) : Int32
+  fun cr_tn_badge(k : Int32, out : UInt8*) : Void
   fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
   fun vTaskDelay(ticks : UInt32) : Void
   # main/net.c + main/robonet.c: badge-to-badge battles
@@ -120,6 +128,17 @@ end
 # C side of the Settings page (main/settings.c) checks uploads through this.
 fun cr_robot_check(src : UInt8*, n : Int32, msg : UInt8*, max : Int32) : Int32
   RobotStore.check(src, n, msg, max)
+end
+
+# The built-in robots for main/net.c (a tournament's organizer brings them).
+fun cr_roster_count : Int32
+  Roster::COUNT
+end
+
+fun cr_roster_src(i : Int32, len : Int32*) : UInt8*
+  s = Roster.source(i)
+  len.value = s.bytesize
+  s.to_unsafe
 end
 
 module RobotShell
@@ -342,16 +361,31 @@ module RobotShell
     else
       say("usage: robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
       say("       robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]\n")
-      say("       robot tourney [seed] [seeds] | robot standings\n")
+      say("       robot tourney [net] [seed] [seeds] | robot standings [net]\n")
     end
   end
 
   # `robot tourney [seed] [seeds]`: a tournament of every robot here.
   def self.tourney : Nil
-    seed = Shell.tok_int(2, 0)
-    seeds = Shell.tok_int(3, 3)
+    net = Shell.tok_is(2, "net")
+    a = net ? 3 : 2
+    seed = Shell.tok_int(a, 0)
+    seeds = Shell.tok_int(a &+ 1, net ? 2 : 3)
     if seed < 0 || seeds < 1 || seeds > Tour::MAX_SEEDS
-      say("usage: robot tourney [seed] [seeds 1..4]\n")
+      say("usage: robot tourney [net] [seed] [seeds 1..4]\n")
+      return
+    end
+    if net
+      r = LibIDF.cr_tn_start(seed.to_u32!, seeds)
+      if r == 0
+        say("robot: link tournament: the lowest-MAC robot badge organizes; ROBOTS opens on every badge when the robots are in\n")
+      elsif r == -1
+        say("robot: a link tournament is going on\n")
+      elsif r == -2
+        say("robot: no robot badges heard (net status)\n")
+      else
+        say("robot: network mode is off (net on)\n")
+      end
       return
     end
     RobotsApp.request_tourney(seed.to_u32!, seeds)

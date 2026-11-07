@@ -19,7 +19,7 @@ mkdir -p bin
 STATIC=""
 [ "${RB_STATIC:-0}" = 1 ] && STATIC="--static"
 crystal build --prelude=empty $STATIC ../robots/empty_prelude.cr -o bin/rb
-gcc -O1 -g -Wall -I../../main -o bin/host_badge host_badge.c ../../main/robonet.c
+gcc -O1 -g -Wall -I../../main -o bin/host_badge host_badge.c ../../main/robonet.c ../../main/tourney_net.c
 
 fail=0
 E=$UP/examples

@@ -530,6 +530,58 @@ module Tour
     @@hash = RB.fnv(@@hash, @@fwin)
   end
 
+  # ---- compact standings (badge link W message, main/tourney_net.c) -----------
+  # Per rank: robot u8, wins u8, draws u8, played u8, damage sum u16; then
+  # the champion and the final winner (robot, 255 none).
+  CENTRY = 6
+
+  def self.compact(p : UInt8*) : Int32
+    rank_all
+    k = 0
+    while k < @@n
+      i = @@rank[k]
+      e = p + (k &* CENTRY).to_i64!
+      e[0] = i.to_u8!
+      e[1] = (@@wins[i] > 255 ? 255 : @@wins[i]).to_u8!
+      e[2] = (@@draws[i] > 255 ? 255 : @@draws[i]).to_u8!
+      e[3] = (@@played[i] > 255 ? 255 : @@played[i]).to_u8!
+      put16(e + 4_i64, @@dmg[i] > 65535 ? 65535 : @@dmg[i])
+      k = k &+ 1
+    end
+    c = champion
+    e = p + (@@n &* CENTRY).to_i64!
+    e[0] = (c >= 0 ? c : 255).to_u8!
+    e[1] = (@@fdone && @@fwin >= 0 ? @@fwin : 255).to_u8!
+    @@n &* CENTRY &+ 2
+  end
+
+  # Standings from compact's bytes (the organizer's, official); names and
+  # the schedule stay. False if they do not fit this tournament.
+  def self.adopt(p : UInt8*, len : Int32) : Bool
+    return false if len != @@n &* CENTRY &+ 2
+    k = 0
+    while k < @@n
+      return false if p[k &* CENTRY].to_i32! >= @@n
+      k = k &+ 1
+    end
+    k = 0
+    while k < @@n
+      e = p + (k &* CENTRY).to_i64!
+      i = e[0].to_i32!
+      @@rank[k] = i
+      @@wins[i] = e[1].to_i32!
+      @@draws[i] = e[2].to_i32!
+      @@played[i] = e[3].to_i32!
+      @@points[i] = @@wins[i] &* 3 &+ @@draws[i]
+      @@dmg[i] = get16(e + 4_i64)
+      k = k &+ 1
+    end
+    w = p[@@n &* CENTRY &+ 1].to_i32!
+    @@fwin = w < @@n ? w : -1
+    @@fdone = true
+    true
+  end
+
   # ---- the standings as bytes (NVS on the badge, the badge link) ---------------
   # "RTT1", n, seeds, rounds, flags, seed u32, hash u32, battles u16,
   # champion u8 (its rank, 255 none), final winner rank u8 (255 draw),

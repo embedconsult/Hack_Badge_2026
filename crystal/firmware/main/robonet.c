@@ -20,6 +20,7 @@ enum { M_NONE, M_ASK, M_SEND, M_READY, M_RUN, M_DONE, M_OVER, M_FAIL };
 
 static const rn_io_t *s_io;
 static ent_t s_c[RN_CACHE];
+static uint8_t s_pin[RN_CACHE]; // held by a tournament (main/tourney_net.c)
 static uint32_t s_stamp;
 
 static struct {
@@ -64,6 +65,7 @@ void rn_init(const rn_io_t *io)
 {
     s_io = io;
     memset(s_c, 0, sizeof s_c);
+    memset(s_pin, 0, sizeof s_pin);
     memset(&M, 0, sizeof M);
 }
 
@@ -88,6 +90,7 @@ static bool busy(void)
 // ---- cache --------------------------------------------------------------------------
 static bool pinned(int i)
 {
+    if (s_pin[i]) return true;
     if (M.state == M_NONE || M.state == M_OVER || M.state == M_FAIL) return false;
     for (int k = 0; k < M.n; k++)
         if (M.idx[k] == i) return true;
@@ -131,6 +134,51 @@ int rn_add(const uint8_t *src, int len)
     }
     s_c[i].stamp = ++s_stamp;
     return i;
+}
+
+int rn_find(uint32_t crc, int len)
+{
+    int i = find(crc, len, true);
+    if (i >= 0) s_c[i].stamp = ++s_stamp;
+    return i;
+}
+
+uint32_t rn_got(uint32_t crc, int len)
+{
+    int i = find(crc, len, false);
+    return i < 0 ? 0 : s_c[i].done ? 0xFFFFFFFFu : s_c[i].got;
+}
+
+bool rn_info(int i, uint32_t *crc, int *len)
+{
+    if (i < 0 || i >= RN_CACHE || !s_c[i].done) return false;
+    *crc = s_c[i].crc, *len = s_c[i].len;
+    return true;
+}
+
+void rn_pin(int i, bool on)
+{
+    if (i >= 0 && i < RN_CACHE) s_pin[i] = on;
+}
+
+void rn_unpin_all(void) { memset(s_pin, 0, sizeof s_pin); }
+
+int rn_push(rn_addr_t to, uint32_t crc, int len, uint32_t got, int max)
+{
+    int i = find(crc, len, true);
+    if (i < 0) return -1;
+    ent_t *e = &s_c[i];
+    uint8_t b[8 + RN_CHUNK];
+    int sent = 0;
+    for (int off = 0, k = 0; off < e->len && sent < max; off += RN_CHUNK, k++) {
+        if (k < 32 && (got & (1u << k))) continue;
+        int n = e->len - off < RN_CHUNK ? e->len - off : RN_CHUNK;
+        put32(b, e->crc), put16(b + 4, e->len), put16(b + 6, off);
+        memcpy(b + 8, e->data + off, n);
+        s_io->send(to, 'B', b, 8 + n);
+        sent++;
+    }
+    return sent;
 }
 
 int rn_read(int i, uint8_t *buf, int max)

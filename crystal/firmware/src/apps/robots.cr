@@ -26,6 +26,12 @@
 # the final of the top four. The standings (points, wins, average damage)
 # are saved in NVS (main/robots.c; shell `robot standings`) and shown; A
 # replays the final, the only battle drawn.
+#
+# Badge-link tournament (B: LINK TOURNEY when robot badges are around,
+# shell `robot tourney net`): every robot badge brings its slot robots,
+# the lowest MAC organizes (main/tourney_net.c), every badge plays the whole
+# tournament itself and the organizer cross-checks and sends the standings
+# (saved as robots/tourney_net, `robot standings net`).
 
 require "./robot_store"
 require "../robots/tourney"
@@ -473,7 +479,7 @@ module RobotsApp
     if @@tmode == T_FINAL
       TopBar.draw("ROBOTS: FINAL", "", "", "A: TABLE", @@running ? "B: TO END" : "B: EXIT")
     else
-      TopBar.draw("ROBOTS", "", "", "A: NEXT", @@running ? "B: TO END" : "B: TOURNEY")
+      TopBar.draw("ROBOTS", "", "", "A: NEXT", @@running ? "B: TO END" : (LibIDF.cr_tn_peers > 0 ? "B: LINK TOURNEY" : "B: TOURNEY"))
     end
     draw_arena
     draw_panel
@@ -484,6 +490,7 @@ module RobotsApp
   T_SIM   = 1 # simulating the battles
   T_TABLE = 2 # standings on screen
   T_FINAL = 3 # the final, replayed
+  T_WAIT  = 4 # a link tournament is being set up
   T_SLICE = 1500 # ms of battles per main loop pass
   T_DRAW  = 6000 # ms between progress screens
 
@@ -496,6 +503,13 @@ module RobotsApp
   @@tdrawn = 0
   @@tt0 = 0
   @@tblob = Pointer(UInt8).null
+  @@tnet = false     # a badge-link tournament
+  @@ttid = 0_u32
+  @@tnidx = Pointer(Int32).null
+  @@towner = Pointer(UInt8).null
+  @@tadopted = false # the organizer's standings are in
+  @@tsig = 0_u32
+  @@tline = Pointer(UInt8).null
 
   # Shell `robot tourney [seed] [seeds]` (shell task): start one when the app runs.
   def self.request_tourney(seed : UInt32, seeds : Int32) : Nil
@@ -508,7 +522,11 @@ module RobotsApp
     @@tcodes = game_alloc(Tour::MAX &* 4).as(Int32*) if @@tcodes.null?
     @@tidx = game_alloc(4 &* 4).as(Int32*) if @@tidx.null?
     @@tblob = game_alloc(Tour.blob_size(Tour::MAX)) if @@tblob.null?
-    !@@tcodes.null? && !@@tidx.null? && !@@tblob.null? && Tour.alloc
+    @@tnidx = game_alloc(Tour::MAX &* 4).as(Int32*) if @@tnidx.null?
+    @@towner = game_alloc(Tour::MAX) if @@towner.null?
+    @@tline = game_alloc(64) if @@tline.null?
+    !@@tcodes.null? && !@@tidx.null? && !@@tblob.null? && !@@tnidx.null? && !@@towner.null? && !@@tline.null? &&
+      Tour.alloc
   end
 
   def self.tourney_start(seed : UInt32, seeds : Int32) : Nil
@@ -521,6 +539,31 @@ module RobotsApp
       k = k &+ 1
     end
     seed = ((millis.to_u32! &* 2654435761_u32) & 0x7FFFFFFF_u32) | 1_u32 if seed == 0_u32
+    @@tnet = false
+    tourney_go(n, seed, seeds)
+  end
+
+  # A badge-link tournament whose robots are all here (main/tourney_net.c):
+  # play it now. True if there was one.
+  def self.take_link_tourney : Bool
+    return false unless tourney_alloc
+    seed = 0_u32
+    seeds = 0
+    n = 0
+    return false if LibIDF.cr_tn_take_run(pointerof(@@ttid), pointerof(seed), pointerof(seeds), pointerof(n), @@tnidx, @@towner) == 0
+    n = Tour::MAX if n > Tour::MAX
+    k = 0
+    while k < n
+      @@tcodes[k] = RobotStore::CODE_NET &+ @@tnidx[k]
+      k = k &+ 1
+    end
+    @@tnet = true
+    @@tadopted = false
+    tourney_go(n, seed, seeds)
+    true
+  end
+
+  def self.tourney_go(n : Int32, seed : UInt32, seeds : Int32) : Nil
     return unless Tour.setup(n, seed, seeds)
     @@running = false
     @@tmode = T_SIM
@@ -571,9 +614,56 @@ module RobotsApp
     RB.run
     Tour.record_final(m, @@tidx)
     log2("robots: tournament done: battles / s", Tour.done &+ 1, (millis &- @@tt0).unsafe_div(1000))
-    n = Tour.save(@@tblob, 0)
-    LibIDF.cr_robot_tbl_save(0, @@tblob, n)
+    if @@tnet # to the organizer; saved when its standings come back
+      n = Tour.compact(@@tblob)
+      LibIDF.cr_tn_result(@@ttid, Tour.hash, @@tblob, n)
+    else
+      n = Tour.save(@@tblob, 0)
+      LibIDF.cr_robot_tbl_save(0, @@tblob, n)
+    end
     true
+  end
+
+  # The organizer's standings (official): take them over once, save them.
+  def self.tourney_adopt : Bool
+    return false if !@@tnet || @@tadopted
+    tid = 0_u32
+    h = 0_u32
+    n = LibIDF.cr_tn_standings(pointerof(tid), pointerof(h), @@tblob, Tour.blob_size(Tour::MAX))
+    return false if n <= 0 || tid != @@ttid
+    @@tadopted = true
+    Tour.adopt(@@tblob, n)
+    n = Tour.save(@@tblob, 1)
+    LibIDF.cr_robot_tbl_save(1, @@tblob, n)
+    true
+  end
+
+  # The link tournament status line into @@tline; its length (0: none).
+  def self.link_line : Int32
+    return 0 if @@tline.null?
+    LibIDF.cr_tn_status(@@tline, 64)
+    n = 0
+    while n < 63 && @@tline[n] != 0_u8
+      n = n &+ 1
+    end
+    n
+  end
+
+  def self.link_sig : UInt32
+    n = link_line
+    h = 2166136261_u32
+    i = 0
+    while i < n
+      h = (h ^ @@tline[i].to_u32!) &* 16777619_u32
+      i = i &+ 1
+    end
+    h
+  end
+
+  def self.draw_link_line(y : Int32) : Nil
+    n = link_line
+    draw_bytes(24, y, @@tline, n, EPD::BLACK, 2) if n > 0
+    @@tsig = link_sig
   end
 
   # Replay the final on screen (the engine is deterministic).
@@ -611,6 +701,7 @@ module RobotsApp
       y = y0
       Gfx.text(x, y, "  # ROBOT", 2)
       Gfx.text(x &+ 228, y, "PTS   W   D   P DMG", 2)
+      Gfx.text(x &+ 480, y, "BADGE", 2) if @@tnet && Tour.robots <= rows
       Gfx.box(x, y &+ 18, 456, 2, true)
       y = y &+ 26
       r = 0
@@ -627,6 +718,19 @@ module RobotsApp
         rnum(x &+ 360, y, Tour.draws(i), 2)
         rnum(x &+ 408, y, Tour.played(i), 2)
         rnum(x &+ 456, y, Tour.avg_damage(i), 2)
+        if @@tnet && Tour.robots <= rows # whose robot (badge name), in the free column
+          o = @@towner[i]
+          if o == 255_u8
+            Gfx.text(x &+ 480, y, "BUILT-IN", 2)
+          else
+            LibIDF.cr_tn_badge(o.to_i32!, @@buf)
+            k = 0
+            while k < 12 && @@buf[k] != 0_u8
+              k = k &+ 1
+            end
+            draw_bytes(x &+ 480, y, @@buf, k, EPD::BLACK, 2)
+          end
+        end
         y = y &+ 22
         r = r &+ 1
       end
@@ -650,7 +754,7 @@ module RobotsApp
   def self.draw_progress : Nil
     EPD.fill(EPD::WHITE)
     TopBar.draw("ROBOTS: TOURNAMENT", "", "", "", "B: STOP")
-    y = tourney_head("TOURNAMENT RUNNING")
+    y = tourney_head(@@tnet ? "LINK TOURNAMENT RUNNING" : "TOURNAMENT RUNNING")
     x = Gfx.text(24, y, "BATTLE ", 2)
     x = number(x, y, Tour.done, 2)
     x = Gfx.text(x, y, " OF ", 2)
@@ -658,13 +762,23 @@ module RobotsApp
     Gfx.frame(300, y &- 2, 636, 20, 2)
     w = Tour.battles > 0 ? (630 &* Tour.done).unsafe_div(Tour.battles) : 0
     Gfx.box(303, y &+ 1, w, 14, true)
-    draw_table(y &+ 34, 21)
+    draw_table(y &+ 34, @@tnet ? 20 : 21)
+    draw_link_line(640) if @@tnet
+  end
+
+  def self.draw_wait : Nil
+    EPD.fill(EPD::WHITE)
+    TopBar.draw("ROBOTS: TOURNAMENT", "", "", "", "B: BACK")
+    Gfx.text(24, 62, "LINK TOURNAMENT", 3)
+    Gfx.text(24, 100, "EVERY ROBOT BADGE AROUND BRINGS ITS SAVED ROBOTS; THE LOWEST MAC ORGANIZES.", 2)
+    Gfx.text(24, 124, "EVERY BADGE PLAYS THE WHOLE TOURNAMENT AND THE RESULTS ARE CROSS-CHECKED.", 2)
+    draw_link_line(170)
   end
 
   def self.draw_standings : Nil
     EPD.fill(EPD::WHITE)
     TopBar.draw("ROBOTS: TOURNAMENT", "", "", "A: FINAL", "B: EXIT")
-    y = tourney_head("TOURNAMENT STANDINGS")
+    y = tourney_head(@@tnet ? "LINK TOURNAMENT STANDINGS" : "TOURNAMENT STANDINGS")
     c = Tour.champion
     x = Gfx.text(24, y, "CHAMPION ", 2)
     if c >= 0
@@ -672,12 +786,31 @@ module RobotsApp
       x = draw_bytes(x, y, Tour.name(c), nl, EPD::BLACK, 2)
       Gfx.text(x, y, Tour.final_winner >= 0 ? " (WON THE FINAL)" : " (FINAL DRAWN: TOP OF THE TABLE)", 2)
     end
-    draw_table(y &+ 30, 21)
+    draw_table(y &+ 30, @@tnet ? 20 : 21)
+    draw_link_line(624) if @@tnet
     Gfx.text(24, 650, "PTS: 3 A WIN (LAST ONE STANDING), 1 A DRAW (ALIVE AT THE CYCLE LIMIT). DMG: AVERAGE DAMAGE", 1)
   end
 
   # Tournament screens' tick (T_SIM, T_TABLE); T_FINAL runs as a battle.
   def self.tourney_tick(now : Int32, inp : LibGames::Input) : Nil
+    if @@tmode == T_WAIT
+      if Games.pressed?(inp, Games::BTN_B)
+        @@tmode = T_OFF
+        new_battle
+        draw
+        Apps.show_clean
+      elsif link_sig != @@tsig
+        draw_wait
+        Apps.show
+      end
+      return
+    end
+    if @@tmode == T_TABLE && @@tnet && (tourney_adopt || link_sig != @@tsig) &&
+       !Games.pressed?(inp, Games::BTN_A) && !Games.pressed?(inp, Games::BTN_B)
+      draw_standings
+      Apps.show
+      return
+    end
     if @@tmode == T_SIM
       if Games.pressed?(inp, Games::BTN_B)
         @@tmode = T_OFF
@@ -729,9 +862,10 @@ module RobotsApp
       tourney_start(@@treq_seed, @@treq_seeds)
       return if @@tmode == T_SIM
     end
-    if @@tmode == T_SIM || @@tmode == T_TABLE
+    return if take_link_tourney
+    if @@tmode == T_SIM || @@tmode == T_TABLE || @@tmode == T_WAIT
       @@tmode = T_TABLE if @@tmode == T_SIM && Tour.final_done?
-      @@tmode == T_SIM ? draw_progress : draw_standings
+      @@tmode == T_SIM ? draw_progress : (@@tmode == T_WAIT ? draw_wait : draw_standings)
       Apps.show_clean
       @@tdrawn = millis
       return
@@ -767,7 +901,8 @@ module RobotsApp
       tourney_start(@@treq_seed, @@treq_seeds)
       return
     end
-    if @@tmode == T_SIM || @@tmode == T_TABLE
+    return if take_link_tourney
+    if @@tmode == T_SIM || @@tmode == T_TABLE || @@tmode == T_WAIT
       tourney_tick(now, inp)
       return
     end
@@ -784,7 +919,14 @@ module RobotsApp
       return
     end
     if !@@running && @@tmode == T_OFF && Games.pressed?(inp, Games::BTN_B)
-      tourney_start(0_u32, 3)
+      if LibIDF.cr_tn_peers > 0 && LibIDF.cr_tn_start(0_u32, 2) == 0
+        return unless tourney_alloc
+        @@tmode = T_WAIT
+        draw_wait
+        Apps.show_clean
+      else
+        tourney_start(0_u32, 3)
+      end
       return
     end
     if @@net && !@@running # follow the badge link status (challenge, result check)

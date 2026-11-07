@@ -5,6 +5,8 @@ the badge link protocol, for testing the BeagleBadge apps without the ESP32.
     python3 sim_badge.py [seconds] [--port 4627] [--link-port 4626] [--name SimCrystal]
                          [--bcast host:port] [--engine path/to/rb]
                          [--challenge BADGE robot.cr robot.cr [...]] [--seed N]
+                         [--mac HEX12] [--mine robot.cr ...] [--builtins robot.cr ...]
+                         [--tourney PEERS] [--seeds K]
 
 Binds its own port (default 4627, so it can run next to a launcher app on
 the same BeagleBadge; peers reply to the source address), and also listens on
@@ -21,6 +23,14 @@ With --engine (the badge's own engine built for this machine:
 crystal/firmware/test/robonet/run.sh builds it as test/robonet/bin/rb) it
 simulates the battle too and compares its result with the badge's; it
 exits 0 on the same result, 3 on a different one, 4 on a failure.
+
+Tournaments (tourney.py; PROTOCOL.md T): --mine files are its slot robots
+(it brings them when a tournament asks), --builtins the built-ins it adds
+when it organizes; --tourney PEERS starts one once PEERS robot badges are
+heard (the lowest MAC organizes: this sim, or it asks the lowest badge).
+--bcast may be given several times (announces to each: several simulators
+and host badges on one PC). With --mine or --tourney it exits like a
+challenge once the standings are in (0 every badge agreed).
 """
 import os
 import sys
@@ -36,6 +46,7 @@ for d in (os.path.join(HERE, "beaglebadge", "applications", "link"), HERE, "/opt
 import _badgenet as bn  # noqa: E402
 sys.path.insert(0, HERE)
 import robonet  # noqa: E402
+import tourney  # noqa: E402
 
 _probe = bn.Link(port=0)
 _ok = hasattr(_probe, "on_packet") and hasattr(bn, "CAP_ROBOTS")
@@ -49,7 +60,12 @@ secs = 120.0
 port = 4627
 link_port = bn.PORT
 name = "SimCrystal"
-bcast = None
+bcasts = []
+mac = None
+mine = []
+builtins = []
+tourney_at = None
+seeds = 2
 engine = None
 challenge = None   # (badge, [files])
 seed = None
@@ -64,7 +80,17 @@ while args:
         name = args.pop(0)
     elif a == "--bcast":
         h, pp = args.pop(0).rsplit(":", 1)
-        bcast = (h, int(pp))
+        bcasts.append((h, int(pp)))
+    elif a == "--mac":
+        mac = bytes.fromhex(args.pop(0))
+    elif a in ("--mine", "--builtins"):
+        lst = mine if a == "--mine" else builtins
+        while args and not args[0].startswith("--"):
+            lst.append(open(args.pop(0), "rb").read())
+    elif a == "--tourney":
+        tourney_at = int(args.pop(0))
+    elif a == "--seeds":
+        seeds = int(args.pop(0))
     elif a == "--engine":
         engine = args.pop(0)
     elif a == "--seed":
@@ -78,15 +104,39 @@ while args:
     else:
         secs = float(a)
 
-ME = bytes.fromhex("f412fa%06x" % (port & 0xFFFFFF))  # fake Crystal badge
+ME = mac or bytes.fromhex("f412fa%06x" % (port & 0xFFFFFF))  # fake Crystal badge
 OS_MAC = bytes.fromhex("f412fa0000aa")  # fake badge os badge behind it
 link = bn.Link(name=name, kind=bn.K_CRYSTAL,
                caps=bn.CAP_REMOTE | bn.CAP_PONG | bn.CAP_BRIDGE | bn.CAP_SKETCH | bn.CAP_ROBOTS,
                mac=ME, port=port, bcast_port=link_port, listen_bcast=True)
-if bcast:
-    link.bcast = bcast
+if bcasts:
+    link.bcast = bcasts[0]
+    _hello = link.hello
+
+    def hello_all():
+        for b in bcasts:
+            link.bcast = b
+            _hello()
+    link.hello = hello_all
 robots = robonet.RoboNet(lambda addr, t, body: link.send(addr, t, body), engine=engine)
-link.on_packet = lambda t, src, body, addr: robots.rx(src, t, body, addr)
+
+
+def robot_peers():
+    return [(p.addr, p.mac, p.name) for p in link.live_peers((bn.K_CRYSTAL, bn.K_BEAGLE))
+            if p.addr and p.caps & bn.CAP_ROBOTS]
+
+
+tour = tourney.Tourney(robots, ME, name, mine=mine, builtins=builtins, engine=engine, peers=robot_peers)
+
+
+def on_packet(t, src, body, addr):
+    if t == "T":
+        tour.rx(src, body, addr)
+    else:
+        robots.rx(src, t, body, addr)
+
+
+link.on_packet = on_packet
 state = {"screen": 0, "name": "Jason|Kridner"}
 link.screen = 0
 pong_peer = {"addr": None}
@@ -136,8 +186,16 @@ end = time.time() + secs
 last_os = 0
 sources = [open(f, "rb").read() for f in challenge[1]] if challenge else []
 challenged = False
+started = False
+in_tourney = tourney_at is not None or bool(mine)
 while time.time() < end:
     robots.tick()
+    tour.tick()
+    if tourney_at is not None and not started and len(robot_peers()) >= tourney_at:
+        print("sim: tournament start ->", tour.start(seed or 0, seeds), flush=True)
+        started = True
+    if in_tourney and tour.verdict:
+        break
     if challenge and not challenged:
         for p in link.live_peers((bn.K_CRYSTAL, bn.K_BEAGLE)):
             if p.addr and p.caps & bn.CAP_ROBOTS and (
@@ -168,5 +226,12 @@ while time.time() < end:
     time.sleep(0.01)
 print("sim: done, rx", link.rx_count, "pong state", pong.state, "score", pong.g[6:8],
       "robots", robots.verdict)
+if in_tourney:
+    for _ in range(150):  # linger: others may still want our result or the standings
+        robots.tick()
+        tour.tick()
+        link.poll()
+        time.sleep(0.01)
+    sys.exit(0 if tour.verdict == "same" else 3 if tour.verdict == "different" else 4 if tour.verdict else 5)
 if challenge:
     sys.exit(0 if robots.verdict == "same" else 3 if robots.verdict == "different" else 4)
