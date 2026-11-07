@@ -2107,6 +2107,8 @@ def quick_draw : Nil
       Shared.led_mode = pulls & 1 == 0 ? LED_YELLOW : LED_CYAN
       SkInk.take_touches
       SkInk.pull
+      log2(EPD.panel_ms > 250 ? "sketch: qd pull panel / upload ms (OVER 250)" : "sketch: qd pull panel / upload ms",
+        EPD.panel_ms, EPD.upload_ms)
       pulls = pulls &+ 1
     else
       Sketch.pen_to(x, qd_hex3(p + 3_i64))

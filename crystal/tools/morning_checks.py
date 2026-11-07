@@ -15,6 +15,8 @@ ink    Sketch first-pass darkness: three strokes with inkf 2 2 2 (default),
        3 3 3 and 4 4 4 (the cursor erase fe must equal f1), each stroke then
        retraced once; the cursor parked off the line. Look for mid-grey first
        passes, darker retraces, and no cursor tick left behind.
+quickdraw  standard Sketch render test: Colt quick draw, snaps mid/end, pull ms
+       median / max / count over 250 ms.
 fast   FAST_ENTRY: SCHEDULE -> Home -> SETTINGS -> Home -> BLOCKS -> Home
        with the flag on (one diff update per entry, logged "apps: fast entry
        ms"), snapping each; look for ghosts of the previous screen.
@@ -136,9 +138,32 @@ def fast():
     console(["flag FAST_ENTRY 0", "@1"])
 
 
+def quickdraw():
+    """Standard Sketch rendering test: the Colt quick draw from a clean
+    canvas, snapped mid-draw and at the end; pull ms stats from the log."""
+    import re, threading
+    console(["mode sketch", "@12", "press a", "@10"])
+    out = {}
+    th = threading.Thread(target=lambda: out.update(t=console(["sketch quickdraw", "@16"])))
+    th.start()
+    time.sleep(5)
+    snap("quickdraw-mid")
+    th.join()
+    snap("quickdraw-end")
+    t = out.get("t", "")
+    pan = [int(m) for m in re.findall(r"qd pull panel / upload ms[^:]*: (\d+)", t)]
+    tot = re.findall(r"quick draw pulls / ms: (\d+) (\d+)", t)
+    pan.sort()
+    if pan:
+        print("  quick draw pulls/ms %s, panel ms median %d max %d, over 250 ms: %d" % (
+            tot[-1] if tot else "?", pan[len(pan) // 2], pan[-1], sum(1 for p in pan if p > 250)))
+    else:
+        print("  no pull timings logged", tot)
+
+
 if __name__ == "__main__":
     what = sys.argv[1] if len(sys.argv) > 1 else "all"
-    for name, fn in (("trail", trail), ("ink", ink), ("fast", fast)):
+    for name, fn in (("trail", trail), ("ink", ink), ("fast", fast), ("quickdraw", quickdraw)):
         if what in (name, "all"):
             print("==", name)
             fn()
