@@ -81,6 +81,8 @@ require "./games/menu"
 require "./shell"
 require "./ota"
 require "./net"
+require "./apps/app"
+require "./apps/*"
 
 STATUS_LED       = 1
 GPIO_MODE_OUTPUT = 2 # GPIO_MODE_DEF_OUTPUT (BIT1)
@@ -406,25 +408,17 @@ end
 # NAMETAG red, PORTRAIT magenta, SKETCH yellow, LIFE green, SNAKE cyan,
 # DIAG white.
 def mode_rgb(m : Int32, rgb : UInt8*) : Nil
-  r = 255; g = 0; b = 0
-  if m == 1
-    r = 255; g = 0; b = 160
-  elsif m == 2
-    r = 255; g = 170; b = 0
-  elsif m == 3
-    r = 0; g = 255; b = 0
-  elsif m == 4
-    r = 0; g = 190; b = 255
-  elsif m == 5
-    r = 200; g = 200; b = 200
-  elsif m == 6
-    r = 0; g = 0; b = 255
-  elsif m == 7
-    r = 255; g = 255; b = 255
-  end
-  rgb[0] = r.to_u8!
-  rgb[1] = g.to_u8!
-  rgb[2] = b.to_u8!
+  c = Apps.rgb(m) # registry COLOR (src/apps/builtin.cr keeps the old ones)
+  rgb[0] = c.unsafe_shr(16).to_u8!
+  rgb[1] = c.unsafe_shr(8).to_u8!
+  rgb[2] = c.to_u8!
+end
+
+# Next / previous app for Menu +/- inside an app (home not included).
+def step_screen(tg : Int32, up : Bool) : Int32
+  n = Apps.count
+  return 0 if tg == SCR_HOME || tg < 0 || tg >= n
+  up ? (tg &+ 1 == n ? 0 : tg &+ 1) : (tg == 0 ? n &- 1 : tg &- 1)
 end
 
 MENU_DEBOUNCE_MS = 150
@@ -470,6 +464,9 @@ fun crystal_knob_task(arg : Void*) : Void
   bar_key = -1   # last indicator frame sent (target * 2 + pulse phase)
   prev_btns = 0_u32
   last_menu = 0
+  menu_first = 0    # Menu gesture: first button (+1 plus, -1 minus)
+  menu_both = false # both Menu buttons were down together
+  menu_t0 = 0
   log("knob: loop starting", 0)
   on = false
   raw_l = 0
@@ -507,15 +504,28 @@ fun crystal_knob_task(arg : Void*) : Void
     now_ms = millis
     # Menu edges move the target screen right away (the main task may be
     # busy rendering); it renders Shared.target when it gets to it.
-    if now_ms &- last_menu >= MENU_DEBOUNCE_MS
-      plus_edge = (btns & Games::BTN_PLUS) != 0_u32 && (prev_btns & Games::BTN_PLUS) == 0_u32
-      minus_edge = (btns & Games::BTN_MINUS) != 0_u32 && (prev_btns & Games::BTN_MINUS) == 0_u32
-      if plus_edge || minus_edge
-        tg = Shared.target
-        tg = plus_edge ? (tg &+ 1 == SCR_COUNT ? 0 : tg &+ 1) : (tg == 0 ? SCR_COUNT &- 1 : tg &- 1)
-        Shared.target = tg
+    # A Menu gesture ends when both Menu buttons are up: if both were down
+    # together at any point it goes home, else (in an app that does not
+    # own the Menu buttons) one step to the next / previous app.
+    menu = btns & (Games::BTN_PLUS | Games::BTN_MINUS)
+    pmenu = prev_btns & (Games::BTN_PLUS | Games::BTN_MINUS)
+    if menu != 0_u32 && pmenu == 0_u32
+      menu_first = (menu & Games::BTN_PLUS) != 0_u32 ? 1 : -1
+      menu_both = false
+      menu_t0 = now_ms
+    end
+    menu_both = true if menu == (Games::BTN_PLUS | Games::BTN_MINUS)
+    if menu_both && menu != 0_u32 && now_ms &- menu_t0 >= 0 && Shared.target != SCR_HOME
+      Shared.target = SCR_HOME # both held: home right away (no need to let go)
+      last_menu = now_ms
+    end
+    if menu == 0_u32 && pmenu != 0_u32
+      tg = Shared.target
+      if !menu_both && !Apps.owns_menu?(tg) && now_ms &- last_menu >= MENU_DEBOUNCE_MS
+        Shared.target = step_screen(tg, menu_first > 0)
         last_menu = now_ms
       end
+      menu_both = false
     end
     prev_btns = btns
 
@@ -524,21 +534,22 @@ fun crystal_knob_task(arg : Void*) : Void
     # PULSING = busy (rendering, colour render, cleaning flash; input is
     # ignored). STEADY = ready (input accepted; in Sketch: knobs draw NOW).
     tgt = Shared.target
+    led_id = tgt == SCR_HOME ? Home.sel : tgt # home: the selected app's LED
     working = Shared.rendering? || Shared.screen != tgt || EPD.busy? ||
               (tgt == SCR_SKETCH && !Shared.live?)
     pulse_dim = working && (now_ms.unsafe_div(250) & 1) == 1
-    mode_rgb(tgt, rgb)
+    mode_rgb(led_id, rgb)
     shift = pulse_dim ? BAR_SHIFT &+ 3 : BAR_SHIFT
     ind_r = rgb[0].unsafe_shr(shift)
     ind_g = rgb[1].unsafe_shr(shift)
     ind_b = rgb[2].unsafe_shr(shift)
     if bar_ok
-      key = tgt &* 2 &+ (pulse_dim ? 1 : 0)
+      key = led_id &* 2 &+ (pulse_dim ? 1 : 0)
       if key != bar_key
         Pixel.wait(bar_ch)
         i = 0
         while i < 8
-          lit = i == tgt
+          lit = i == (led_id & 7)
           bar_buf[i &* 3] = lit ? ind_g : 0_u8
           bar_buf[i &* 3 &+ 1] = lit ? ind_r : 0_u8
           bar_buf[i &* 3 &+ 2] = lit ? ind_b : 0_u8
@@ -1362,7 +1373,7 @@ SCR_SNAKE    = 4
 SCR_DIAG     = 5
 SCR_LINK     = 6 # src/net.cr
 SCR_PONG     = 7
-SCR_COUNT    = 8
+SCR_COUNT    = 8 # built-ins; all apps: Apps.count (src/apps/app.cr)
 
 # Partial-update modes (per app, `upd` in the shell).
 UPD_FULL    = 0 # full-screen fast refresh (WIN_LUT)
@@ -1482,7 +1493,7 @@ module Store
     return SCR_NAMETAG unless @@ok
     v = 0_u8
     return SCR_NAMETAG if LibIDF.nvs_get_u8(@@h, "screen".to_unsafe, pointerof(v)) != 0
-    v.to_i32! < SCR_COUNT ? v.to_i32! : SCR_NAMETAG
+    v.to_i32! < Apps.count || v.to_i32! == SCR_HOME ? v.to_i32! : SCR_NAMETAG
   end
 
   def self.screen=(v : Int32) : Nil
@@ -2170,7 +2181,11 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
   # the incremental modes (diff, diffwin, window) never clean film residue.
   kind = EPD::LUT_BASE
   log2("main: screen / boot", scr, boot ? 1 : 0)
-  if scr == SCR_NAMETAG
+  if scr == SCR_HOME
+    Home.enter
+  elsif !Apps.builtin?(scr)
+    Apps.enter(scr) # registry app (src/apps/)
+  elsif scr == SCR_NAMETAG
     draw_nametag_planes
     red_to_checker
     draw_version(EPD::WIDTH &- 8, EPD::HEIGHT &- 22) # preview only, not the colour image
@@ -2374,7 +2389,8 @@ fun crystal_app_main : Void
       log("sketch: A held, colour refresh", 0)
       sketch_colour
     end
-    held = held & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) # Menu: knob task
+    # Menu: the knob task switches apps, unless this app owns the buttons
+    held = held & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) unless Apps.owns_menu?(scr)
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
     prev = held
     dl = Shared.mv_l &- pl
@@ -2390,6 +2406,7 @@ fun crystal_app_main : Void
     # during one render only draw the last screen.
     Shared.live = false # set again at the bottom of the loop when idle in Sketch
     if Shared.target != scr
+      Apps.leave(scr)
       scr = Shared.target
       Store.screen = scr
       frames = 0
@@ -2417,6 +2434,10 @@ fun crystal_app_main : Void
         colour_shown = colour_refresh
         colour_due = millis &+ AUTO_COLOUR_MS
       end
+    elsif scr == SCR_HOME
+      Home.tick(now, inp)
+    elsif !Apps.builtin?(scr)
+      Apps.tick(scr, now, inp)
     elsif scr == SCR_LINK || scr == SCR_PONG
       LinkUI.tick(scr, now, inp)
     elsif scr == SCR_DIAG
