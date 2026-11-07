@@ -33,8 +33,8 @@ int g_wrap(uint8_t *p, int x, int y, int w, int scale, int lh, int maxl, const c
 int g_cut(const char *s, int cols, const char **next);
 // 1-bit bitmap (rows of (w + 7) / 8 bytes, MSB first, 1 = ink) at x, y.
 void g_blit(uint8_t *p, int x, int y, const uint8_t *bits, int w, int h);
-// Top bar used by every content app: title left, info right, rule below.
-#define G_BAR 44
-void g_bar(uint8_t *p, const char *title, const char *info);
-// Bottom hint line (button help).
-void g_hint(uint8_t *p, const char *s);
+// Rows 0..G_BAR-1 belong to the registry's top bar (src/apps/app.cr TopBar,
+// drawn by the Crystal side after the C content).
+#define G_BAR 48
+// Bottom line: help text left, info (position, status) right.
+void g_hint(uint8_t *p, const char *s, const char *info);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include "feed.h"
 #include "apps_gfx.h"
 #include "stb_image.h"
@@ -154,6 +155,9 @@ static int add_img(feed_t *f, int pi, const char *t, const char *u)
         int sl = (int)strlen(skip[i]);
         if (end - src > sl && !strncmp(end - sl, skip[i], sl)) return -1;
     }
+    int pl = (int)(end - src);
+    for (int i = 0; i < f->nimg; i++) // WordPress repeats the featured image in the post: once is enough
+        if (f->imgs[i].post == pi && !strncmp(f->imgs[i].url, src, pl) && strchr("?", f->imgs[i].url[pl])) return -1;
     fd_img_t *m = &f->imgs[f->nimg];
     memset(m, 0, sizeof *m);
     int bw = k ? FD_PIC_W : FD_COVER_W, bh = k ? FD_PIC_H : FD_COVER_H;
@@ -165,7 +169,7 @@ static int add_img(feed_t *f, int pi, const char *t, const char *u)
     char *bbc = strstr(src, "/standard/");
     if (strstr(src, "/wp-content/uploads/")) { // WordPress (Photon) resizes on its own server
         if (q) *q = 0;
-        snprintf(m->url, sizeof m->url, "%s?w=%d&quality=60", src, m->bw);
+        snprintf(m->url, sizeof m->url, "%.280s?w=%d&quality=60", src, m->bw);
     } else if (bbc && f->site == FD_SITE_BBC) { // BBC: /standard/<width>/..., a sharper size
         const char *rest = strchr(bbc + 10, '/');
         if (rest) snprintf(m->url, sizeof m->url, "%.*s/standard/800%s", (int)(bbc - src), src, rest);
@@ -289,7 +293,14 @@ static void field_end(feed_t *f, fd_parser_t *p)
     p->out[p->on] = 0;
     fd_post_t *po = &f->posts[f->nposts];
     if (p->field == F_DESC) p->sn = p->on;
-    if (p->field == F_CONTENT) po->body_n = p->on;
+    if (p->field == F_CONTENT) {
+        if (p->on >= p->omax - 2) { // cut at FD_BODY: say so
+            p->on = p->omax - 8;
+            memcpy(p->out + p->on, " [...]", 7);
+            p->on += 6;
+        }
+        po->body_n = p->on;
+    }
     p->out = NULL;
     p->field = F_NONE;
 }
@@ -477,6 +488,11 @@ bool fd_decode(fd_img_t *m, const uint8_t *data, int n)
         }
     }
     stbi_image_free(src);
+    // lift the shadows (gamma 0.7): dithered photos come out dark on e-paper
+    static uint8_t lut[256];
+    if (!lut[255])
+        for (int i = 0; i < 256; i++) lut[i] = (uint8_t)(255.0f * powf(i / 255.0f, 0.7f) + 0.5f);
+    for (int i = 0; i < w * h; i++) g[i] = lut[g[i]];
     // Atkinson dither (3/4 of the error spread: crisp on e-paper)
     static const int8_t dx[] = {1, 2, -1, 0, 1, 0}, dy[] = {0, 0, 1, 1, 1, 2};
     for (int y = 0; y < h; y++)
@@ -585,7 +601,6 @@ void fd_draw_page(feed_t *f, uint8_t *pl, const char *name, int i, int page)
     if (page < 0) page = 0;
     g_clear(pl);
     snprintf(info, sizeof info, "POST %d/%d  PAGE %d/%d", i + 1, f->nposts, page + 1, f->npages);
-    g_bar(pl, name, info);
     int top = f->page_top[page], end = page + 1 < f->npages ? f->page_top[page + 1] : f->nl;
     int y = PAGE_Y0;
     for (int k = top; k < end; y += f->lines[k++].h) {
@@ -596,8 +611,7 @@ void fd_draw_page(feed_t *f, uint8_t *pl, const char *name, int i, int page)
         int sh = PAGE_Y1 - PAGE_Y0;
         g_rect(pl, G_W - 12, PAGE_Y0 + sh * top / f->nl, 6, sh * (end - top) / f->nl + 1, true);
     }
-    g_hint(pl, page + 1 < f->npages ? "KNOB: SCROLL   A: NEXT PAGE   B: BACK TO POSTS"
-                                    : "KNOB: SCROLL   A: NEXT POST   B: BACK TO POSTS");
+    g_hint(pl, "KNOB OR MENU -/+: SCROLL", info);
 }
 
 void fd_draw_card(feed_t *f, uint8_t *pl, const char *name, int i)
@@ -605,8 +619,6 @@ void fd_draw_card(feed_t *f, uint8_t *pl, const char *name, int i)
     char s[128];
     fd_post_t *po = &f->posts[i];
     g_clear(pl);
-    snprintf(s, sizeof s, "%d/%d", i + 1, f->nposts);
-    g_bar(pl, name, s);
     int y = G_BAR + 4;
     if (po->cover >= 0) {
         fd_img_t *m = &f->imgs[po->cover];
@@ -621,14 +633,14 @@ void fd_draw_card(feed_t *f, uint8_t *pl, const char *name, int i)
     }
     meta(s, sizeof s, po);
     g_text(pl, X0, y + 2, 2, s, true);
-    g_hint(pl, "KNOB: BROWSE   A: READ   B: NEXT   HOLD A: RELOAD");
+    snprintf(s, sizeof s, "%s  %d/%d", name, i + 1, f->nposts);
+    g_hint(pl, "KNOB OR MENU -/+: BROWSE", s);
 }
 
 void fd_draw_message(uint8_t *pl, const char *name, const char *big, const char *small)
 {
     g_clear(pl);
-    g_bar(pl, name, "");
     g_wrap(pl, 48, G_BAR + 80, G_W - 96, 5, 50, 3, big, true);
     if (small) g_wrap(pl, 48, G_BAR + 260, G_W - 96, 3, 32, 8, small, true);
-    g_hint(pl, "HOLD A: RELOAD");
+    g_hint(pl, NULL, name);
 }

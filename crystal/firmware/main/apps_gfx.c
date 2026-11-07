@@ -157,18 +157,9 @@ void g_blit(uint8_t *p, int x, int y, const uint8_t *bits, int w, int h)
     }
 }
 
-void g_bar(uint8_t *p, const char *title, const char *info)
-{
-    g_text(p, 16, 8, 4, title, true);
-    if (info && *info) {
-        int n = (int)strlen(info);
-        g_text(p, G_W - 16 - g_text_w(2, n), 16, 2, info, true);
-    }
-    g_rect(p, 0, G_BAR - 4, G_W, 3, true);
-}
-
-void g_hint(uint8_t *p, const char *s)
+void g_hint(uint8_t *p, const char *s, const char *info)
 {
     g_rect(p, 0, G_H - 26, G_W, 2, true);
-    g_text(p, 16, G_H - 19, 2, s, true);
+    if (s) g_text(p, 16, G_H - 19, 2, s, true);
+    if (info && *info) g_text(p, G_W - 16 - g_text_w(2, (int)strlen(info)), G_H - 19, 2, info, true);
 }
