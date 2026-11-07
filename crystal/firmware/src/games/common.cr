@@ -51,6 +51,52 @@ module Games
     i
   end
 
+  # Press counting, so a press is never lost while the main task is busy
+  # (an e-paper refresh): the knob task polls every 15 ms and counts each
+  # up -> down edge in one byte per button (A, B, +, - at bits 0, 8, 16, 24).
+  # Edge detection on the main task alone (`input`) misses a second press
+  # that comes and goes during a refresh started by the first: the button
+  # was held at the last tick and is held (latched) again at the next one.
+  def self.count_presses(counts : UInt32, held : UInt32, prev_held : UInt32) : UInt32
+    down = held & (prev_held ^ 0xFFFFFFFF_u32)
+    counts = lane_inc(counts, 0) if (down & BTN_A) != 0_u32
+    counts = lane_inc(counts, 8) if (down & BTN_B) != 0_u32
+    counts = lane_inc(counts, 16) if (down & BTN_PLUS) != 0_u32
+    counts = lane_inc(counts, 24) if (down & BTN_MINUS) != 0_u32
+    counts
+  end
+
+  # Bits of the buttons with a press not yet delivered; takes one press per
+  # button from `seen` (presses beyond one wait for the next tick).
+  def self.next_presses(counts : UInt32, seen : UInt32*) : UInt32
+    s = seen.value
+    bits = 0_u32
+    if (counts.unsafe_shr(0) & 0xFF_u32) != (s.unsafe_shr(0) & 0xFF_u32)
+      bits = bits | BTN_A
+      s = lane_inc(s, 0)
+    end
+    if (counts.unsafe_shr(8) & 0xFF_u32) != (s.unsafe_shr(8) & 0xFF_u32)
+      bits = bits | BTN_B
+      s = lane_inc(s, 8)
+    end
+    if (counts.unsafe_shr(16) & 0xFF_u32) != (s.unsafe_shr(16) & 0xFF_u32)
+      bits = bits | BTN_PLUS
+      s = lane_inc(s, 16)
+    end
+    if (counts.unsafe_shr(24) & 0xFF_u32) != (s.unsafe_shr(24) & 0xFF_u32)
+      bits = bits | BTN_MINUS
+      s = lane_inc(s, 24)
+    end
+    seen.value = s
+    bits
+  end
+
+  # Adds 1 to the byte at bit `sh`, wrapping inside that byte.
+  def self.lane_inc(c : UInt32, sh : Int32) : UInt32
+    b = (c.unsafe_shr(sh) &+ 1_u32) & 0xFF_u32
+    (c & (0xFF_u32.unsafe_shl(sh) ^ 0xFFFFFFFF_u32)) | b.unsafe_shl(sh)
+  end
+
   def self.pressed?(inp : LibGames::Input, btn : UInt32) : Bool
     (inp.pressed & btn) != 0_u32
   end

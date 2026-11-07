@@ -163,6 +163,25 @@ module Shared
     LibIDF.cr_atomic_or(pointerof(@@latched), held)
   end
 
+  # Press counts (Games.count_presses): written only by the knob task, one
+  # word, so the main task never misses a press it was too busy to see.
+  @@presses = 0_u32
+  @@presses_seen = 0_u32 # main task: presses already delivered
+
+  def self.count_presses(held : UInt32, prev_held : UInt32) : Nil
+    @@presses = Games.count_presses(@@presses, held, prev_held)
+  end
+
+  # Main task: buttons with a press not yet delivered (one each per call).
+  def self.next_presses : UInt32
+    Games.next_presses(@@presses, pointerof(@@presses_seen))
+  end
+
+  # Main task: forget the presses not yet delivered.
+  def self.drop_presses : Nil
+    @@presses_seen = @@presses
+  end
+
   # Buttons held now or at any poll since the last call (atomic swap, so a
   # press latched by the knob task between read and clear is not lost).
   def self.take_buttons : UInt32
@@ -565,6 +584,7 @@ fun crystal_knob_task(arg : Void*) : Void
       end
       menu_both = false
     end
+    Shared.count_presses(btns, prev_btns) # before the wake-up below
     prev_btns = btns
 
     # ONE LED rule for the whole badge: only the bar LED at the current /
@@ -2645,6 +2665,7 @@ fun crystal_app_main : Void
   while true
     Ota.ui(scr) if Ota.ui_now? # OTA (shell, DIAG, or an automatic one installing): no other e-paper work meanwhile
     held = Shared.take_buttons
+    presses = Shared.next_presses # every press, even one made during a refresh
     now = millis
     raw_held = held
     # User A, the same on every screen: a TAP is delivered on release (so a
@@ -2732,6 +2753,13 @@ fun crystal_app_main : Void
     # Menu: the knob task switches apps, unless this app owns the buttons
     held = held & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) unless Apps.owns_menu?(scr)
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
+    # Presses come from the knob task's counts, not from held vs prev (which
+    # loses a press made while a refresh started by the last one runs). A,
+    # and B in Sketch, stay taps on release (above).
+    taps = scr == SCR_SKETCH ? (Games::BTN_A | Games::BTN_B) : Games::BTN_A
+    presses = presses & (taps ^ 0xFFFFFFFF_u32)
+    presses = presses & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) unless Apps.owns_menu?(scr)
+    inp.pressed = (inp.pressed & taps) | presses
     prev = held
     dl = Shared.mv_l &- pl
     dr = Shared.mv_r &- pr

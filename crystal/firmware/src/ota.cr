@@ -181,6 +181,7 @@ module Ota
     end
     delay_ms(RESULT_MS)
     Shared.take_buttons # presses during the update don't act on the screen
+    Shared.drop_presses
     RedRes.residue = true # its big text leaves a ghost: slow clean when idle
     enter_screen(scr, false)
     Shared.rendering = false
