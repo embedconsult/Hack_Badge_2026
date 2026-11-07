@@ -37,6 +37,8 @@ have for that API works here as it is. Give the badge its URL.
 | `snakes add <name> <url>` | save a bot; the same name again replaces its URL. Names: up to 15 of `A-Z a-z 0-9 - _ .` |
 | `snakes rm <name\|#>` | forget a bot (by name or list number) |
 | `snakes play` | go to SNAKES and start a game |
+| `snakes league [games]` | a league: that many games (default 5) between every saved bot and the house snake |
+| `snakes league show` / `snakes league reset` | print / clear the league table |
 
 Bots are saved in the badge's NVS and survive reboots and firmware updates.
 
@@ -48,6 +50,12 @@ Bots are saved in the badge's NVS and survive reboots and firmware updates.
 - **Game**: the board, and per snake its length, health, how long its last answer took, missed moves and
   its last shout. **A** pauses, **B** stops. The board updates once per turn (about 0.7 s a turn).
 - **Result**: winner, then everyone in the order they lasted. **A** plays again, **B** back to the lobby.
+- **League** (`snakes league 10`): games back to back, four snakes at a time (every saved bot plus one
+  house snake, rotating when there are more than four), the screen updated every 10 turns so games run
+  at the bots' pace. After each game the badge updates an **Elo table** (everyone starts at 1500; every
+  pair of snakes in a game counts as a duel won by the one that lasted longer, K = 32 / (snakes - 1)),
+  with wins (last one standing) and games played. The table is saved in NVS (bots are matched by name,
+  so keep your bot's name) and shown at the bottom of the lobby. **B** stops the league.
 
 ## The API
 

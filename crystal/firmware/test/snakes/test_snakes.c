@@ -46,6 +46,64 @@ static void test_cmd(void)
     CHECK(snk_cmd("frobnicate", &c, msg, sizeof msg) == -1);
 }
 
+static void test_league(void)
+{
+    snk_cfg_t c = {0};
+    char msg[1024];
+    int g = 0;
+    CHECK(snk_cmd("league", &c, msg, sizeof msg) == 3);
+    CHECK(snk_cmd_league("league", &g) == 3 && g == 5);
+    CHECK(snk_cmd_league("league 12", &g) == 3 && g == 12);
+    CHECK(snk_cmd("league 0", &c, msg, sizeof msg) == -1);
+    CHECK(snk_cmd_league("league 101", &g) == -1);
+    CHECK(snk_cmd("league reset", &c, msg, sizeof msg) == 4);
+    CHECK(snk_cmd("league show", &c, msg, sizeof msg) == 5);
+
+    snk_league_t L;
+    snk_league_reset(&L);
+    const char *n2[] = {"alice", "house"};
+    int s2[] = {100005, 40}; // alice survived, house out at turn 40
+    snk_league_game(&L, 2, n2, s2);
+    CHECK(L.n == 2 && L.games == 1);
+    CHECK(L.e[0].elo == SNK_ELO0 + 16 && L.e[1].elo == SNK_ELO0 - 16); // equal ratings: K/2 each way
+    CHECK(L.e[0].wins == 1 && L.e[0].points == 1 && L.e[1].wins == 0 && L.e[1].games == 1);
+    // four snakes, a tie for last: zero-sum ratings, points = snakes outlasted
+    const char *n4[] = {"house", "bob", "alice", "carl"};
+    int s4[] = {10, 10, 100003, 55};
+    snk_league_game(&L, 4, n4, s4);
+    int sum = 0;
+    for (int i = 0; i < L.n; i++) sum += L.e[i].elo - SNK_ELO0;
+    CHECK(L.n == 4 && sum >= -2 && sum <= 2);
+    int order[SNK_LG];
+    CHECK(snk_league_order(&L, order) == 4);
+    CHECK(!strcmp(L.e[order[0]].name, "alice") && L.e[order[0]].wins == 2 && L.e[order[0]].points == 4);
+    CHECK(!strcmp(L.e[order[1]].name, "carl"));
+    // a strong favourite gains little for an expected win
+    snk_league_t M;
+    snk_league_reset(&M);
+    for (int k = 0; k < 20; k++) snk_league_game(&M, 2, n2, s2);
+    int before = M.e[0].elo;
+    snk_league_game(&M, 2, n2, s2);
+    CHECK(M.e[0].elo - before >= 0 && M.e[0].elo - before < 8);
+    CHECK(M.e[0].elo > 1650 && M.e[0].wins == 21);
+    // a draw between equals changes nothing
+    snk_league_t D;
+    snk_league_reset(&D);
+    int tie[] = {7, 7};
+    snk_league_game(&D, 2, n2, tie);
+    CHECK(D.e[0].elo == SNK_ELO0 && D.e[1].elo == SNK_ELO0 && D.e[0].wins == 0 && D.e[0].points == 0);
+    // full table: the entry with the fewest games makes room
+    char nm[SNK_LG + 2][8];
+    for (int k = 0; k < SNK_LG + 1; k++) {
+        snprintf(nm[k], sizeof nm[k], "b%d", k);
+        const char *pair[] = {nm[k], "house"};
+        snk_league_game(&D, 2, pair, s2);
+    }
+    CHECK(D.n == SNK_LG);
+    int k = snk_league_text(&L, msg, sizeof msg);
+    CHECK(k > 0 && strstr(msg, "4 games") == NULL && strstr(msg, "2 games") && strstr(msg, "alice"));
+}
+
 static void test_url(void)
 {
     snk_url_t u;
@@ -179,6 +237,7 @@ int main(int argc, char **argv)
     port_slow = argc > 2 ? argv[2] : "18702";
     port_dead = argc > 3 ? argv[3] : "18703";
     test_cmd();
+    test_league();
     test_url();
     test_json();
     test_http();

@@ -61,7 +61,8 @@ static int word(const char **p, const char **w)
 
 static bool is(const char *w, int n, const char *s) { return (int)strlen(s) == n && !strncasecmp(w, s, n); }
 
-#define USAGE "usage: snakes list | snakes add <name> <http://host:port[/path]> | snakes rm <name|#> | snakes play\n"
+#define USAGE "usage: snakes list | snakes add <name> <http://host:port[/path]> | snakes rm <name|#> | snakes play\n" \
+              "       snakes league [games] | snakes league show | snakes league reset\n"
 
 int snk_cmd(const char *args, snk_cfg_t *c, char *msg, int n)
 {
@@ -127,8 +128,133 @@ int snk_cmd(const char *args, snk_cfg_t *c, char *msg, int n)
         snprintf(msg, n, "snakes: starting a game\n");
         return 2;
     }
+    if (is(w, wn, "league")) {
+        int an = word(&p, &a);
+        if (an && is(a, an, "reset")) {
+            snprintf(msg, n, "snakes: league table cleared\n");
+            return 4;
+        }
+        if (an && (is(a, an, "show") || is(a, an, "table"))) return 5;
+        int g = an ? atoi(a) : 5;
+        if (g < 1 || g > 100) {
+            snprintf(msg, n, "snakes league [games 1..100]\n");
+            return -1;
+        }
+        snprintf(msg, n, "snakes: league of %d games: every saved bot and the house snake\n", g);
+        return 3;
+    }
     snprintf(msg, n, USAGE);
     return is(w, wn, "help") ? 0 : -1;
+}
+
+int snk_cmd_league(const char *args, int *games)
+{
+    const char *p = args, *w, *a;
+    int wn = word(&p, &w);
+    int an = word(&p, &a);
+    *games = 5;
+    if (!is(w, wn, "league")) return -1;
+    if (an && is(a, an, "reset")) return 4;
+    if (an && (is(a, an, "show") || is(a, an, "table"))) return 5;
+    *games = an ? atoi(a) : 5;
+    return *games >= 1 && *games <= 100 ? 3 : -1;
+}
+
+// ---- league -----------------------------------------------------------------------
+
+void snk_league_reset(snk_league_t *L)
+{
+    memset(L, 0, sizeof *L);
+    L->magic = SNK_LG_MAGIC;
+}
+
+static int lg_find(snk_league_t *L, const char *name)
+{
+    for (int i = 0; i < L->n; i++)
+        if (!strcmp(L->e[i].name, name)) return i;
+    int i = L->n;
+    if (i >= SNK_LG) { // full: the entry with the fewest games goes
+        i = 0;
+        for (int k = 1; k < SNK_LG; k++)
+            if (L->e[k].games < L->e[i].games) i = k;
+    } else {
+        L->n++;
+    }
+    memset(&L->e[i], 0, sizeof L->e[i]);
+    snprintf(L->e[i].name, SNK_NAME, "%s", name);
+    L->e[i].elo = SNK_ELO0;
+    return i;
+}
+
+// 400-point logistic expectation without libm: 1 / (1 + 10^(d / 400)).
+static double expect(double d)
+{
+    double x = d / 400.0 * 2.302585092994046; // ln 10
+    if (x > 30) x = 30;
+    if (x < -30) x = -30;
+    double e = 1, t = 1; // exp(x), series on x / 32 then squared 5 times
+    double y = x / 32;
+    for (int k = 1; k < 12; k++) t *= y / k, e += t;
+    for (int k = 0; k < 5; k++) e *= e;
+    return 1 / (1 + e);
+}
+
+void snk_league_game(snk_league_t *L, int n, const char *const *name, const int *score)
+{
+    if (L->magic != SNK_LG_MAGIC) snk_league_reset(L);
+    if (n < 2 || n > SNK_SLOTS) return;
+    int ix[SNK_SLOTS];
+    for (int i = 0; i < n; i++) ix[i] = lg_find(L, name[i]);
+    double delta[SNK_SLOTS] = {0};
+    double k = 32.0 / (n - 1);
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++) {
+            if (i == j) continue;
+            double s = score[i] > score[j] ? 1 : score[i] == score[j] ? 0.5 : 0;
+            delta[i] += k * (s - expect(L->e[ix[j]].elo - L->e[ix[i]].elo));
+        }
+    for (int i = 0; i < n; i++) {
+        snk_lg_ent_t *e = &L->e[ix[i]];
+        e->elo += (int32_t)(delta[i] + (delta[i] >= 0 ? 0.5 : -0.5));
+        e->games++;
+        bool top = true;
+        for (int j = 0; j < n; j++) {
+            if (j == i) continue;
+            if (score[j] >= score[i]) top = false;
+            if (score[i] > score[j]) e->points++;
+        }
+        if (top) e->wins++;
+    }
+    L->games++;
+}
+
+int snk_league_order(const snk_league_t *L, int *order)
+{
+    int n = L->magic == SNK_LG_MAGIC ? L->n : 0;
+    for (int i = 0; i < n; i++) order[i] = i;
+    for (int i = 1; i < n; i++)
+        for (int j = i; j > 0; j--) {
+            const snk_lg_ent_t *a = &L->e[order[j]], *b = &L->e[order[j - 1]];
+            bool better = a->elo != b->elo ? a->elo > b->elo : a->wins != b->wins ? a->wins > b->wins : a->games > b->games;
+            if (!better) break;
+            int t = order[j];
+            order[j] = order[j - 1], order[j - 1] = t;
+        }
+    return n;
+}
+
+int snk_league_text(const snk_league_t *L, char *out, int n)
+{
+    int order[SNK_LG];
+    int m = snk_league_order(L, order);
+    int k = snprintf(out, n, "snakes league: %d games\n  #  bot              elo  games  wins  points\n",
+                     L->magic == SNK_LG_MAGIC ? (int)L->games : 0);
+    for (int i = 0; i < m && k < n; i++) {
+        const snk_lg_ent_t *e = &L->e[order[i]];
+        k += snprintf(out + k, n - k, "%3d  %-15s %5d %6d %5d %7d\n", i + 1, e->name, (int)e->elo, e->games, e->wins,
+                      e->points);
+    }
+    return k < n ? k : n - 1;
 }
 
 bool snk_parse_url(const char *url, snk_url_t *u)

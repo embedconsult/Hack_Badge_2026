@@ -190,3 +190,12 @@ SnakesApp.tick(1, press.call(Games::BTN_B)) # 1 house
 SnakesApp.tick(1, press.call(Games::BTN_B)) # 2 houses
 SnakesApp.tick(1, press.call(Games::BTN_A)) # play: 2 house + 2 bots
 30.times { SnakesApp.tick(1, inp) }
+
+# SNAKES league: `snakes league 2` (both bots and the house snake), then the lobby's table
+Render.name = "snakesleague"
+lib LibIDF
+  fun stub_lg_ask(n : Int32) : Void
+end
+LibIDF.stub_lg_ask(2)
+SnakesApp.tick(1, inp)
+2000.times { SnakesApp.tick(1, inp) }
