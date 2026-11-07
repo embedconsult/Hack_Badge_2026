@@ -34,7 +34,7 @@ void cr_notify_main(void);  // main/main.c
 #define IDLE_MS 10000
 #define START_MS 3000 // /start and GET /: a first TLS handshake fits
 #define END_MS 1000
-#define WORKER_STACK 12288
+#define WORKER_STACK 16384 // as netapps: TLS handshakes for https bots
 
 enum { J_NONE = 0, J_PING, J_START, J_MOVE, J_END };
 enum { NET_OK = 0, NET_JOINING = 1, NET_FAIL = 2 };
