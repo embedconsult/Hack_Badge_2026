@@ -139,6 +139,54 @@ describe "Blocks" do
     Blocks.tick(2000, ainp(4096, 1300)).should be_true # gravity
   end
 
+  # Hardware report (b3bc247): in 45 s only one piece fell and none spawned.
+  # Badge timing model: a frame (tick -> true) costs a ~0.7 s diff pull, a
+  # clean every 20 frames ~7 s, a pause >= 400 ms an erase-settle pull, and
+  # idle loop passes 20 ms. With no input, pieces must keep spawning and
+  # locking at a playable rate.
+  it "spawns and locks several pieces in 45 s of badge time with no input" do
+    Games.seed(99_u32)
+    Blocks.init
+    Blocks.resync
+    t = 0
+    frames = 0
+    last_frame = 0
+    settled = true
+    idle = ainp(2048, 2048)
+    while t < 45_000
+      if Blocks.tick(t, idle)
+        frames += 1
+        t += frames % 20 == 0 ? 7000 : 700
+        last_frame = t
+        settled = false
+      elsif !settled && t - last_frame >= 400
+        t += 650 # erase settle pull
+        settled = true
+      else
+        t += 20
+      end
+    end
+    Blocks.over?.should be_false
+    Blocks.pieces.should be >= 4
+    # every spawned piece but the falling one is locked in the well
+    cells = 0
+    20.times { |r| 10.times { |c| cells += 1 if Blocks.cell?(c, r) } }
+    cells.should eq (Blocks.pieces - 1) * 4 - Blocks.lines * 10
+  end
+
+  it "rests one frame on landing, then locks and spawns the next" do
+    Blocks.init
+    Blocks.set_piece(3, 0, 3, 17) # O piece, cells on rows 17..18
+    n = Blocks.pieces
+    Blocks.fall # one row down to 18..19, then blocked: rests (still movable)
+    Blocks.resting?.should be_true
+    Blocks.py.should eq 18
+    Blocks.pieces.should eq n
+    Blocks.fall # locks, next piece
+    Blocks.pieces.should eq n + 1
+    Blocks.cell?(4, 19).should be_true
+  end
+
   it "ends when the well overflows and restarts on A" do
     Blocks.init
     20.times { |r| 9.times { |c| Blocks.set_cell(c, r, true) if r >= 1 } }

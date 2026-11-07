@@ -9,10 +9,13 @@
 #   User A     = rotate clockwise        User B = hard drop
 #   after game over, A or B restarts.
 #
-# Timing: gravity is one row per step, LEVEL_MS[level] apart (1300 ms at
-# level 1 down to one panel frame, Arcade::STEP_MS, at level 8+), so even
-# the fastest level never outruns the ~0.65 s refresh. Knob moves and
-# rotations are drawn on the next frame without waiting for gravity.
+# Timing: gravity runs every panel frame (Arcade::STEP_MS) and drops
+# drop_rows rows (2 at level 1, more later), so a piece crosses the well in
+# ~10 frames. Slower gravity (1.3 s per row, the first version) left gaps
+# between frames that the firmware fills with erase-settle pulls and
+# session restarts: on the badge one piece took ~45 s to land (hardware
+# report). A piece that lands rests for one frame (it can still slide) and
+# locks on the next. Knob moves and rotations are drawn on the next frame.
 # Rendering is black only: settled cells filled, the falling piece hollow
 # (fewer changed pixels), the next piece in the side panel.
 
@@ -45,6 +48,8 @@ module Blocks
   @@col_b = -1 # knob column bucket
   @@rot_b = -1 # knob quarter
   @@cleared = 0 # rows cleared by the last lock (for tests)
+  @@pieces = 0  # pieces spawned since restart
+  @@resting = false # landed last frame: locks on the next gravity frame
 
   # 4x4 masks, bit 15 = row 0 col 0, bit 0 = row 3 col 3. kind 0..6 = I J L O S T Z.
   def self.shape(kind : Int32, rot : Int32) : Int32
@@ -162,8 +167,20 @@ module Blocks
   end
 
   def self.interval : Int32
-    ms = 1400 &- @@level &* 100
-    ms < Arcade::STEP_MS ? Arcade::STEP_MS : ms
+    Arcade::STEP_MS
+  end
+
+  # Gravity rows per frame.
+  def self.drop_rows : Int32
+    @@level <= 3 ? 2 : (@@level <= 6 ? 3 : 4)
+  end
+
+  def self.pieces : Int32
+    @@pieces
+  end
+
+  def self.resting? : Bool
+    @@resting
   end
 
   # ---- lifecycle ---------------------------------------------------------------
@@ -189,6 +206,7 @@ module Blocks
     @@score = 0
     @@lines = 0
     @@level = 1
+    @@pieces = 0
     @@over = false
     @@bagi = 7
     @@next = draw_bag
@@ -220,6 +238,8 @@ module Blocks
   # Next piece in; `col` = wanted leftmost column (-1 = centre). Game over
   # if it doesn't fit.
   def self.spawn(col : Int32) : Nil
+    @@pieces = @@pieces &+ 1
+    @@resting = false
     @@kind = @@next
     @@next = draw_bag
     @@rot = 0
@@ -307,6 +327,25 @@ module Blocks
       lock
     else
       @@py = @@py &+ 1
+    end
+  end
+
+  # One gravity frame: drop_rows rows, or rest / lock when blocked.
+  def self.fall : Nil
+    return if @@over
+    n = drop_rows
+    while n > 0
+      if collides?(@@px, @@py &+ 1, @@rot)
+        if @@resting
+          lock
+        else
+          @@resting = true
+        end
+        return
+      end
+      @@py = @@py &+ 1
+      @@resting = false
+      n = n &- 1
     end
   end
 
@@ -437,7 +476,7 @@ module Blocks
     end
     if now &- @@last >= interval
       @@last = now
-      step
+      fall
       changed = true
     end
     changed
