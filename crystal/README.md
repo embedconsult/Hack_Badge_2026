@@ -4,7 +4,7 @@ Work in progress: a port of the badge's MicroPython code (`../lib`, `../apps`)
 to Crystal, targeting the ESP32-S3 natively, with LVGL through
 [lvgl-crystal](https://github.com/embedconsult/lvgl-crystal).
 
-What we learned along the way (hardware, panel, toolchain, network): [FINDINGS.md](FINDINGS.md).
+Guarded goals (read before changing Sketch): [GOALS.md](GOALS.md). What we learned along the way (hardware, panel, toolchain, network): [FINDINGS.md](FINDINGS.md).
 
 Run the host specs:
 
