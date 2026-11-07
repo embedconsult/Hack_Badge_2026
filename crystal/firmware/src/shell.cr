@@ -13,7 +13,7 @@ lib LibIDF
 end
 
 module Shell
-  LINE_MAX = 96
+  LINE_MAX = 300 # room for `ota url <long url>`
   TOK_MAX  =  6
 
   @@line = Pointer(UInt8).null
@@ -94,6 +94,67 @@ module Shell
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
+    say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
+    say("  ota | ota force | ota url <url|default> | ota status\n")
+  end
+
+  # wifi / ota (src/ota.cr): the work runs on the OTA worker task, which
+  # prints its own result. The password is the rest of the line (it may
+  # contain spaces; trailing spaces are dropped) and is never echoed.
+  def self.ota_job(job : Int32, ta : Int32, rest_b : Bool) : Nil
+    a = ta >= 0 && ta < @@nt ? @@line + @@ts[ta].to_i64! : Pointer(UInt8).null
+    alen = ta >= 0 && ta < @@nt ? @@tl[ta] : 0
+    b = Pointer(UInt8).null
+    blen = 0
+    if rest_b && ta &+ 1 < @@nt
+      s = @@ts[ta &+ 1]
+      e = @@len
+      while e > s && @@line[e &- 1] == 0x20_u8
+        e = e &- 1
+      end
+      b = @@line + s.to_i64!
+      blen = e &- s
+    end
+    r = Ota.cmd(job, a, alen, b, blen)
+    i = 0
+    while i < @@len # scrub the password from the line buffer
+      @@line[i] = 0_u8
+      i = i &+ 1
+    end
+    if r == 1
+      say("busy: an ota/wifi job is running\n")
+    elsif r != 0
+      say("failed: no memory for the ota task\n")
+    end
+  end
+
+  def self.wifi : Nil
+    if tok_is(1, "off")
+      ota_job(Ota::JOB_WIFI_OFF, -1, false)
+    elsif tok_is(1, "forget")
+      ota_job(Ota::JOB_WIFI_FORGET, -1, false)
+    elsif tok_is(1, "status") || @@nt == 1
+      ota_job(Ota::JOB_WIFI_STATUS, -1, false)
+    elsif @@nt >= 2
+      ota_job(Ota::JOB_WIFI_SET, 1, true) # no password = open network
+    end
+  end
+
+  def self.ota : Nil
+    if @@nt == 1
+      say("ota: checking for an update (progress on the panel and here)\n")
+      ota_job(Ota::JOB_UPDATE, -1, false)
+      LibIDF.cr_notify_main
+    elsif tok_is(1, "force")
+      ota_job(Ota::JOB_FORCE, -1, false)
+      LibIDF.cr_notify_main
+    elsif tok_is(1, "url") && @@nt == 3
+      ota_job(Ota::JOB_URL_SET, 2, false)
+    elsif tok_is(1, "status")
+      ota_job(Ota::JOB_STATUS, -1, false)
+    else
+      say("usage: ota | ota force | ota url <url|default> | ota status\n")
+    end
   end
 
   def self.status : Nil
@@ -256,6 +317,10 @@ module Shell
       end
     elsif tok_is(0, "flag")
       flag
+    elsif tok_is(0, "wifi")
+      wifi
+    elsif tok_is(0, "ota")
+      ota
     else
       say("unknown command (help)\n")
     end

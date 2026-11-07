@@ -9,3 +9,14 @@ CONFIG_FREERTOS_HZ=1000
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 # Crystal code runs on the main task (EPD, PNG, games): give it room.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=12288
+# Partitions: two 3 MB OTA slots (partitions.csv); the bootloader rolls a new
+# image back unless it marks itself valid (src/ota.cr, after the display is up).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# OTA over HTTPS (GitHub releases): the CA bundle; Wi-Fi/LWIP and mbedTLS
+# buffers may live in PSRAM so the internal heap stays free for DMA.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y

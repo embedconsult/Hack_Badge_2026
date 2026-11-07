@@ -79,6 +79,7 @@ def game_alloc(n : Int32) : UInt8*
 end
 require "./games/menu"
 require "./shell"
+require "./ota"
 
 STATUS_LED       = 1
 GPIO_MODE_OUTPUT = 2 # GPIO_MODE_DEF_OUTPUT (BIT1)
@@ -1144,7 +1145,7 @@ def show_diag : Nil
   draw_text(40, 40, "DIAG", EPD::BLACK, 10)
   draw_version(EPD::WIDTH &- 12, 12)
   draw_text(40, 200, "A: LUT TIMING  HOLD A: CLEAN (SLOW)", EPD::BLACK, 4)
-  draw_text(40, 260, "B: SEAM TEST (~15 S)", EPD::BLACK, 4)
+  draw_text(40, 260, "B: SEAM TEST (~15 S)  HOLD B: UPDATE", EPD::BLACK, 4)
   draw_text(40, 320, "MENU +/-: LEAVE", EPD::BLACK, 4)
   draw_text(40, 370, "LED: STEADY = READY, PULSING = BUSY", EPD::BLACK, 3)
   draw_text(40, 420, "WINDOW TEST: SEAM TEST V10, RESULT", EPD::BLACK, 3)
@@ -1732,6 +1733,7 @@ fun crystal_app_main : Void
   t = millis
   unless EPD.init(SPI_HZ)
     log("main: EPD init failed", 0)
+    Ota.boot_failed # a new OTA image rolls back here
     return
   end
   log("main: EPD init (incl. OTP probe) ms", millis &- t)
@@ -1749,6 +1751,7 @@ fun crystal_app_main : Void
   Shared.rendering = true
   enter_screen(scr, true)
   Shared.rendering = false
+  Ota.boot_ok # display works: keep this image (OTA rollback)
 
   prev = 0_u32
   frames = 0
@@ -1762,6 +1765,7 @@ fun crystal_app_main : Void
   a_down = 0      # when User A went down (0 = up)
   a_fired = false # the hold already fired (no tap on release)
   while true
+    Ota.ui(scr) if Ota.running? # OTA (shell or DIAG): no other e-paper work meanwhile
     held = Shared.take_buttons
     now = millis
     raw_held = held
@@ -1869,7 +1873,11 @@ fun crystal_app_main : Void
       elsif Games.pressed?(inp, Games::BTN_A)
         lut_timing
       elsif Games.pressed?(inp, Games::BTN_B)
-        window_test
+        if Ota.b_held? # hold B: OTA update check (src/ota.cr)
+          Ota.start(false)
+        else
+          window_test
+        end
       end
     elsif scr == SCR_SKETCH
       ticked = Menu.tick(now, inp)

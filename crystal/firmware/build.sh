@@ -12,7 +12,7 @@
 set -eu
 ROOTFS=${ROOTFS:-/opt/debian}
 HERE=$(cd "$(dirname "$0")" && pwd)
-WORK=/build/crystal-firmware            # path inside the rootfs
+WORK=${WORK:-/build/crystal-firmware}   # path inside the rootfs (override for a second build dir)
 [ $# -gt 0 ] || set -- build merge-bin
 
 OUT=${OUT:-$HERE/build}                 # where the outputs are copied
@@ -34,7 +34,7 @@ if ! cmp -s "$HERE/sdkconfig.defaults" "$ROOTFS$WORK/sdkconfig.defaults"; then
   rm -f "$ROOTFS$WORK/sdkconfig"
 fi
 rm -rf "$ROOTFS$WORK/main" "$ROOTFS$WORK/src"
-cp -a "$HERE/CMakeLists.txt" "$HERE/sdkconfig.defaults" "$HERE/main" "$HERE/src" "$ROOTFS$WORK/"
+cp -a "$HERE/CMakeLists.txt" "$HERE/sdkconfig.defaults" "$HERE/partitions.csv" "$HERE/main" "$HERE/src" "$ROOTFS$WORK/"
 
 chroot "$ROOTFS" /usr/bin/env -i HOME=/root TERM=dumb LANG=C.UTF-8 \
   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -50,7 +50,7 @@ chroot "$ROOTFS" /usr/bin/env -i HOME=/root TERM=dumb LANG=C.UTF-8 \
 mkdir -p "$OUT"
 B="$ROOTFS$WORK/build"
 for f in merged-binary.bin crystal_blink.bin crystal_blink.elf crystal_blink.map flash_args \
-         bootloader/bootloader.bin partition_table/partition-table.bin; do
+         bootloader/bootloader.bin partition_table/partition-table.bin ota_data_initial.bin; do
   [ -f "$B/$f" ] && cp "$B/$f" "$OUT/$(basename "$f")"
 done
 ls -l "$OUT"

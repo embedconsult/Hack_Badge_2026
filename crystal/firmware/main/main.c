@@ -33,6 +33,7 @@ const uint32_t crystal_tick_rate_hz = configTICK_RATE_HZ;
 void crystal_app_main(void);           // src/main.cr: EPD demo
 void crystal_knob_task(void *arg);     // src/main.cr: LED blink + knob log
 void crystal_shell_task(void *arg);    // src/shell.cr: debug shell on the console
+void cr_ota_boot_guard(void);          // main/ota.c: roll back an unconfirmed new image
 
 void cr_log(const char *msg, int32_t v) { printf("%s: %ld\n", msg, (long)v); }
 void cr_log2(const char *msg, int32_t a, int32_t b) { printf("%s: %ld %ld\n", msg, (long)a, (long)b); }
@@ -128,6 +129,7 @@ void app_main(void)
 {
     printf("crystal firmware %s\n", CR_VERSION);
     s_main_task = xTaskGetCurrentTaskHandle();
+    cr_ota_boot_guard();
     // Give the Mac's RFC2217 bridge time to come back after a flash/reset,
     // so the start-up log is not lost.
     vTaskDelay(pdMS_TO_TICKS(4000));
