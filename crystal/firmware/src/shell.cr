@@ -119,6 +119,7 @@ module Shell
     say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
     say("  snakes list | snakes add <name> <url> | snakes rm <name|#> | snakes play   (bot arena)\n")
     say("  robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
+    say("  robot tourney [seed] [seeds] | robot standings   (round robin of every robot here)\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
     say("  clock <Y> <M> <D> <h> <m>       (set local time, Schedule NOW/NEXT)\n")

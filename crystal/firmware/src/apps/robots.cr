@@ -16,9 +16,19 @@
 # shell `robot run a b [c] [d] [@seed]` picks one, and
 # `robot challenge <badge> a b [c] [d] [@seed]` plays one with another badge:
 # both simulate the same battle (main/robonet.c) and compare results.
-# A: next battle (next line-up, next seed). B: skip to the end of this one.
+# A: next battle (next line-up, next seed). B: skip to the end of this one;
+# once it is over, B: TOURNEY.
+#
+# Tournament (B: TOURNEY, shell `robot tourney [seed] [seeds]`): every
+# robot here (slots, then built-ins) in a round robin of 4-robot battles,
+# each line-up with several seeds (src/robots/tourney.cr), simulated at full
+# speed without drawing (a progress screen with the standings so far), then
+# the final of the top four. The standings (points, wins, average damage)
+# are saved in NVS (main/robots.c; shell `robot standings`) and shown; A
+# replays the final, the only battle drawn.
 
 require "./robot_store"
+require "../robots/tourney"
 
 module RobotsApp
   include App
@@ -460,9 +470,248 @@ module RobotsApp
 
   def self.draw : Nil
     EPD.fill(EPD::WHITE)
-    TopBar.draw("ROBOTS", "", "", "A: NEXT", @@running ? "B: TO END" : "")
+    if @@tmode == T_FINAL
+      TopBar.draw("ROBOTS: FINAL", "", "", "A: TABLE", @@running ? "B: TO END" : "B: EXIT")
+    else
+      TopBar.draw("ROBOTS", "", "", "A: NEXT", @@running ? "B: TO END" : "B: TOURNEY")
+    end
     draw_arena
     draw_panel
+  end
+
+  # ---- tournament ------------------------------------------------------------
+  T_OFF   = 0
+  T_SIM   = 1 # simulating the battles
+  T_TABLE = 2 # standings on screen
+  T_FINAL = 3 # the final, replayed
+  T_SLICE = 1500 # ms of battles per main loop pass
+  T_DRAW  = 6000 # ms between progress screens
+
+  @@tmode = T_OFF
+  @@treq = false
+  @@treq_seed = 0_u32
+  @@treq_seeds = 3
+  @@tcodes = Pointer(Int32).null # line-up code of each tournament robot
+  @@tidx = Pointer(Int32).null
+  @@tdrawn = 0
+  @@tt0 = 0
+  @@tblob = Pointer(UInt8).null
+
+  # Shell `robot tourney [seed] [seeds]` (shell task): start one when the app runs.
+  def self.request_tourney(seed : UInt32, seeds : Int32) : Nil
+    @@treq_seed = seed
+    @@treq_seeds = seeds
+    @@treq = true
+  end
+
+  def self.tourney_alloc : Bool
+    @@tcodes = game_alloc(Tour::MAX &* 4).as(Int32*) if @@tcodes.null?
+    @@tidx = game_alloc(4 &* 4).as(Int32*) if @@tidx.null?
+    @@tblob = game_alloc(Tour.blob_size(Tour::MAX)) if @@tblob.null?
+    !@@tcodes.null? && !@@tidx.null? && !@@tblob.null? && Tour.alloc
+  end
+
+  def self.tourney_start(seed : UInt32, seeds : Int32) : Nil
+    return unless tourney_alloc
+    fill_pool
+    n = @@pool_n < Tour::MAX ? @@pool_n : Tour::MAX
+    k = 0
+    while k < n
+      @@tcodes[k] = @@pool[k]
+      k = k &+ 1
+    end
+    seed = ((millis.to_u32! &* 2654435761_u32) & 0x7FFFFFFF_u32) | 1_u32 if seed == 0_u32
+    return unless Tour.setup(n, seed, seeds)
+    @@running = false
+    @@tmode = T_SIM
+    @@tt0 = millis
+    log2("robots: tournament: robots / battles", n, Tour.battles)
+    draw_progress
+    Apps.show_clean
+    @@tdrawn = millis
+  end
+
+  # Load tournament robots idx[0, m] as battle robots; names on first sight.
+  def self.tourney_load(m : Int32, idx : Int32*) : Nil
+    r = 0
+    while r < m
+      i = idx[r]
+      c = @@tcodes[i]
+      RobotStore.load(r, c)
+      @@pick[r] = c
+      if Tour.name_len(i) == 0
+        if RC.name_len(r) > 0
+          Tour.set_name(i, RC.name(r), RC.name_len(r))
+        elsif c >= RobotStore::CODE_SLOT && c < RobotStore::CODE_NET
+          @@buf[0] = 0x53_u8; @@buf[1] = 0x4C_u8; @@buf[2] = 0x4F_u8; @@buf[3] = 0x54_u8; @@buf[4] = 0x20_u8 # "SLOT "
+          Tour.set_name(i, @@buf, 5 &+ put_decimal(@@buf + 5_i64, c &- RobotStore::CODE_SLOT))
+        elsif c < RobotStore::CODE_SLOT
+          Tour.set_name(i, Roster.file(c))
+        end
+      end
+      r = r &+ 1
+    end
+    @@n = m
+  end
+
+  # One battle (or the final) of the tournament; true when it is all done.
+  def self.tourney_battle : Bool
+    k = Tour.done
+    if k < Tour.battles
+      m = Tour.lineup(k, @@tidx)
+      tourney_load(m, @@tidx)
+      RB.start(m, Tour.seed_of(k).to_u64!, RB::CYCLE_LIMIT)
+      RB.run
+      Tour.record(m, @@tidx)
+      return false
+    end
+    m = Tour.final_lineup(@@tidx)
+    tourney_load(m, @@tidx)
+    RB.start(m, Tour.final_seed.to_u64!, RB::CYCLE_LIMIT)
+    RB.run
+    Tour.record_final(m, @@tidx)
+    log2("robots: tournament done: battles / s", Tour.done &+ 1, (millis &- @@tt0).unsafe_div(1000))
+    n = Tour.save(@@tblob, 0)
+    LibIDF.cr_robot_tbl_save(0, @@tblob, n)
+    true
+  end
+
+  # Replay the final on screen (the engine is deterministic).
+  def self.tourney_final : Nil
+    m = Tour.finalists
+    k = 0
+    while k < m
+      @@tidx[k] = Tour.finalist(k)
+      k = k &+ 1
+    end
+    tourney_load(m, @@tidx)
+    @@seed = Tour.final_seed
+    @@limit = RB::CYCLE_LIMIT
+    @@net_id = 0_u32
+    @@net = false
+    RB.start(m, @@seed.to_u64!, @@limit)
+    @@ended = false
+    @@trail_n = 0
+    @@ms = 0
+    @@running = true
+    @@tmode = T_FINAL
+    remember
+  end
+
+  def self.rnum(xr : Int32, y : Int32, v : Int32, scale : Int32) : Nil
+    n = put_decimal(@@buf, v)
+    draw_bytes(xr &- n &* 6 &* scale, y, @@buf, n, EPD::BLACK, scale)
+  end
+
+  # Standings from rank `from`, `rows` per column, two columns.
+  def self.draw_table(y0 : Int32, rows : Int32) : Nil
+    col = 0
+    while col < 2 && col &* rows < Tour.robots
+      x = 24 &+ col &* 472
+      y = y0
+      Gfx.text(x, y, "  # ROBOT", 2)
+      Gfx.text(x &+ 228, y, "PTS   W   D   P DMG", 2)
+      Gfx.box(x, y &+ 18, 456, 2, true)
+      y = y &+ 26
+      r = 0
+      while r < rows
+        k = col &* rows &+ r
+        break if k >= Tour.robots
+        i = Tour.at_rank(k)
+        rnum(x &+ 36, y, k &+ 1, 2)
+        nl = Tour.name_len(i)
+        draw_bytes(x &+ 48, y, Tour.name(i), nl > 14 ? 14 : nl, EPD::BLACK, 2)
+        Gfx.box(x &+ 40, y &+ 6, 4, 4, true) if i == Tour.champion && Tour.final_done?
+        rnum(x &+ 264, y, Tour.points(i), 2)
+        rnum(x &+ 312, y, Tour.wins(i), 2)
+        rnum(x &+ 360, y, Tour.draws(i), 2)
+        rnum(x &+ 408, y, Tour.played(i), 2)
+        rnum(x &+ 456, y, Tour.avg_damage(i), 2)
+        y = y &+ 22
+        r = r &+ 1
+      end
+      col = col &+ 1
+    end
+  end
+
+  def self.tourney_head(title : String) : Int32
+    Gfx.text(24, 62, title, 3)
+    y = 96
+    x = number(24, y, Tour.robots, 2)
+    x = Gfx.text(x, y, " ROBOTS, ", 2)
+    x = number(x, y, Tour.battles, 2)
+    x = Gfx.text(x, y, " BATTLES + FINAL, ", 2)
+    x = number(x, y, Tour.seeds, 2)
+    x = Gfx.text(x, y, " PER LINE-UP, SEED ", 2)
+    number(x, y, (Tour.seed & 0x7FFFFFFF_u32).to_i32!, 2)
+    y &+ 26
+  end
+
+  def self.draw_progress : Nil
+    EPD.fill(EPD::WHITE)
+    TopBar.draw("ROBOTS: TOURNAMENT", "", "", "", "B: STOP")
+    y = tourney_head("TOURNAMENT RUNNING")
+    x = Gfx.text(24, y, "BATTLE ", 2)
+    x = number(x, y, Tour.done, 2)
+    x = Gfx.text(x, y, " OF ", 2)
+    number(x, y, Tour.battles, 2)
+    Gfx.frame(300, y &- 2, 636, 20, 2)
+    w = Tour.battles > 0 ? (630 &* Tour.done).unsafe_div(Tour.battles) : 0
+    Gfx.box(303, y &+ 1, w, 14, true)
+    draw_table(y &+ 34, 21)
+  end
+
+  def self.draw_standings : Nil
+    EPD.fill(EPD::WHITE)
+    TopBar.draw("ROBOTS: TOURNAMENT", "", "", "A: FINAL", "B: EXIT")
+    y = tourney_head("TOURNAMENT STANDINGS")
+    c = Tour.champion
+    x = Gfx.text(24, y, "CHAMPION ", 2)
+    if c >= 0
+      nl = Tour.name_len(c)
+      x = draw_bytes(x, y, Tour.name(c), nl, EPD::BLACK, 2)
+      Gfx.text(x, y, Tour.final_winner >= 0 ? " (WON THE FINAL)" : " (FINAL DRAWN: TOP OF THE TABLE)", 2)
+    end
+    draw_table(y &+ 30, 21)
+    Gfx.text(24, 650, "PTS: 3 A WIN (LAST ONE STANDING), 1 A DRAW (ALIVE AT THE CYCLE LIMIT). DMG: AVERAGE DAMAGE", 1)
+  end
+
+  # Tournament screens' tick (T_SIM, T_TABLE); T_FINAL runs as a battle.
+  def self.tourney_tick(now : Int32, inp : LibGames::Input) : Nil
+    if @@tmode == T_SIM
+      if Games.pressed?(inp, Games::BTN_B)
+        @@tmode = T_OFF
+        new_battle
+        draw
+        Apps.show_clean
+        return
+      end
+      t0 = millis
+      while millis &- t0 < T_SLICE
+        return if Apps.leaving?
+        if tourney_battle
+          @@tmode = T_TABLE
+          draw_standings
+          Apps.show_clean
+          return
+        end
+      end
+      if millis &- @@tdrawn >= T_DRAW
+        draw_progress
+        Apps.show
+        @@tdrawn = millis
+      end
+    elsif Games.pressed?(inp, Games::BTN_A)
+      tourney_final
+      @@frames = 0
+      draw
+      Apps.show_clean
+    elsif Games.pressed?(inp, Games::BTN_B)
+      @@tmode = T_OFF
+      new_battle
+      draw
+      Apps.show_clean
+    end
   end
 
   # ---- app -------------------------------------------------------------------
@@ -475,6 +724,19 @@ module RobotsApp
       return
     end
     take_net_match
+    if @@treq && !@@req_ready
+      @@treq = false
+      tourney_start(@@treq_seed, @@treq_seeds)
+      return if @@tmode == T_SIM
+    end
+    if @@tmode == T_SIM || @@tmode == T_TABLE
+      @@tmode = T_TABLE if @@tmode == T_SIM && Tour.final_done?
+      @@tmode == T_SIM ? draw_progress : draw_standings
+      Apps.show_clean
+      @@tdrawn = millis
+      return
+    end
+    @@tmode = T_OFF if @@req_ready
     new_battle if RB.robots == 0 || @@req_ready
     @@frames = 0
     draw
@@ -499,6 +761,32 @@ module RobotsApp
     return unless @@ok
     changed = false
     take_net_match
+    @@tmode = T_OFF if @@req_ready # a requested battle (shell, badge link) comes first
+    if @@treq
+      @@treq = false
+      tourney_start(@@treq_seed, @@treq_seeds)
+      return
+    end
+    if @@tmode == T_SIM || @@tmode == T_TABLE
+      tourney_tick(now, inp)
+      return
+    end
+    if @@tmode == T_FINAL && (Games.pressed?(inp, Games::BTN_A) || (Games.pressed?(inp, Games::BTN_B) && !@@running))
+      if Games.pressed?(inp, Games::BTN_A)
+        @@tmode = T_TABLE
+        draw_standings
+      else
+        @@tmode = T_OFF
+        new_battle
+        draw
+      end
+      Apps.show_clean
+      return
+    end
+    if !@@running && @@tmode == T_OFF && Games.pressed?(inp, Games::BTN_B)
+      tourney_start(0_u32, 3)
+      return
+    end
     if @@net && !@@running # follow the badge link status (challenge, result check)
       s = net_sig
       if s != @@net_sig

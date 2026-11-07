@@ -3,6 +3,9 @@
 # prints the result, so it can be compared with the std-prelude spec build.
 #   crystal build --prelude=empty crystal/firmware/test/robots/empty_prelude.cr -o /tmp/rb
 #   /tmp/rb <seed> <limit> robot1.cr robot2.cr [...]
+#   /tmp/rb tourney <seed> <seeds> robot1.cr robot2.cr [...]
+#     a tournament (src/robots/tourney.cr) of the robot files, in that
+#     order: standings, the final and the tournament hash
 # (test/robonet/ and crystal/net/sim_badge.py use it as the battle engine)
 require "../../src/rt"
 
@@ -28,8 +31,82 @@ def game_alloc(n : Int32) : UInt8*
 end
 
 require "../../src/robots/battle"
+require "../../src/robots/tourney"
+
+def load_file(r : Int32, path : UInt8*, buf : UInt8*) : Bool
+  f = LibC.fopen(path, "rb".to_unsafe)
+  return false if f.null?
+  len = LibC.fread(buf.as(Void*), 1_u64, RL::SRC_MAX.to_u64!, f).to_i32!
+  LibC.fclose(f)
+  RB.load(r, buf, len)
+  true
+end
+
+def same?(a : UInt8*, s : String) : Bool
+  p = s.to_unsafe
+  i = 0
+  while i <= s.bytesize
+    return false if a[i] != p[i]
+    i = i &+ 1
+  end
+  true
+end
+
+# rb tourney <seed> <seeds> files...: robot i = file i
+def tourney(argc : Int32, argv : UInt8**) : Int32
+  seed = LibC.atoi(argv[2]).to_u32!
+  seeds = LibC.atoi(argv[3])
+  n = argc &- 4
+  return 2 unless Tour.setup(n, seed, seeds)
+  buf = game_alloc(RL::SRC_MAX)
+  idx = game_alloc(16).as(Int32*)
+  LibC.printf("tourney robots %d battles %d rounds %d seeds %d seed %u\n".to_unsafe, n, Tour.battles, Tour.rounds,
+    Tour.seeds, seed)
+  k = 0
+  while k < Tour.battles
+    m = Tour.lineup(k, idx)
+    r = 0
+    while r < m
+      return 3 unless load_file(r, argv[4 &+ idx[r]], buf)
+      Tour.set_name(idx[r], RC.name(r), RC.name_len(r)) if Tour.name_len(idx[r]) == 0
+      r = r &+ 1
+    end
+    RB.start(m, Tour.seed_of(k).to_u64!, RB::CYCLE_LIMIT)
+    RB.run
+    LibC.printf("battle %d n %d robots %d %d %d %d seed %u winner %d cycles %d hash %u\n".to_unsafe, k, m,
+      idx[0], m > 1 ? idx[1] : -1, m > 2 ? idx[2] : -1, m > 3 ? idx[3] : -1, Tour.seed_of(k), RB.winner,
+      RB.cycles, RB.result_hash)
+    Tour.record(m, idx)
+    k = k &+ 1
+  end
+  m = Tour.final_lineup(idx)
+  r = 0
+  while r < m
+    return 3 unless load_file(r, argv[4 &+ idx[r]], buf)
+    r = r &+ 1
+  end
+  RB.start(m, Tour.final_seed.to_u64!, RB::CYCLE_LIMIT)
+  RB.run
+  Tour.record_final(m, idx)
+  k = 0
+  while k < n
+    i = Tour.at_rank(k)
+    nm = Tour.name(i)
+    nm[Tour.name_len(i)] = 0_u8 if Tour.name_len(i) < Tour::NAME
+    LibC.printf("rank %d robot %d wins %d draws %d played %d points %d damage %d avg %d name %.16s\n".to_unsafe,
+      k &+ 1, i, Tour.wins(i), Tour.draws(i), Tour.played(i), Tour.points(i), Tour.damage_sum(i),
+      Tour.avg_damage(i), nm)
+    k = k &+ 1
+  end
+  LibC.printf("final n %d robots %d %d %d %d seed %u winner %d\n".to_unsafe, m, idx[0], m > 1 ? idx[1] : -1,
+    m > 2 ? idx[2] : -1, m > 3 ? idx[3] : -1, Tour.final_seed, Tour.final_winner)
+  LibC.printf("champion %d\n".to_unsafe, Tour.champion)
+  LibC.printf("hash %u\n".to_unsafe, Tour.hash)
+  0
+end
 
 fun main(argc : Int32, argv : UInt8**) : Int32
+  return tourney(argc, argv) if argc >= 6 && same?(argv[1], "tourney")
   return 2 if argc < 5
   seed = LibC.atoi(argv[1])
   limit = LibC.atoi(argv[2])

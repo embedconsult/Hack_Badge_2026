@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_partition.h"
+#include "nvs.h"
 
 #define SLOTS 8
 #define SLOT_SIZE 8192
@@ -115,4 +116,58 @@ bool cr_robot_write(int32_t k, const uint8_t *src, int32_t n, const char *name)
     xSemaphoreGive(s_lock);
     printf("robots: slot %d %s (%d bytes)\n", (int)k, ok ? "saved" : "write FAILED", (int)n);
     return ok;
+}
+
+// ---- tournament standings (Tour.save bytes, src/robots/tourney.cr) ---------------
+// NVS namespace "robots": "tourney" = the last tournament on this badge
+// (which = 0), "tourney_net" = the last badge-link tournament (which = 1).
+
+static const char *tbl_key(int32_t which) { return which ? "tourney_net" : "tourney"; }
+
+bool cr_robot_tbl_save(int32_t which, const uint8_t *p, int32_t n)
+{
+    nvs_handle_t h;
+    if (n <= 0 || nvs_open("robots", NVS_READWRITE, &h) != ESP_OK) return false;
+    bool ok = nvs_set_blob(h, tbl_key(which), p, n) == ESP_OK && nvs_commit(h) == ESP_OK;
+    nvs_close(h);
+    printf("robots: standings saved (%s, %d bytes)%s\n", tbl_key(which), (int)n, ok ? "" : " FAILED");
+    return ok;
+}
+
+// The saved standings into p (max bytes); their length, -1 if none.
+int32_t cr_robot_tbl_load(int32_t which, uint8_t *p, int32_t max)
+{
+    nvs_handle_t h;
+    if (nvs_open("robots", NVS_READONLY, &h) != ESP_OK) return -1;
+    size_t n = max;
+    int32_t r = nvs_get_blob(h, tbl_key(which), p, &n) == ESP_OK ? (int32_t)n : -1;
+    nvs_close(h);
+    return r;
+}
+
+#define TBL_HDR 22
+#define TBL_ENTRY 28
+#define TBL_MAX (TBL_HDR + 48 * TBL_ENTRY)
+
+static int g16(const uint8_t *p) { return p[0] | p[1] << 8; }
+static uint32_t g32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+
+// Shell `robot standings [net]`: the saved table on the console.
+void cr_robot_tbl_print(int32_t which)
+{
+    static uint8_t p[TBL_MAX];
+    int32_t n = cr_robot_tbl_load(which, p, sizeof p);
+    if (n < TBL_HDR || memcmp(p, "RTT1", 4) || n < TBL_HDR + p[4] * TBL_ENTRY) {
+        printf("robot: no %stournament saved yet\n", which ? "badge link " : "");
+        return;
+    }
+    printf("%stournament: %d robots, %d battles + final, seed %u, hash %08x\n", which ? "badge link " : "", p[4],
+           g16(p + 16), (unsigned)g32(p + 8), (unsigned)g32(p + 12));
+    printf("  #  robot             pts    W    D    P  avg dmg\n");
+    for (int k = 0; k < p[4]; k++) {
+        const uint8_t *e = p + TBL_HDR + k * TBL_ENTRY;
+        int pl = g16(e + 20);
+        printf("%3d  %-16.16s %5d %4d %4d %4d %8d%s\n", k + 1, (const char *)e, g16(e + 22), g16(e + 16), g16(e + 18),
+               pl, pl ? (int)((g32(e + 24) + pl / 2) / pl) : 0, k == p[18] ? "  champion" : "");
+    }
 }

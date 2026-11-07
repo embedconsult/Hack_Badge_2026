@@ -77,6 +77,20 @@ bool cr_robot_write(int32_t k, const uint8_t *s, int32_t n, const char *name) {
     return true;
 }
 bool cr_robot_name(int32_t k, char *out) { strcpy(out, s_rname[k]); return s_rlen[k] >= 0; }
+static uint8_t s_tbl[2][2048];
+static int s_tbl_n[2] = {-1, -1};
+bool cr_robot_tbl_save(int32_t w, const uint8_t *p, int32_t n) {
+    memcpy(s_tbl[w], p, n);
+    s_tbl_n[w] = n;
+    printf("stub: standings %d saved, %d bytes\n", w, n);
+    return true;
+}
+int32_t cr_robot_tbl_load(int32_t w, uint8_t *p, int32_t max) {
+    if (s_tbl_n[w] < 0) return -1;
+    memcpy(p, s_tbl[w], s_tbl_n[w] < max ? s_tbl_n[w] : max);
+    return s_tbl_n[w];
+}
+void cr_robot_tbl_print(int32_t w) { printf("stub: standings %d printed\n", w); }
 uint32_t cr_atomic_xchg(uint32_t *p, uint32_t v) { uint32_t o = *p; *p = v; return o; }
 void vTaskDelay(uint32_t t) {}
 void cr_print(const char *s) { fputs(s, stdout); }

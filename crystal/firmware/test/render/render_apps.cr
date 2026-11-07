@@ -152,6 +152,16 @@ LibIDF.stub_rn_offer
 RobotsApp.tick(1, inp)
 RobotsApp.tick(1, press.call(Games::BTN_B))
 
+# a tournament (`robot tourney 42 1`): progress, standings, the final, back
+Render.name = "robotstourney"
+RobotsApp.request_tourney(42_u32, 1)
+RobotsApp.tick(1, inp)                      # progress screen
+RobotsApp.tick(1, inp)                      # all battles (millis stands still here), standings
+RobotsApp.tick(1, press.call(Games::BTN_A)) # the final, replayed
+3.times { RobotsApp.tick(1, inp) }
+RobotsApp.tick(1, press.call(Games::BTN_A)) # back to the table
+RobotsApp.tick(1, press.call(Games::BTN_B)) # exit: line-ups again
+
 # SNAKES: lobby, a 4-house-snake game after 12 and 40 turns, the result
 Render.name = "snakes"
 SnakesApp.enter
