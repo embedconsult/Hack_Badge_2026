@@ -1366,7 +1366,7 @@ module Store
     log("nvs: open err", err)
     # Boot diagnostics: reset reason (esp_reset_reason_t: 1 power-on,
     # 3 software, 4 panic, 5 int WDT, 6 task WDT, 7 other WDT, 9 brownout,
-    # 13 USB) and a boot counter kept in NVS.
+    # 11 USB, 12 JTAG) and a boot counter kept in NVS.
     @@reset_reason = LibIDF.esp_reset_reason
     if @@ok
       c = 0_u32
