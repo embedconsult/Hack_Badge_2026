@@ -1,4 +1,4 @@
-idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c" "qr.c" "settings.c" "b2b.c"
+idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c" "qr.c" "settings.c" "settings_html.c" "b2b.c"
                             "apps_net.c" "apps_gfx.c" "feed.c" "weather.c" "radar.c" "stb_image_impl.c"
                             "snakes.c" "snakes_net.c" "robots.c" "robonet.c" "tourney_net.c"
                        EMBED_FILES "hello_i_am_blank.png" "portrait.png" "sketch_frame.png" "EtchASketch.png" "schedule.csv"

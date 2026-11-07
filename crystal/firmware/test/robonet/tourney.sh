@@ -65,6 +65,7 @@ grep -q "organizing" bin/tH4661.log || { echo "FAIL badge did not organize"; fai
 n=$(sed -n 's/.*tournament [0-9a-f]* seed [0-9]*, \([0-9]*\) robots.*/\1/p' bin/tH4661.log)
 check "badge organizes: 5 player robots + 3 built-ins" 8 "$n"
 grep -q "standings .*champion" bin/tH4661.log || { echo "FAIL no standings"; fail=1; }
+grep -q "VERDICT: all 3 badges got the same result" bin/tH4661.log || { echo "FAIL organizer printed no verdict"; fail=1; }
 
 # 2. a simulator organizes (lower MAC); the badge code asks it
 run 4671 f4ffffffff01 "" bin/rb
@@ -76,11 +77,12 @@ grep -q "organizing" bin/tA4671.log || { echo "FAIL SimA did not organize"; fail
 # everyone shows the organizer's standings
 ranks=$(sed -n 's/.*standings [0-9a-f]* hash [0-9]* (mine [0-9]*): \(ranks.*\)/\1/p' bin/tH4671.log)
 [ -n "$ranks" ] || { echo "FAIL badge got no standings from the sim"; fail=1; }
+grep -q "VERDICT: all 3 badges got the same result" bin/tH4671.log || { echo "FAIL participant printed no verdict"; fail=1; }
 
 # 3. sim B's engine disagrees: the organizing badge catches it
 run 4681 f41200000001 "" bin/rb_wrong
 check "a different result is detected (badge)" 3 $H
-grep -q "SimB got a DIFFERENT result" bin/tH4681.log || { echo "FAIL badge did not name SimB"; fail=1; }
+grep -q "VERDICT: SimB got a DIFFERENT result!" bin/tH4681.log || { echo "FAIL badge did not name SimB"; fail=1; }
 
 # 4. packet loss
 run 4691 f41200000001 "--loss 20" bin/rb
