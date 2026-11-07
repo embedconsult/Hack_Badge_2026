@@ -9,7 +9,8 @@
 # Lobby: the saved bots (checked with GET / on entry), A: play, B: how
 # many house snakes join (0..4). Up to 4 snakes play: the house snakes,
 # then the saved bots in list order. In a game, every turn the badge asks
-# all living bots at once (500 ms deadline; no answer = keep going), moves
+# all living bots at once (500 ms deadline; no answer = the house
+# snake's safe move for it, shown as MISSED (AUTO)), moves
 # the house snakes, applies the standard rules (src/games/snakes_rules.cr)
 # and redraws the board with one differential update. A: pause, B: stop.
 #
@@ -68,6 +69,7 @@ module SnakesApp
   @@houses = -1 # -1: not chosen yet (2 with no bots saved, else 1)
   @@who = Pointer(Int32).null  # entry -> -1 house, else saved bot index
   @@moves = Pointer(Int32).null
+  @@auto = Pointer(Int32).null  # 1: this bot's last move was a missed one, made safe
   @@snap = Pointer(Int32).null
   @@nsnap = 0
   @@n = 0
@@ -91,10 +93,11 @@ module SnakesApp
     if @@who.null?
       @@who = game_alloc(R::MAX &* 4).as(Int32*)
       @@moves = game_alloc(R::MAX &* 4).as(Int32*)
+      @@auto = game_alloc(R::MAX &* 4).as(Int32*)
       @@snap = game_alloc(SNAP_MAX &* 4).as(Int32*)
       @@buf = game_alloc(64)
     end
-    !@@who.null? && !@@moves.null? && !@@snap.null? && !@@buf.null?
+    !@@who.null? && !@@moves.null? && !@@auto.null? && !@@snap.null? && !@@buf.null?
   end
 
   # ---- drawing helpers --------------------------------------------------
@@ -270,7 +273,11 @@ module SnakesApp
         xx = Gfx.text(xx &+ 12, yy, "MISSED ", 2)
         num(xx, yy, m, 2)
       end
-      cstr(x, yy &+ 22, LibIDF.cr_snk_shout(i), 26, 2)
+      if @@auto[i] != 0
+        Gfx.text(x, yy &+ 22, "MISSED (AUTO)", 2)
+      else
+        cstr(x, yy &+ 22, LibIDF.cr_snk_shout(i), 26, 2)
+      end
     end
   end
 
@@ -436,6 +443,11 @@ module SnakesApp
     return unless alloc
     @@houses = LibIDF.cr_snk_bots == 0 ? 2 : 1 if @@houses < 0
     nb = LibIDF.cr_snk_bots
+    k = 0
+    while k < R::MAX
+      @@auto[k] = 0
+      k = k &+ 1
+    end
     @@n = 0
     @@bots_in = false
     h = 0
@@ -475,7 +487,20 @@ module SnakesApp
   def self.advance : Nil
     i = 0
     while i < @@n
-      @@moves[i] = R.alive?(i) ? (@@who[i] < 0 ? SnakeHouse.choose(i) : LibIDF.cr_snk_move(i)) : -1
+      m = -1
+      @@auto[i] = 0
+      if R.alive?(i)
+        if @@who[i] < 0
+          m = SnakeHouse.choose(i)
+        else
+          m = LibIDF.cr_snk_move(i)
+          if m < 0 # missed: the house snake's safe move instead of a blind "keep going"
+            m = SnakeHouse.fallback(i)
+            @@auto[i] = 1
+          end
+        end
+      end
+      @@moves[i] = m
       i = i &+ 1
     end
     R.step(@@moves)

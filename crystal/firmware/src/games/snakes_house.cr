@@ -127,6 +127,22 @@ module SnakeHouse
     -1
   end
 
+  # A bot's missed move: its last direction when that is safe (on the
+  # board, no body, room to fit), else the house snake's choice.
+  def self.fallback(me : Int32) : Int32
+    return SnakeRules.last_dir(me) unless alloc
+    mark
+    d = SnakeRules.last_dir(me)
+    x = SnakeRules.x(me, 0) &+ SnakeRules.dx(d)
+    y = SnakeRules.y(me, 0) &+ SnakeRules.dy(d)
+    if SnakeRules.in_bounds?(x, y)
+      c = y &* SnakeRules::W &+ x
+      l = SnakeRules.length(me)
+      return d if @@occ[c] == 0_u8 && room(c, l &+ 1) >= l
+    end
+    choose(me)
+  end
+
   # The move for snake me (SnakeRules::UP..RIGHT).
   def self.choose(me : Int32) : Int32
     return SnakeRules::UP unless alloc

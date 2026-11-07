@@ -104,8 +104,9 @@ previous answer took.
 ## Timing: the badge is the referee
 
 - Each turn the badge asks **all living bots at once** and waits **500 ms** in total, network included.
-  A bot that does not answer a usable move in time **keeps going** in its last direction (`up` on the
-  first turn). The badge counts those as missed moves.
+  A bot that does not answer a usable move in time gets an **automatic safe move**: its last direction
+  (`up` on the first turn) if that does not hit a wall or a body, else the house snake's pick. The badge
+  counts those as missed moves and shows `MISSED (AUTO)` for that turn.
 - While your bot thinks, the badge is busy updating the e-paper with the previous turn, so a turn takes
   about 0.7 s whatever you do. Use your 500 ms.
 - Plain `http://` on the local network is the fast, reliable choice. `https://` URLs work (the badge

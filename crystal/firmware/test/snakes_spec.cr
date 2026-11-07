@@ -232,6 +232,32 @@ describe "SnakeHouse" do
     end
   end
 
+  it "makes a missed bot move safe: last direction if clear, else no wall or body" do
+    board(2)
+    snake(0, [{5, 5}, {4, 5}, {3, 5}]) # heading right, clear ahead
+    snake(1, [{9, 9}, {9, 8}, {9, 7}])
+    R.step(mv(R::RIGHT, R::LEFT))
+    SnakeHouse.fallback(0).should eq R::RIGHT
+    # the --delay 800 case: start in a corner, first moves missed
+    board(2)
+    R.place(0, 1, 1, 3)
+    snake(1, [{9, 9}, {9, 8}, {9, 7}])
+    R.step(mv(R::DOWN, R::LEFT)) # (1,0), heading down at the wall
+    m = SnakeHouse.fallback(0)
+    [R::LEFT, R::RIGHT].should contain m
+    R.step(mv(m, R::LEFT))
+    R.alive?(0).should be_true
+    # into a body: not the last direction
+    board(2)
+    snake(0, [{5, 5}, {4, 5}, {3, 5}])
+    snake(1, [{8, 9}, {7, 9}, {7, 8}, {7, 7}, {7, 6}, {7, 5}, {7, 4}, {7, 3}])
+    R.step(mv(R::RIGHT, R::RIGHT)) # 0 at (6,5), heading right; (7,5) is 1's body
+    R.alive?(0).should be_true
+    m = SnakeHouse.fallback(0)
+    m.should_not eq R::RIGHT
+    [R::UP, R::DOWN].should contain m
+  end
+
   it "plays whole house games to the end, all rules holding" do
     R.food_on = true
     10.times do |g|
