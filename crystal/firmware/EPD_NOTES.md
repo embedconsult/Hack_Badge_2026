@@ -167,3 +167,21 @@ Notes:
   app goes quiet for 400 ms the main loop runs the remaining settle pulls (EPD.diff_settle).
   Camera: Home selection frames and WEATHER's "UPDATING." no longer leave pink.
 - Not balanced (3 x 19 VDL vs 10 VDH for writes); the clean refreshes rebalance from time to time.
+
+## Sketch polish (Nov 2026 night, camera-verified)
+- Knobs: a backlash filter (Sketch.follow, HYST 10 counts) replaces the deadband: no wobble when
+  still, count-by-count motion; a jump > 700 counts between samples re-references (knob override,
+  glitches). During every ink pull the EPD busy hook (epd_busy_hook) keeps polling the knobs, so the
+  next pull draws the path the knobs took (circles stay round) instead of a chord.
+- Pen cursor: four 3 px wide ticks 6..13 px from the pen, ink command 1 (one light pass) on never-
+  inked pixels, removed with command 2 (VDL ink_fe = 2 frames). ink_fe must match ink_f1: with
+  `inkf 4 3 2` the ticks are left behind as grey marks.
+- Shake to erase (A): one ink session with a shake table (tables 1/2/3 = VDL 4/19/8 frames): pull 1
+  lightens each inked pixel by a random strength, pull 2 strongly, then the usual 3-pull clean.
+  2.3 s + 3.8 s. Keep power on between the shake and the clean (a cog_stop power-down cost 2.3 s).
+- Red frame: after hold-A (or 60 s idle) the colour render stays; ink pulls never touch the red
+  frame. Leaving it (or an OTA status screen) marks red residue; after 60 s idle the current screen
+  is redrawn with one OTP refresh. Any input aborts the WAIT, but the OTP waveform still runs to its
+  end and the next refresh waits for the rest (EPD.finish_aborted).
+- PNG/Inflate: the 32 KiB inflate window falls back to PSRAM when internal RAM is fragmented
+  (after ROBOTS + Wi-Fi the Etch frame failed to decode, E_MEMORY).
