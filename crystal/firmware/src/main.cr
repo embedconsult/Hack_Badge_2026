@@ -1177,23 +1177,21 @@ def window_marker(x : Int32, y : Int32) : Nil
   EPD.fill_rect(x &+ 60, y &+ 58, 54, 16, EPD::BLACK)
 end
 
-# Window calibration v7 (DIAG, User B): RAM_RW per window and 0x91 12.
-# HALF60, 1 pull. White base, then each step adds TWO markers on the same
-# rows (left x200 and right x650) and refreshes them through one window
-# (each COG gets its own box):
-#   R1 y120  mode 6: DUW box, RAM_RW [x0, y0 & FF, otp], box upload, DRFW box
-#   R2 y260  mode 7: same with RAM_RW y = y0 / 4
-#   R3 y400  mode 6 + 0x91 12
-#   R4 y540  mode 5 (upload, then DUW + DRFW rows) + 0x91 12
+# Window calibration v8 (DIAG, User B): rows-only windows with RAM_RW at
+# the window start (EPD.refresh_window2 mode 8). HALF60, 1 pull. White base,
+# then each step adds TWO markers on the same rows (left x200, right x650)
+# and refreshes only those rows:
+#   R1 y120  mode 8           R2 y300  mode 8 (y0 > 255: high byte)
+#   R3 y460  mode 8 + 0x91 12 R4 y560  mode 8 + 0x91 12
 # Holds 12 s (photo), then the reference with each step's panel ms.
 WT_STEPS = 4
 
 def wt_y(i : Int32) : Int32
-  i == 0 ? 120 : (i == 1 ? 260 : (i == 2 ? 400 : 540))
+  i == 0 ? 120 : (i == 1 ? 300 : (i == 2 ? 460 : 560))
 end
 
 def window_test : Nil
-  log("wtest v7: white base", 0)
+  log("wtest v8: white base", 0)
   EPD.fill(EPD::WHITE)
   fast_bw(3, EPD::LUT_HALF60)
   times = Shared.times_buf
@@ -1202,14 +1200,13 @@ def window_test : Nil
     y = wt_y(i)
     window_marker(200, y)
     window_marker(650, y)
-    mode = i == 0 ? 6 : (i == 1 ? 7 : (i == 2 ? 6 : 5))
     EPD.send91 = i >= 2
     EPD.fast_pulls = 1
-    log2("wtest: step / mode", i &+ 1, mode)
-    # left COG box x200..319 (bytes 25..39), right x650..769 (bytes 81..96)
-    EPD.refresh_window2(y, y &+ 79, 25, 39, y, y &+ 79, 81, 96, EPD::LUT_HALF60, mode)
+    log2("wtest v8: step / y", i &+ 1, y)
+    EPD.refresh_window2(y, y &+ 79, 25, 39, y, y &+ 79, 81, 96, EPD::LUT_HALF60, 8)
     EPD.send91 = false
     times[i] = EPD.panel_ms
+    log2("wtest v8: step / panel ms", i &+ 1, EPD.panel_ms)
     delay_ms(1500)
     i = i &+ 1
   end
@@ -1227,7 +1224,7 @@ def window_test : Nil
     draw_bytes(380, wt_y(i) &+ 30, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 640, "REF v7: R1 RAMRW Y  R2 RAMRW Y/4  R3 R1+91  R4 MODE5+91", EPD::BLACK, 2)
+  draw_text(40, 646, "REF v8: ROWS-ONLY WINDOW, RAM_RW AT START. R3,R4 +0x91", EPD::BLACK, 2)
   fast_bw(3, EPD::LUT_HALF60)
   EPD.cog_stop # full COG re-init on the next refresh: nothing of the test survives
 end

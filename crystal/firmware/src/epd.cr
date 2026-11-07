@@ -1227,7 +1227,9 @@ module EPD
   # RAM_RW (0x12) before a window upload: the OTP value (modes 0/1/3), or
   # a guess at "start of window" (modes 6/7; DIAG experiments).
   def self.ram_rw(t : Int32, wmode : Int32, x0 : Int32, y0 : Int32) : Nil
-    if wmode == 6
+    if wmode == 8
+      cmd(t, 0x12_u8, 3, 0x00_u8, (y0 & 0xFF).to_u8!, (@@otp[0x15] | y0.unsafe_shr(8).to_u8!))
+    elsif wmode == 6
       cmd(t, 0x12_u8, 3, x0.to_u8!, (y0 & 0xFF).to_u8!, @@otp[0x15])
     elsif wmode == 7
       cmd(t, 0x12_u8, 3, x0.to_u8!, y0.unsafe_div(4).to_u8!, @@otp[0x15])
@@ -1269,7 +1271,11 @@ module EPD
   # 5 = DUW full + full upload, THEN DUW and DRFW set to full width x the
   #     box rows with no further writes (DUW sets where the scan starts);
   # 6 = like 0, with RAM_RW = [x0, y0 & 0xFF, OTP byte 3] (start of window);
-  # 7 = like 0, with RAM_RW = [x0, y0 / 4, OTP byte 3].
+  # 7 = like 0, with RAM_RW = [x0, y0 / 4, OTP byte 3];
+  # 8 = ROWS ONLY with RAM_RW at the window start: DUW full width x rows,
+  #     RAM_RW = [00, y0 & FF, 0x10 | y0 >> 8] (reading OTP 00 00 10 / PDi
+  #     3B 00 14 as [x start, y start low, flags | y start high]), only those
+  #     rows uploaded at full width, DRFW full width x the same rows.
   # @@send91: also send 0x91 <- 0x12 after DUW/DRFW (Pervasive_Wide_Large).
   def self.refresh_window2(lr0 : Int32, lr1 : Int32, lc0 : Int32, lc1 : Int32,
                            rr0 : Int32, rr1 : Int32, rc0 : Int32, rc1 : Int32, kind : Int32,
@@ -1322,7 +1328,7 @@ module EPD
       end
       x0 = w[0]
       x1 = w[1]
-      if wmode >= 3 && wmode <= 5 # rows only (3, 4, 5): full width on every COG
+      if (wmode >= 3 && wmode <= 5) || wmode == 8 # rows only: full width on every COG
         x0 = 0
         x1 = HALF_BYTES &- 1
       end
