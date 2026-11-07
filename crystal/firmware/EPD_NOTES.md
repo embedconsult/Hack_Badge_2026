@@ -153,3 +153,17 @@ Notes:
 - Rows-only ink pulls (DUW rows + RAM_RW at the window start + DRFW rows) ran in 22-104 ms, but the strokes
   did not appear and the window edges left seam lines: off (flag INK_WIN). Pull time follows the DRFW rows
   (~0.85 ms/row + ~20 ms).
+
+## Erase waveform: pink ghosts (wtest, Nov 2026)
+- Black (put up by the fast base LUT) driven back to white with VDL for one 20-frame pull leaves PINK
+  (camera, shell `wtest A B C`: three groups erased with three tables in one ink pull, after a slow
+  `clean`). VDL 10 (the old DIFF_DRIVE) pink + grey; VDL 6 darker; VDL 19 lightest but still pink.
+  VDH first, VDL/VDH shaking, or level 3 first: no better.
+- More VDL time is what removes it: 2 pulls x 19 VDL faint, 3 pulls x 19 VDL clean. The red pigment
+  is slower than the black and is still near the front after one pull.
+- UPD_DIFF now: erase drive VDL 19 (diffe default) and every erased pixel gets table 2 in the next
+  two pulls too, by writing RAM 0x11 = shown | settle (EPD settle_compose/settle_advance). Inside
+  running apps (games) that rides on their next pulls for free (+50 ms upload for 0x11); when the
+  app goes quiet for 400 ms the main loop runs the remaining settle pulls (EPD.diff_settle).
+  Camera: Home selection frames and WEATHER's "UPDATING." no longer leave pink.
+- Not balanced (3 x 19 VDL vs 10 VDH for writes); the clean refreshes rebalance from time to time.

@@ -258,9 +258,12 @@ static int degrees(uint8_t *p, int x, int y, int scale, int v)
     char s[12];
     snprintf(s, sizeof s, "%d", v);
     x = g_text(p, x, y, scale, s, true);
-    int r = scale * 2 > 3 ? scale * 2 : 3;
-    g_ring(p, x + r, y + r, r, scale > 2 ? scale / 2 + 1 : 2);
-    return x + 2 * r + scale * 2;
+    // A small raised ring: about a third of the cap height (7 * scale) for
+    // big digits, so it doesn't read as a letter O.
+    int r = scale <= 3 ? (scale * 2 > 3 ? scale * 2 : 3) : scale + 2;
+    int t = scale <= 3 ? 2 : scale / 3 + 1;
+    g_ring(p, x + scale + r, y + r, r, t);
+    return x + scale + 2 * r + scale * 2;
 }
 
 static const char *weekday(const char *d) // "YYYY-MM-DD" (Sakamoto)

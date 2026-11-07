@@ -210,6 +210,7 @@ module Shared
   REQ_STROKE = 4_u32
   REQ_QUICKDRAW = 16_u32 # (8 = REQ_REDRAW, src/net.cr)
   REQ_FORGET    = 32_u32 # knob override switched on/off: no pen jump
+  REQ_WTEST     = 64_u32 # erase waveform test (WTest.codes)
 
   def self.ovr_l : Int32
     @@ovr_l
@@ -1191,6 +1192,91 @@ def ink_test : Nil
   LibIDF.heap_caps_free(po.as(Void*))
   EPD.cog_stop
   log("inktest: done", 0)
+end
+
+# Erase waveform test (shell `wtest <A> <B> <C>`, 20 digits each: level
+# per frame, 0 GND 1 VDH 2 VDL 3 VDHR). Three groups (a solid block, text
+# and thin lines) are put up black with a normal clean refresh, then one
+# ink pull erases group 1 with waveform A, group 2 with B, group 3 with C
+# (ink commands 1, 2, 3); the labels stay. Photograph the result. Run a
+# slow `clean` before each test: red residue survives fast refreshes.
+module WTest
+  @@codes = Pointer(UInt8).null
+
+  @@pulls = 1
+
+  def self.codes : UInt8*
+    @@codes = game_alloc(64) if @@codes.null?
+    @@codes
+  end
+
+  def self.pulls : Int32
+    @@pulls
+  end
+
+  def self.pulls=(v : Int32) : Nil
+    @@pulls = v < 1 ? 1 : (v > 9 ? 9 : v)
+  end
+end
+
+def wt_group(p : UInt8*, y : Int32) : Nil
+  Games.fill_rect(p, 120, y, 160, 60)
+  k = 0
+  while k < 6
+    Games.fill_rect(p, 320 &+ k &* 14, y, 3, 60)
+    k = k &+ 1
+  end
+end
+
+def wtest : Nil
+  Shared.rendering = true
+  log("wtest: start", 0)
+  EPD.fill(EPD::WHITE)
+  i = 0
+  while i < 3
+    y = 130 &+ i &* 170
+    draw_text(30, y &+ 10, i == 0 ? "A" : (i == 1 ? "B" : "C"), EPD::BLACK, 6)
+    wt_group(EPD.black, y)
+    draw_text(440, y &+ 10, "ERASE 123", EPD::BLACK, 5)
+    i = i &+ 1
+  end
+  fast_bw(3, EPD::LUT_BASE)
+  pn = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+  po = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+  return if pn.null? || po.null?
+  Games.zero(pn, EPD::PLANE)
+  Games.zero(po, EPD::PLANE)
+  # group content = black pixels right of the labels
+  i = 0
+  while i < 3
+    y0 = 130 &+ i &* 170
+    r = y0
+    while r < y0 &+ 60
+      c = 110.unsafe_shr(3)
+      while c < EPD::ROW_BYTES
+        v = EPD.black[r &* EPD::ROW_BYTES &+ c]
+        o = r &* EPD::ROW_BYTES &+ c
+        pn[o] = v if i != 1  # commands 1 (A) and 3 (C)
+        po[o] = v if i != 0  # commands 2 (B) and 3 (C)
+        EPD.black[o] = 0_u8
+        c = c &+ 1
+      end
+      r = r &+ 1
+    end
+    i = i &+ 1
+  end
+  EPD.ink_custom = WTest.codes
+  n = 0
+  while n < WTest.pulls
+    log("wtest: pull ms", EPD.refresh_ink(pn, po))
+    n = n &+ 1
+  end
+  EPD.ink_custom = Pointer(UInt8).null
+  EPD.cog_stop
+  LibIDF.heap_caps_free(pn.as(Void*))
+  LibIDF.heap_caps_free(po.as(Void*))
+  Shared.rendering = false
+  log("wtest: done", 0)
 end
 
 def ink_ladder : Nil
@@ -2367,6 +2453,7 @@ fun crystal_app_main : Void
       Sketch.forget_knobs
       SkTrack.reset
     end
+    wtest if (reqs & Shared::REQ_WTEST) != 0_u32
     if (reqs & Shared::REQ_QUICKDRAW) != 0_u32 && scr == SCR_SKETCH
       Shared.rendering = true
       quick_draw
@@ -2638,6 +2725,13 @@ fun crystal_app_main : Void
       Shared.led_mode = 0
     end
     Store.sync_upd
+    # Erase settling (EPD.diff_settle): when an app's diff updates pause,
+    # the pixels they erased get their remaining VDL pulls (no pink).
+    if EPD.settle_pending? && Shared.target == scr && raw_held == 0_u32 && millis &- EPD.diff_last_ms >= 400
+      Shared.rendering = true
+      EPD.diff_settle
+      Shared.rendering = false
+    end
     Shared.live = scr == SCR_SKETCH && !Shared.rendering? && Shared.target == scr
     LibIDF.cr_wait_notify(20_u32) # woken early by the knob task on input
   end

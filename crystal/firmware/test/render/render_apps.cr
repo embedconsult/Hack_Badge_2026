@@ -32,6 +32,7 @@ module EPD
   end
   class_property fast_pulls = 1
   def self.refresh_diff; Render.frame("diff"); 0; end
+  def self.diff_prepare; end
 end
 
 module Shared
@@ -99,6 +100,7 @@ require "../../src/apps/home"
 require "../../src/apps/settings"
 require "../../src/apps/schedule"
 require "../../src/apps/robots"
+require "../../src/apps/snakes"
 
 inp = Games.input(1000, 1000, 0_u32, 0_u32)
 press = ->(b : UInt32) { Games.input(1000, 1000, b, 0_u32) }
@@ -122,3 +124,20 @@ RobotsApp.enter
 RobotsApp.tick(1, press.call(Games::BTN_B))
 RobotsApp.tick(1, press.call(Games::BTN_A))
 3.times { RobotsApp.tick(1, inp) }
+
+# SNAKES: lobby, a 4-house-snake game after 12 and 40 turns, the result
+Render.name = "snakes"
+SnakesApp.enter
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 2 houses
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 3
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 4
+SnakesApp.tick(1, press.call(Games::BTN_A)) # play
+200.times { SnakesApp.tick(1, inp) }
+SnakesApp.tick(1, press.call(Games::BTN_B)) # stop
+Render.name = "snakesbots"
+SnakesApp.tick(1, press.call(Games::BTN_B)) # lobby
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 0 houses -> 2 bots
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 1 house
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 2 houses
+SnakesApp.tick(1, press.call(Games::BTN_A)) # play: 2 house + 2 bots
+30.times { SnakesApp.tick(1, inp) }

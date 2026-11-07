@@ -1069,6 +1069,11 @@ module EPD
 
   # The film now shows the planes (after a full refresh): black | red.
   def self.diff_mark_shown : Nil
+    @@settle_any = false # a full refresh drove every pixel
+    unless @@s1.null?
+      zero(@@s1, PLANE)
+      zero(@@s2, PLANE)
+    end
     d = diff_shown
     i = 0
     while i < PLANE
@@ -1106,7 +1111,7 @@ module EPD
 
   # Black -> white drive of the diff table: VDL frames, then VDH frames
   # (a short reverse kick). Long VDL brings red pigment up (pink ghosts).
-  @@diff_el = DIFF_DRIVE
+  @@diff_el = 19 # erase drive (was DIFF_DRIVE 10; settle pulls add 2 x 19)
   @@diff_eh = 0
 
   def self.diff_erase(l : Int32, h : Int32) : Nil
@@ -1239,6 +1244,90 @@ module EPD
   # into 0x10 (the box-only write there is an upload optimisation). rows <
   # HEIGHT: UPD_DIFFWIN, DRFW limited to rows 0..rows-1 (4-aligned).
   # Returns panel ms or -1.
+  # ---- erase settling ----------------------------------------------------------
+  # One pull of VDL (table 2, black -> white) leaves pink: the slow red
+  # pigment is still near the front. Camera (wtest, Nov 2026): 1 x 19 VDL
+  # frames pink, 2 x 19 faint, 3 x 19 clean. So every erased pixel gets
+  # table 2 in the next two pulls as well (RAM 0x11 = shown | settle: the
+  # pixel reads as black -> white again), folded into the following diff
+  # pulls for free, or into idle settle pulls (diff_settle) when nothing
+  # else comes. A pixel drawn black again leaves the settle set.
+  SETTLE_PULLS = 2
+  @@s1 = Pointer(UInt8).null # erased in the last pull
+  @@s2 = Pointer(UInt8).null # erased the pull before
+  @@sold = Pointer(UInt8).null # composed 0x11 plane
+  @@settle_any = false
+
+  def self.settle_ready? : Bool
+    if @@s1.null?
+      @@s1 = alloc_plane
+      @@s2 = alloc_plane
+      @@sold = alloc_plane
+      return false if @@s1.null? || @@s2.null? || @@sold.null?
+      zero(@@s1, PLANE)
+      zero(@@s2, PLANE)
+    end
+    !@@sold.null?
+  end
+
+  # 0x11 for the next diff pull (shown | pending settles not drawn black
+  # again), or null when there is nothing to settle.
+  def self.settle_compose(idle : Bool) : UInt8*
+    return Pointer(UInt8).null unless @@settle_any && settle_ready?
+    d = diff_shown
+    o = @@sold
+    i = 0
+    while i < PLANE
+      n = @@black[i] | @@red[i]
+      o[i] = d[i] | ((@@s1[i] | @@s2[i]) & (n ^ 0xFF_u8))
+      i = i &+ 1
+    end
+    o
+  end
+
+  # After a diff pull: shift the settle generations, add this pull's erases.
+  def self.settle_advance : Nil
+    return unless settle_ready?
+    d = diff_shown
+    any = false
+    i = 0
+    while i < PLANE
+      n = @@black[i] | @@red[i]
+      keep = n ^ 0xFF_u8
+      a = @@s1[i] & keep
+      b = d[i] & keep # erased now
+      @@s2[i] = a
+      @@s1[i] = b
+      any = true if (a | b) != 0_u8
+      i = i &+ 1
+    end
+    @@settle_any = any
+  end
+
+  @@diff_last = 0
+
+  def self.diff_last_ms : Int32
+    @@diff_last
+  end
+
+  def self.settle_pending? : Bool
+    @@settle_any && @@diff_open && @@latched_kind == LUT_DIFF
+  end
+
+  # Idle settle pull: no change, only the pending erases get VDL again.
+  def self.diff_settle : Int32
+    return 0 unless settle_pending?
+    refresh_diff
+  end
+
+  # Opens the differential session now (after a full refresh), so the next
+  # refresh_diff is a single pull instead of paying the session open.
+  def self.diff_prepare : Nil
+    return if @@diff_open && @@latched_kind == LUT_DIFF && @@diff_n < DIFF_SESSION
+    cog_stop if @@diff_open
+    diff_open
+  end
+
   def self.refresh_diff(rows : Int32 = HEIGHT) : Int32
     finish_aborted
     @@spi_fail = false
@@ -1249,10 +1338,15 @@ module EPD
       return -1 unless diff_open
     end
     t_up = millis
+    settle = settle_compose(false)
     t = LEFT
     while t <= RIGHT
       ram_rw_full(t)
       send_plane(t, 0x10_u8, @@black, @@red)
+      unless settle.null?
+        ram_rw_full(t)
+        send_plane(t, 0x11_u8, settle, Pointer(UInt8).null)
+      end
       t = t &+ 1
     end
     rows = HEIGHT if rows > HEIGHT
@@ -1275,6 +1369,8 @@ module EPD
       cog_stop
       return -1
     end
+    settle_advance
+    @@diff_last = millis
     d = diff_shown
     i = 0
     while i < PLANE
@@ -1318,6 +1414,31 @@ module EPD
     @@ink_fe
   end
 
+  # Waveform test (shell `wtest`): 60 level codes (tables 1, 2, 3 x 20
+  # frames, 0 GND 1 VDH 2 VDL 3 VDHR) replace the ink tables while set.
+  @@ink_custom = Pointer(UInt8).null
+
+  def self.ink_custom=(p : UInt8*) : Nil
+    @@ink_custom = p
+    cog_stop if @@diff_open && @@latched_kind == LUT_INK && !busy? # new table: new session
+  end
+
+  def self.build_ink_custom : Nil
+    c = @@ink_custom
+    t = 1
+    while t <= 3
+      f = 0
+      while f < 20
+        g = f.unsafe_div(2)
+        shift = (f & 1) == 1 ? 0 : 2
+        q = @@lut + ((t &* 10 &+ g) &* 8).to_i64!
+        q[0] = q[0] | (c[(t &- 1) &* 20 &+ f] & 3_u8).unsafe_shl(shift)
+        f = f &+ 1
+      end
+      t = t &+ 1
+    end
+  end
+
   def self.build_ink : Nil
     k = 0
     while k < 50
@@ -1343,6 +1464,14 @@ module EPD
         q[0] = q[0] | 1.unsafe_shl(shift).to_u8! # table 3: VDH
       end
       f = f &+ 1
+    end
+    unless @@ink_custom.null?
+      k = 10
+      while k < 40
+        (@@lut + (k &* 8).to_i64!).value = 0_u8
+        k = k &+ 1
+      end
+      build_ink_custom
     end
   end
 

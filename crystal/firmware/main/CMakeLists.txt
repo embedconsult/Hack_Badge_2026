@@ -1,5 +1,6 @@
 idf_component_register(SRCS "main.c" "ota.c" "net.c" "apps.c" "qr.c" "settings.c" "b2b.c"
                             "apps_net.c" "apps_gfx.c" "feed.c" "weather.c" "radar.c" "stb_image_impl.c"
+                            "snakes.c" "snakes_net.c"
                        EMBED_FILES "hello_i_am_blank.png" "portrait.png" "sketch_frame.png" "EtchASketch.png" "schedule.csv"
                        PRIV_REQUIRES esp_driver_gpio esp_driver_spi esp_driver_rmt esp_adc nvs_flash esp_timer esp_rom heap freertos
                                      esp_wifi esp_netif lwip esp_event esp_http_client esp_http_server esp_https_ota app_update esp_app_format mbedtls json
@@ -29,8 +30,12 @@ add_custom_command(
           "CRYSTAL_PATH=${CRYSTAL_HOME}/src"
           "CRYSTAL_LIBRARY_PATH=${CRYSTAL_HOME}/lib"
           "CRYSTAL_CACHE_DIR=${CMAKE_CURRENT_BINARY_DIR}/crystal-cache"
+          # -O2, not --release (-O3): Xtensa L32R reaches literals at most
+          # 256 KiB back and the whole program is one .text section; at -O3
+          # it outgrew that (291 KiB with ROBOTS; -O2 216 KiB, -Os 161 KiB;
+          # measure with test/robots/crystal_size.sh).
           "${CRYSTAL_XTENSA}" build --prelude=empty --cross-compile
-          --target xtensa-esp-unknown-elf --mcpu esp32s3 --release
+          --target xtensa-esp-unknown-elf --mcpu esp32s3 -O2 --single-module
           -o "${CRYSTAL_OBJ_BASE}" "${CRYSTAL_MAIN}"
   # Crystal always emits a C-style `main`; keep it out of the global namespace.
   COMMAND ${CMAKE_OBJCOPY} --localize-symbol=main "${CRYSTAL_OBJ}"

@@ -32,3 +32,29 @@ int32_t cr_settings_qr(int32_t which, uint8_t *out) {
     const char *t = which == 0 ? "WIFI:T:WPA;S:Badge-1A2B;P:k7xq3mzp;;" : "http://192.168.4.1/";
     return cr_qr_encode((const uint8_t *)t, strlen(t), out);
 }
+
+// SNAKES (main/snakes_net.c): two saved bots that answer "keep going"
+static const char *k_bn[] = {"alice", "zigzag-9000"}, *k_bu[] = {"http://192.168.1.20:8000", "https://zz.example.com/snake"};
+int32_t cr_snk_cmd(const uint8_t *l, int32_t n) { return 0; }
+int32_t cr_snk_bots(void) { return 2; }
+const uint8_t *cr_snk_bot_name(int32_t i) { return (const uint8_t *)k_bn[i & 1]; }
+const uint8_t *cr_snk_bot_url(int32_t i) { return (const uint8_t *)k_bu[i & 1]; }
+int32_t cr_snk_bot_state(int32_t i) { return i == 0 ? 2 : 3; }
+int32_t cr_snk_bot_ms(int32_t i) { return 14; }
+const uint8_t *cr_snk_bot_author(int32_t i) { return (const uint8_t *)"jkridner"; }
+uint32_t cr_snk_sig(void) { return 1; }
+int32_t cr_snk_net(void) { return 0; }
+int32_t cr_snk_busy(void) { return 0; }
+void cr_snk_ping(void) {}
+static int32_t s_who[4];
+void cr_snk_begin(int32_t n, const int32_t *who, uint32_t seed, const int32_t *snap, int32_t nsnap) { memcpy(s_who, who, n * 4); }
+void cr_snk_turn(const int32_t *snap, int32_t n) {}
+void cr_snk_end(const int32_t *snap, int32_t n) {}
+int32_t cr_snk_move(int32_t i) { return -1; }
+int32_t cr_snk_err(int32_t i) { return i == 3 ? 3 : 0; }
+int32_t cr_snk_ms(int32_t i) { return 20 + 7 * i; }
+int32_t cr_snk_misses(int32_t i) { return i == 3 ? 2 : 0; }
+const uint8_t *cr_snk_name(int32_t i) { return s_who[i] < 0 ? (const uint8_t *)"house-1" : cr_snk_bot_name(s_who[i]); }
+const uint8_t *cr_snk_shout(int32_t i) { return (const uint8_t *)"turn 12: up"; }
+const uint8_t *cr_snk_err_name(int32_t e) { return (const uint8_t *)"timeout"; }
+uint32_t esp_random(void) { return 12345; }

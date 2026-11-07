@@ -17,7 +17,7 @@ require "../games/aliens"
 require "../games/rocks"
 
 module ArcadeRun
-  CLEAN_EVERY = 12
+  CLEAN_EVERY = 20 # was 12; each clean also reopens the diff session (up to ~7 s in all)
   BLOCKS = 0
   ALIENS = 1
   ROCKS  = 2
