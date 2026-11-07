@@ -13,8 +13,11 @@ import os
 import sys
 import time
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                "beaglebadge", "applications", "link"))
+HERE = os.path.dirname(os.path.abspath(__file__))
+for d in (os.path.join(HERE, "beaglebadge", "applications", "link"), "/opt/badge_launcher/applications/link"):
+    if os.path.exists(os.path.join(d, "_badgenet.py")):
+        sys.path.insert(0, d)
+        break
 import _badgenet as bn  # noqa: E402
 
 secs = 120.0
