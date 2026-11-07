@@ -81,8 +81,7 @@ Xtensa `L32R` loads a 32-bit constant (a "literal") from at most 256 KiB
 and one `.text` section, so once `.text` of `crystal_app.o` passes about
 230 KiB the far end can't reach the pool and the link fails with
 `dangerous relocation: l32r: literal target out of range`. With `--release`
-(-O3) the code is 297 KiB, which is why the default build uses `-O2` (221 KiB;
-89% of the reach is used already: `test/robots/literal_reach.py build/crystal_blink.map`).
+(-O3) the code is 297 KiB, which is why the build used `-O2` (221 KiB) until the split below.
 
 `CRYSTAL_SPLIT=1` lifts the limit, without changing the compiler:
 1. Crystal runs its optimisation pipeline as usual and `--emit llvm-ir` writes
@@ -111,14 +110,14 @@ flags, e.g. `--mtext-section-literals` (pools inline in `.text.<name>`, behind a
 jump at each function entry; not needed).
 
 ```sh
-CRYSTAL_OPT=--release CRYSTAL_SPLIT=1 crystal/firmware/build.sh   # -O3, links
-crystal/firmware/build.sh                                          # default: -O2, Crystal's own object
+crystal/firmware/build.sh                                          # default: -O3 (--release), split
+CRYSTAL_OPT=-O2 CRYSTAL_SPLIT=0 crystal/firmware/build.sh          # old way: -O2, Crystal's own object
 CRYSTAL_SPLIT=1 crystal/firmware/test/robots/crystal_size.sh       # object sizes only
 crystal/firmware/test/robots/crystal_grow.sh   # full -O3 link with the code stub-grown (KIB=...)
 ```
 `build.sh` passes the variables into the chroot via the generated
 `main/crystal_flags.cmake`. A change re-runs cmake and the Crystal step.
-The split is opt-in until it has been measured on the badge.
+The split is the default since 300914e (A/B on the badge: no regressions).
 
 ## Status / limits
 Only `--prelude=empty` works so far: compiler primitives, `lib` bindings and
