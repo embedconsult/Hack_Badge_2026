@@ -128,7 +128,7 @@ def front_x(y):
     return CX1 + 10 * math.sqrt(max(0, 1 - ((y - CYM) / RF) ** 2))
 
 # Frame: bottom under the cylinder (start: the pen's home), front, top strap.
-fbot = cr([(FX, 312), (330, 320), (300, 323), (282, 323)], 4)
+fbot = cr([(FX, 312), (330, 320), (300, 323), (282, 323)], 4) + [(222, 324)]
 S("frame bottom", LINE, fbot + fbot[::-1][1:])
 S("frame front", LINE, [(FX, 312), (FX, TS)])
 S("top strap", LINE, cr([(FX, TS), (280, TS - 1), (232, TS), (214, TS + 3)], 4))
