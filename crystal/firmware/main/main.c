@@ -24,6 +24,7 @@
 #include "driver/rmt_tx.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "font5x7.h"   // from 2026-Billboard_Badge/firmware/esp32s3-itc97
 #include "version.h"   // written by build.sh: git describe + build time
 
@@ -104,6 +105,20 @@ static TaskHandle_t s_main_task;
 void cr_notify_main(void) { if (s_main_task) xTaskNotifyGive(s_main_task); }
 uint32_t cr_wait_notify(uint32_t ms) { return ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms)); }
 
+// Chatty ESP-IDF components: WARN at boot so the shell prompt stays
+// readable (errors and warnings still print); shell `debug idf on` puts
+// them back to INFO for this session (src/dbg.cr).
+static const char *const s_chatty[] = {
+    "wifi", "wifi_init", "pp", "net80211", "phy_init", "esp_netif_handlers", "esp_netif_lwip",
+    "esp_https_ota", "esp_ota_ops", "esp_image", "HTTP_CLIENT", "esp-x509-crt-bundle", "esp-tls",
+    "coexist", "gpio", "rmt", "espnow", "httpd", "httpd_uri", "httpd_txrx", "httpd_parse", "esp_netif_objects",
+};
+void cr_idf_verbose(bool on)
+{
+    for (size_t i = 0; i < sizeof s_chatty / sizeof s_chatty[0]; i++)
+        esp_log_level_set(s_chatty[i], on ? ESP_LOG_INFO : ESP_LOG_WARN);
+}
+
 // Debug shell I/O (src/shell.cr): poll the USB-Serial/JTAG RX FIFO directly
 // (no driver install, so the console output path is unchanged).
 int32_t cr_console_read(uint8_t *buf, int32_t max)
@@ -129,6 +144,7 @@ const char *cr_version(void) { return CR_VERSION; }
 void app_main(void)
 {
     printf("crystal firmware %s\n", CR_VERSION);
+    cr_idf_verbose(false); // shell `debug idf on` for their INFO logs
     s_main_task = xTaskGetCurrentTaskHandle();
     cr_ota_boot_guard();
     // Give the Mac's RFC2217 bridge time to come back after a flash/reset,
