@@ -124,7 +124,9 @@ Notes:
   Their shortest pull: every group `{lvl,1,1,0,1,1,1,1}` (phases a/b skipped with SRab 0, c and d 1 frame each)
   = 20 frames. A zero TP, RP 0 or SRab = SRcd = 0 hangs the CoG. Measured here: 580 ms full screen
   (vs 1159 ms for our 45/1/1 x3 tables), and rows-only windows of ~40 rows in 41-62 ms (vs 77 ms).
-  Adopted as `EPD::LUT_WFAST` (window ink only; table 1 = new pixel black gets VDH for N of the 20 frames,
+  **WFAST (20-frame) windows produce +336-row copies on this panel; not used** (Sketch photo on
+  7dfbfae: a dark copy of the strokes ~336 rows lower, smudges, grey bands). Sketch ink stays on WIN_LUT
+  (NOSHAKE_BW) rows-only windows. Kept as `EPD::LUT_WFAST` for DIAG B only (window ink only; table 1 = new pixel black gets VDH for N of the 20 frames,
   everything else GND, so ink never lightens). DIAG B "ink ladder" compares N = 19/12/8/5 with the old ink.
 - The CoG swaps 0x10 and 0x11 after every pull. Their partial update keeps the previous frame in 0x11 and the
   new one in 0x10, table = (old << 1) | new: only changed pixels are driven (white->black VDH,

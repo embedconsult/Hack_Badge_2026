@@ -1288,6 +1288,7 @@ end
 
 SK_HINT_Y = Sketch::Y_MAX - 22
 SK_INK_FRAMES = 19 # WFAST black drive frames (of 20) for Sketch window ink
+SK_INK_WFAST  = false # WFAST windows copy ink ~336 rows lower: keep OFF (DIAG B only)
 
 # Help strip at the bottom of Sketch's white area; `ready` adds the
 # "READY" line (entry frame only, removed on the first stroke).
@@ -2009,10 +2010,10 @@ fun crystal_app_main : Void
           t = millis
           Shared.led_mode = LED_CYAN
           kind = SkState.colour? ? red_ink_kind : WIN_LUT
-          # Window ink uses the 20-frame WFAST table (yigitabi5444's pull):
-          # ~2x less time per scanned row. Its first stroke after a full
-          # (WIN_LUT) frame reopens the session with it (one slower stroke).
-          kind = EPD::LUT_WFAST if !SkState.colour? && Shared.sk_win? && !hint_gone && !SkState.after_colour?
+          # SK_INK_WFAST: window ink with the 20-frame WFAST table. OFF: on
+          # this panel WFAST windows leave copies ~336 rows lower (photo on
+          # 7dfbfae); WIN_LUT windows are clean.
+          kind = EPD::LUT_WFAST if SK_INK_WFAST && !SkState.colour? && Shared.sk_win? && !hint_gone && !SkState.after_colour?
           EPD.fast_pulls = 1
           if SkState.after_colour?
             # First stroke after the colour show-off: one full B/W refresh
