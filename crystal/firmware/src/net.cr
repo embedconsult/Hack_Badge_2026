@@ -13,6 +13,7 @@
 lib LibIDF
   fun cr_net_on : Bool
   fun cr_net_set(on : Bool) : Void
+  fun cr_net_set_ap(on : Bool) : Void
   fun cr_net_take_line(buf : UInt8*, max : Int32) : Int32
   fun cr_net_input(l : Int32, r : Int32, b : UInt32) : Void
   fun cr_net_screen(s : Int32) : Void
