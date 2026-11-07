@@ -934,6 +934,8 @@ module EPD
     @@session_open = false
     @@lut_latched = false
     @@quick = false
+    @@diff_open = false
+    @@diff_rows = HEIGHT
   end
 
   # After an aborted refresh the COG is still running its waveform: no
@@ -1034,7 +1036,211 @@ module EPD
     end
   end
 
+  # ---- whole-panel differential update (UPD_DIFF) ---------------------------
+  # Port of yigitabi5444/supercon26-badge-os ea76830 main/main.c
+  # "panel_lab: calm partial updates" (lines 321-500). The CoG swaps 0x10
+  # and 0x11 after every pull, so 0x11 holds what the film shows; the new
+  # frame goes into 0x10 and the table index is (old << 1) | new. Table 1
+  # (white -> black) VDH and table 2 (black -> white) VDL for the first
+  # DIFF_DRIVE frames, then GND; tables 0, 3 and VCOM GND: only changed
+  # pixels move, so there are no window edges (DUW/DRFW whole panel).
+  # Every group runs phases c and d only: 20 frames per pull (~0.5 s).
+  LUT_DIFF   = 8
+  DIFF_DRIVE = 10 # main.c:331 PART_DRIVE (10 for the film's health; 6 reads)
+  DIFF_SESSION = 60 # main.c:454 a fresh session every 60 pulls
+  @@diff_open = false
+  @@diff_n = 0
+  @@diff_shown = Pointer(UInt8).null # what the film shows (black | red)
+  @@diff_rows = HEIGHT # UPD_DIFFWIN: DRFW rows 0 .. this-1 (HEIGHT = whole)
+
+  def self.diff_open? : Bool
+    @@diff_open
+  end
+
+  def self.diff_n : Int32
+    @@diff_n
+  end
+
+  def self.diff_shown : UInt8*
+    @@diff_shown = LibIDF.heap_caps_malloc(PLANE.to_u32!, 0x404_u32).as(UInt8*) if @@diff_shown.null?
+    @@diff_shown
+  end
+
+  # The film now shows the planes (after a full refresh): black | red.
+  def self.diff_mark_shown : Nil
+    d = diff_shown
+    i = 0
+    while i < PLANE
+      d[i] = @@black[i] | @@red[i]
+      i = i &+ 1
+    end
+  end
+
+  # main.c:338-350 part_table.
+  def self.build_diff : Nil
+    k = 0
+    while k < 50
+      q = @@lut + (k &* 8).to_i64!
+      q[0] = 0_u8; q[1] = 1_u8; q[2] = 1_u8; q[3] = 0_u8
+      q[4] = 1_u8; q[5] = 1_u8; q[6] = 1_u8; q[7] = 1_u8
+      k = k &+ 1
+    end
+    f = 0
+    while f < DIFF_DRIVE
+      g = f.unsafe_div(2)
+      shift = (f & 1) == 1 ? 0 : 2 # phase c: bits 3-2, phase d: bits 1-0
+      q1 = @@lut + ((10 &+ g) &* 8).to_i64!
+      q1[0] = q1[0] | 1.unsafe_shl(shift).to_u8! # VDH
+      q2 = @@lut + ((20 &+ g) &* 8).to_i64!
+      q2[0] = q2[0] | 2.unsafe_shl(shift).to_u8! # VDL
+      f = f &+ 1
+    end
+  end
+
+  # main.c:207-239 dcdc_on (ms(t) there is t ticks + 1).
+  def self.diff_dcdc_on : Nil
+    cmd(BOTH, 0x51_u8, 2, 0x50_u8, 0x01_u8)
+    v = 1
+    while v <= 4
+      cmd1(0x09_u8, 0x1F_u8); cmd(BOTH, 0x51_u8, 2, 0x50_u8, v.to_u8!); cmd1(0x09_u8, 0x9F_u8); delay_ms(3)
+      v = v &+ 1
+    end
+    v = 1
+    while v <= 10
+      cmd1(0x09_u8, 0x1F_u8); cmd(BOTH, 0x51_u8, 2, 0x0A_u8, v.to_u8!); cmd1(0x09_u8, 0x9F_u8); delay_ms(3)
+      v = v &+ 1
+    end
+    v = 3
+    while v <= 10
+      cmd1(0x09_u8, 0x7F_u8); cmd(BOTH, 0x51_u8, 2, 0x0A_u8, v.to_u8!); cmd1(0x09_u8, 0xFF_u8); delay_ms(3)
+      v = v &+ 1
+    end
+    v = 9
+    while v >= 2
+      cmd1(0x09_u8, 0x7F_u8); cmd(BOTH, 0x51_u8, 2, v.to_u8!, 0x0A_u8); cmd1(0x09_u8, 0xFF_u8); delay_ms(3)
+      v = v &- 1
+    end
+    cmd1(0x09_u8, 0xFF_u8)
+    delay_ms(101)
+    r = wait_busy(true, 10_000) # main.c:238 never trigger into a ramping booster
+    log("EPD: diff dc-dc on, BUSY wait ms (-1 = timeout)", r)
+  end
+
+  # main.c:352-403 part_open: reset, register sequence, table, DC-DC, whole-
+  # panel DUW/DRFW, both RAMs = what the film shows.
+  def self.diff_open : Bool
+    t0 = millis
+    cog_stop if @@session_open
+    cog_initial(@@quick_open) # main.c:357-366 reset waits + 0x70 71 36
+    cmd1(0x05_u8, 0x7D_u8); delay_ms(51)
+    cmd1(0x05_u8, 0x00_u8); delay_ms(2)
+    cmd1(0xD8_u8, 0x80_u8)
+    cmd1(0xD6_u8, 0x00_u8)
+    cmd1(0xA7_u8, 0x10_u8); delay_ms(3)
+    cmd1(0xA7_u8, 0x00_u8); delay_ms(11)
+    cmd(BOTH, 0x03_u8, 2, 0x00_u8, 0x11_u8)
+    t = LEFT
+    while t <= RIGHT
+      cmd(t, 0x44_u8, 1, 0x00_u8)
+      cmd(t, 0x45_u8, 1, 0x80_u8)
+      cmd(t, 0xA7_u8, 1, 0x10_u8); delay_ms(3)
+      cmd(t, 0xA7_u8, 1, 0x00_u8); delay_ms(11)
+      cmd(t, 0x44_u8, 1, 0x06_u8)
+      cmd(t, 0x45_u8, 1, 0x84_u8)
+      cmd(t, 0xA7_u8, 1, 0x10_u8); delay_ms(3)
+      cmd(t, 0xA7_u8, 1, 0x00_u8); delay_ms(11)
+      t = t &+ 1
+    end
+    cmd1(0x60_u8, 0x25_u8)
+    cmd(LEFT, 0x61_u8, 1, 0x01_u8)
+    cmd1(0x02_u8, 0x00_u8)
+    build_diff
+    send(BOTH, 0xB0_u8, @@lut, LUTB_BYTES)
+    diff_dcdc_on
+    cmd(BOTH, 0x13_u8, 6, 0x00_u8, 0x3B_u8, 0x00_u8, 0x00_u8, 0x9F_u8, 0x02_u8) # DUW whole panel
+    cmd(BOTH, 0x90_u8, 4, 0x00_u8, 0x3B_u8, 0x00_u8, 0xA9_u8)                 # DRFW whole panel
+    sh = diff_shown
+    t = LEFT
+    while t <= RIGHT
+      ram_rw_full(t)
+      send_plane(t, 0x10_u8, sh, Pointer(UInt8).null)
+      ram_rw_full(t)
+      send_plane(t, 0x11_u8, sh, Pointer(UInt8).null)
+      t = t &+ 1
+    end
+    @@red_zero = false
+    if @@spi_fail
+      cog_stop
+      return false
+    end
+    @@session_open = true
+    @@lut_latched = true
+    @@latched_fast = true
+    @@latched_kind = LUT_DIFF
+    @@diff_open = true
+    @@diff_n = 0
+    @@restart_ms = millis &- t0
+    log("EPD: diff session open ms", @@restart_ms)
+    true
+  end
+
+  # main.c:448-474 epd_partial, with the whole frame (black | red as ink)
+  # into 0x10 (the box-only write there is an upload optimisation). rows <
+  # HEIGHT: UPD_DIFFWIN, DRFW limited to rows 0..rows-1 (4-aligned).
+  # Returns panel ms or -1.
+  def self.refresh_diff(rows : Int32 = HEIGHT) : Int32
+    finish_aborted
+    @@spi_fail = false
+    if @@diff_open && @@diff_n >= DIFF_SESSION
+      cog_stop
+    end
+    unless @@diff_open
+      return -1 unless diff_open
+    end
+    t_up = millis
+    t = LEFT
+    while t <= RIGHT
+      ram_rw_full(t)
+      send_plane(t, 0x10_u8, @@black, @@red)
+      t = t &+ 1
+    end
+    rows = HEIGHT if rows > HEIGHT
+    rows = WIN_Y_UNIT if rows < WIN_Y_UNIT
+    if rows != @@diff_rows
+      u = rows.unsafe_div(WIN_Y_UNIT)
+      u = u &+ 1 if u &* WIN_Y_UNIT < rows
+      cmd(BOTH, 0x90_u8, 4, 0x00_u8, 0x3B_u8, 0x00_u8, rows >= HEIGHT ? 0xA9_u8 : (u &- 1).to_u8!)
+      @@diff_rows = rows
+    end
+    @@upload_ms = millis &- t_up
+    if @@spi_fail
+      cog_stop
+      return -1
+    end
+    rc = trigger(false, FAST_TIMEOUT_MS)
+    @@panel_ms = rc
+    if rc < 0 || @@spi_fail
+      log("EPD: diff pull failed, COG powered down", rc)
+      cog_stop
+      return -1
+    end
+    d = diff_shown
+    i = 0
+    while i < PLANE
+      d[i] = @@black[i] | @@red[i]
+      i = i &+ 1
+    end
+    @@diff_n = @@diff_n &+ 1
+    @@session_images = @@session_images &+ 1
+    log3("EPD: diff rows scanned / upload ms / panel ms", @@diff_rows, @@upload_ms, rc)
+    rc
+  end
+
   def self.build_lutb(kind : Int32) : Nil
+    if kind == LUT_DIFF
+      build_diff
+      return
+    end
     if kind == LUT_WFAST
       build_wfast
       return
@@ -1758,6 +1964,7 @@ module EPD
     @@latched_probe = @@probe
     @@lut_latched = rc >= 0 && fast
     @@prev_has_red = draw_red if rc >= 0
+    diff_mark_shown if rc >= 0
     # Like epd97.cpp (EPD_SESSION_IMAGES), close the session after a bounded
     # number of images so the COG is re-initialised regularly.
     @@session_images = @@session_images &+ 1

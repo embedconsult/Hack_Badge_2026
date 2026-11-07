@@ -191,7 +191,11 @@ module Shared
   @@ovr_l = -1         # knob override mV (-1 = real ADC)
   @@ovr_r = -1
   @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
-  @@sk_win = true         # Sketch ink through rows-only windows (shell: flag SK_WIN)
+  # Per-app update mode (UPD_*), shell `upd`, saved in NVS: Sketch ink,
+  # Life frames, Snake frames.
+  @@upd_sk = UPD_WIN
+  @@upd_li = UPD_DIFF
+  @@upd_sn = UPD_DIFF
   @@req = 0_u32        # REQ_* bits for the main loop (atomic)
   @@sx0 = 0
   @@sy0 = 0
@@ -227,11 +231,26 @@ module Shared
   end
 
   def self.sk_win? : Bool
-    @@sk_win
+    @@upd_sk == UPD_WIN
   end
 
+  # Old `flag SK_WIN`: 1 = windows, 0 = full.
   def self.sk_win=(v : Bool) : Nil
-    @@sk_win = v
+    @@upd_sk = v ? UPD_WIN : UPD_FULL
+  end
+
+  def self.upd(app : Int32) : Int32
+    app == SCR_SKETCH ? @@upd_sk : (app == SCR_LIFE ? @@upd_li : (app == SCR_SNAKE ? @@upd_sn : UPD_FULL))
+  end
+
+  def self.set_upd(app : Int32, m : Int32) : Nil
+    if app == SCR_SKETCH
+      @@upd_sk = m
+    elsif app == SCR_LIFE
+      @@upd_li = m
+    elsif app == SCR_SNAKE
+      @@upd_sn = m
+    end
   end
 
   def self.inject_buttons(bits : UInt32) : Nil
@@ -1275,6 +1294,13 @@ SCR_LIFE     = 3
 SCR_SNAKE    = 4
 SCR_DIAG     = 5
 SCR_COUNT    = 6
+
+# Partial-update modes (per app, `upd` in the shell).
+UPD_FULL    = 0 # full-screen fast refresh (WIN_LUT)
+UPD_WIN     = 1 # rows-only window (EPD.refresh_window2 mode 8)
+UPD_DIFF    = 2 # whole-panel differential (EPD.refresh_diff, yigitabi5444)
+UPD_DIFFWIN = 3 # differential, DRFW rows 0 .. last changed row
+UPD_COUNT   = 4
 HOLD_MS      = 1000 # hold User A this long for the colour refresh
 AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this long idle
 
@@ -1318,19 +1344,37 @@ module Store
       LibIDF.nvs_get_u32(@@h, "boots".to_unsafe, pointerof(c))
       c = c &+ 1
       LibIDF.nvs_set_u32(@@h, "boots".to_unsafe, c)
-      v = 1_u8 # default ON when never stored
-      LibIDF.nvs_get_u8(@@h, "sk_win".to_unsafe, pointerof(v))
-      @@sk_win = v != 0_u8
       LibIDF.nvs_commit(@@h)
+      load_upd(SCR_SKETCH, "upd_sk")
+      load_upd(SCR_LIFE, "upd_li")
+      load_upd(SCR_SNAKE, "upd_sn")
       @@boots = c.to_i32!
     end
-    Shared.sk_win = @@sk_win
-    LibIDF.cr_log3("boot: count / reset reason / SK_WIN".to_unsafe, @@boots, @@reset_reason, @@sk_win ? 1 : 0)
+    @@saved_sk = Shared.upd(SCR_SKETCH)
+    @@saved_li = Shared.upd(SCR_LIFE)
+    @@saved_sn = Shared.upd(SCR_SNAKE)
+    LibIDF.cr_log3("boot: count / reset reason / -".to_unsafe, @@boots, @@reset_reason, 0)
+    LibIDF.cr_log3("boot: upd sketch / life / snake".to_unsafe, @@saved_sk, @@saved_li, @@saved_sn)
   end
 
   @@reset_reason = 0
   @@boots = 0
-  @@sk_win = true # value last stored in NVS (default on)
+  @@saved_sk = UPD_WIN # values last stored in NVS
+  @@saved_li = UPD_DIFF
+  @@saved_sn = UPD_DIFF
+
+  def self.load_upd(app : Int32, key : String) : Nil
+    v = 0xFF_u8
+    return if LibIDF.nvs_get_u8(@@h, key.to_unsafe, pointerof(v)) != 0
+    Shared.set_upd(app, v.to_i32!) if v.to_i32! < UPD_COUNT
+  end
+
+  def self.save_upd(key : String, v : Int32) : Nil
+    return unless @@ok
+    LibIDF.nvs_set_u8(@@h, key.to_unsafe, v.to_u8!)
+    LibIDF.nvs_commit(@@h)
+    log("nvs: update mode saved", v)
+  end
 
   def self.reset_reason : Int32
     @@reset_reason
@@ -1340,15 +1384,24 @@ module Store
     @@boots
   end
 
-  # Main loop: persist SK_WIN when the shell changed it (NVS writes stay off
+  # Main loop: persist update modes the shell changed (NVS writes stay off
   # the small shell stack).
-  def self.sync_sk_win : Nil
-    return if Shared.sk_win? == @@sk_win
-    @@sk_win = Shared.sk_win?
-    return unless @@ok
-    LibIDF.nvs_set_u8(@@h, "sk_win".to_unsafe, @@sk_win ? 1_u8 : 0_u8)
-    LibIDF.nvs_commit(@@h)
-    log("nvs: SK_WIN saved", @@sk_win ? 1 : 0)
+  def self.sync_upd : Nil
+    v = Shared.upd(SCR_SKETCH)
+    if v != @@saved_sk
+      @@saved_sk = v
+      save_upd("upd_sk", v)
+    end
+    v = Shared.upd(SCR_LIFE)
+    if v != @@saved_li
+      @@saved_li = v
+      save_upd("upd_li", v)
+    end
+    v = Shared.upd(SCR_SNAKE)
+    if v != @@saved_sn
+      @@saved_sn = v
+      save_upd("upd_sn", v)
+    end
   end
 
   def self.screen : Int32
@@ -2023,6 +2076,10 @@ fun crystal_app_main : Void
             EPD.raw = true
             EPD.refresh(true, WIN_LUT)
             EPD.raw = false
+          elsif Shared.upd(SCR_SKETCH) == UPD_DIFF
+            EPD.refresh_diff
+          elsif Shared.upd(SCR_SKETCH) == UPD_DIFFWIN
+            EPD.refresh_diff(b[1] &+ 1 &+ EPD::WIN_PAD_ROWS)
           elsif Shared.sk_win? && !hint_gone
             # Rows-only window (mode 8): full width x the changed rows.
             EPD.refresh_window2(b[0], b[1], 0, EPD::HALF_BYTES &- 1,
@@ -2069,7 +2126,12 @@ fun crystal_app_main : Void
           if SkState.diff
             b = SkState.box
             EPD.fast_pulls = GAME_PULLS
-            if GAME_WINDOWED
+            gm = Shared.upd(scr)
+            if gm == UPD_DIFF
+              EPD.refresh_diff
+            elsif gm == UPD_DIFFWIN
+              EPD.refresh_diff(b[1] &+ 1 &+ EPD::WIN_PAD_ROWS)
+            elsif GAME_WINDOWED || gm == UPD_WIN
               # One box per COG half keeps each window small.
               EPD.refresh_window2(b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], WIN_LUT)
             else
@@ -2089,7 +2151,7 @@ fun crystal_app_main : Void
     else
       Shared.led_mode = 0
     end
-    Store.sync_sk_win
+    Store.sync_upd
     Shared.live = scr == SCR_SKETCH && !Shared.rendering? && Shared.target == scr
     LibIDF.cr_wait_notify(20_u32) # woken early by the knob task on input
   end

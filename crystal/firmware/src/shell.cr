@@ -93,6 +93,7 @@ module Shell
     say("  knob <l|r> <mV> | knob off\n")
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
+    say("  upd [<sketch|life|snake> <full|win|diff|diffwin>]\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
   end
 
@@ -123,7 +124,9 @@ module Shell
       LibIDF.cr_heap_free(0x800_u32), LibIDF.cr_heap_free(0x400_u32), 0)
     LibIDF.cr_log3("status: boot count / reset reason / uptime ms".to_unsafe,
       Store.boots, Store.reset_reason, millis)
-    LibIDF.cr_log3("status: SK_WIN / - / -".to_unsafe, Shared.sk_win? ? 1 : 0, 0, 0)
+    LibIDF.cr_log3("status: upd sketch / life / snake (0 full 1 win 2 diff 3 diffwin)".to_unsafe,
+      Shared.upd(SCR_SKETCH), Shared.upd(SCR_LIFE), Shared.upd(SCR_SNAKE))
+    LibIDF.cr_log3("status: diff session open / pulls / -".to_unsafe, EPD.diff_open? ? 1 : 0, EPD.diff_n, 0)
   end
 
   def self.dump(red : Bool) : Nil
@@ -148,6 +151,21 @@ module Shell
       LibIDF.cr_log3("dump: row / non-zero bytes / checksum".to_unsafe, r, nz, sum)
       r = r &+ 1
     end
+  end
+
+  def self.upd : Nil
+    if @@nt >= 3
+      app = tok_is(1, "sketch") ? SCR_SKETCH : (tok_is(1, "life") ? SCR_LIFE : (tok_is(1, "snake") ? SCR_SNAKE : -1))
+      m = tok_is(2, "full") ? UPD_FULL : (tok_is(2, "win") ? UPD_WIN : (tok_is(2, "diffwin") ? UPD_DIFFWIN : (tok_is(2, "diff") ? UPD_DIFF : -1)))
+      if app < 0 || m < 0
+        say("usage: upd [<sketch|life|snake> <full|win|diff|diffwin>]\n")
+        return
+      end
+      Shared.set_upd(app, m)
+      say("ok\n")
+    end
+    LibIDF.cr_log3("upd: sketch / life / snake (0 full 1 win 2 diff 3 diffwin)".to_unsafe,
+      Shared.upd(SCR_SKETCH), Shared.upd(SCR_LIFE), Shared.upd(SCR_SNAKE))
   end
 
   def self.flag : Nil
@@ -256,6 +274,8 @@ module Shell
       end
     elsif tok_is(0, "flag")
       flag
+    elsif tok_is(0, "upd")
+      upd
     else
       say("unknown command (help)\n")
     end
