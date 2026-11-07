@@ -124,6 +124,21 @@ RobotsApp.enter
 RobotsApp.tick(1, press.call(Games::BTN_B))
 RobotsApp.tick(1, press.call(Games::BTN_A))
 3.times { RobotsApp.tick(1, inp) }
+# a saved robot (as `robot put 2` would), a broken one, and `robot run 2 5 sniper @77`
+Render.name = "robotslots"
+spin ="main(\"Spinner\") do\n  d = 0\n  while true\n    r = scan(d, 10)\n    if r > 0\n      cannon(d, r)\n    end\n    puts r\n    d += 15\n  end\nend\n"
+msg = Pointer(UInt8).malloc(128)
+puts "check spinner: #{RobotStore.check(spin.to_unsafe, spin.bytesize, msg, 128)} #{String.new(msg)}"
+LibIDF.cr_robot_write(2, spin.to_unsafe, spin.bytesize, msg)
+bad = "main(\"Oops\") do\n  x = = 1\nend\n"
+puts "check oops: #{RobotStore.check(bad.to_unsafe, bad.bytesize, msg, 128)} #{String.new(msg)}"
+LibIDF.cr_robot_write(5, bad.to_unsafe, bad.bytesize, "Oops".to_unsafe) # saved anyway, to show FAILED
+RobotsApp.request(0, 102)
+RobotsApp.request(1, 105)
+RobotsApp.request(2, 0)
+RobotsApp.request_run(3, 77)
+RobotsApp.tick(1, inp)
+4.times { RobotsApp.tick(1, inp) }
 
 # SNAKES: lobby, a 4-house-snake game after 12 and 40 turns, the result
 Render.name = "snakes"

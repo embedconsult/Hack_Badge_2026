@@ -136,7 +136,7 @@ void app_main(void)
     vTaskDelay(pdMS_TO_TICKS(4000));
     printf("app_main: starting tasks\n");
     xTaskCreatePinnedToCore(crystal_knob_task, "knob", 12288, NULL, 2, NULL, 1);
-    xTaskCreatePinnedToCore(crystal_shell_task, "shell", 6144, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(crystal_shell_task, "shell", 12288, NULL, 1, NULL, 1); // `robot put` parses robots here
     cr_net_boot();
     crystal_app_main();
 }

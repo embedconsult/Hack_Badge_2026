@@ -15,7 +15,7 @@ end
 
 module Shell
   LINE_MAX = 300 # room for `ota url <long url>`
-  TOK_MAX  =  6
+  TOK_MAX  =  8
 
   @@line = Pointer(UInt8).null
   @@len = 0
@@ -25,6 +25,18 @@ module Shell
 
   def self.say(s : String) : Nil
     LibIDF.cr_print(s.to_unsafe)
+  end
+
+  def self.tokens : Int32
+    @@nt
+  end
+
+  def self.tok_ptr(i : Int32) : UInt8*
+    @@line + @@ts[i].to_i64!
+  end
+
+  def self.tok_len(i : Int32) : Int32
+    @@tl[i]
   end
 
   def self.tok_is(i : Int32, w : String) : Bool
@@ -96,7 +108,7 @@ module Shell
     banner
     say("version status reboot mode press hold knob text\n")
     say("net wifi ota sketch stroke dump upd flag clean\n")
-    say("clock usbflash inkf weather snakes\n")
+    say("clock usbflash inkf weather snakes robot\n")
     say("help all: details\n")
   end
 
@@ -106,6 +118,7 @@ module Shell
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
     say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
     say("  snakes list | snakes add <name> <url> | snakes rm <name|#> | snakes play   (bot arena)\n")
+    say("  robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
     say("  clock <Y> <M> <D> <h> <m>       (set local time, Schedule NOW/NEXT)\n")
@@ -277,6 +290,10 @@ module Shell
   end
 
   def self.execute : Nil
+    if RobotShell.capturing? # `robot put`: lines are robot source
+      RobotShell.line(@@line, @@len)
+      return
+    end
     tokenize
     return if @@nt == 0
     if tok_is(0, "help") || tok_is(0, "?")
@@ -409,6 +426,8 @@ module Shell
       ota
     elsif tok_is(0, "weather")
       LibIDF.cr_weather_cmd(@@line, @@len) # main/apps_net.c: parses, saves, prints
+    elsif tok_is(0, "robot")
+      RobotShell.command # src/apps/robot_store.cr
     elsif tok_is(0, "snakes")
       # main/snakes_net.c: add / list / rm (saved in NVS), prints the result
       if LibIDF.cr_snk_cmd(@@line, @@len) == 2

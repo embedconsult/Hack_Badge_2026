@@ -231,6 +231,15 @@ describe "RB battle" do
     end
   end
 
+  it "accepts every upstream robot and rejects only absurdly deep nesting" do
+    corpus.each { |(name, src)| {name, RC.load(0, src.to_unsafe, src.bytesize)}.should eq({name, true}) }
+    deep = "main(\"D\") do\n  x = " + (["1"] * 60).join(" - ") + "\nend\n"
+    RC.load(0, deep.to_unsafe, deep.bytesize).should be_false
+    String.new(RL.error, RL.error_len).should start_with "Program is nested too deeply"
+    ok = "main(\"D\") do\n  x = " + (["1"] * 30).join(" - ") + "\nend\n"
+    RC.load(0, ok.to_unsafe, ok.bytesize).should be_true
+  end
+
   it "sits out robots that do not parse or check, with upstream's message" do
     EXTRA_ROBOTS["broken"] = "main(\"B\") do\n  x = 1 +\nend\n"
     EXTRA_ROBOTS["unchecked"] = "def f(a)\nend\nmain(\"U\") do\n  f\n  y += 1\n  break\nend\n"

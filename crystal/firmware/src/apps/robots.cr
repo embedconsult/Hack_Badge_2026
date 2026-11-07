@@ -10,11 +10,13 @@
 # a clean refresh every CLEAN_EVERY frames). Trails show where each robot
 # has been since the last few frames.
 #
-# Robots: the ten that ship with crystal-robots (src/robots/roster.cr).
+# Robots: the ones saved in the badge's slots (src/apps/robot_store.cr:
+# shell `robot put`, the Settings page) and the ten that ship with
+# crystal-robots (src/robots/roster.cr). Line-ups go through all of them;
+# shell `robot run a b [c] [d] [@seed]` picks one.
 # A: next battle (next line-up, next seed). B: skip to the end of this one.
 
-require "../robots/battle"
-require "../robots/roster"
+require "./robot_store"
 
 module RobotsApp
   include App
@@ -37,7 +39,14 @@ module RobotsApp
   @@seed = 1
   @@frames = 0
   @@n = 0
-  @@pick = Pointer(Int32).null  # roster index per slot
+  @@pick = Pointer(Int32).null  # line-up code per robot (RobotStore)
+  @@pool = Pointer(Int32).null  # line-up codes of every robot available
+  @@pool_n = 0
+  # a line-up asked for by the shell (another task): codes, then the flag
+  @@req = Pointer(Int32).null
+  @@req_n = 0
+  @@req_seed = 0
+  @@req_ready = false
   @@trail = Pointer(Int32).null # per robot TRAIL (x, y) pairs, px
   @@trail_n = 0
   @@ms = 0 # simulation time of this battle, ms
@@ -58,37 +67,84 @@ module RobotsApp
     return @@ok if @@tried
     @@tried = true
     @@pick = game_alloc(4 &* 4).as(Int32*)
+    @@pool = game_alloc((Roster::COUNT &+ 16) &* 4).as(Int32*)
+    @@req = game_alloc(4 &* 4).as(Int32*) if @@req.null?
     @@trail = game_alloc(4 &* TRAIL &* 2 &* 4).as(Int32*)
     @@buf = game_alloc(64)
-    @@ok = !@@pick.null? && !@@trail.null? && !@@buf.null? && RB.setup
+    @@ok = !@@pick.null? && !@@pool.null? && !@@req.null? && !@@trail.null? && !@@buf.null? && RB.setup
   end
 
-  # Line-up k: matches of four, then pairs, through the roster.
+  # The shell's `robot run` (shell task): robot r of the next battle.
+  def self.request(r : Int32, code : Int32) : Nil
+    @@req = game_alloc(4 &* 4).as(Int32*) if @@req.null?
+    @@req[r] = code
+  end
+
+  def self.request_run(n : Int32, seed : Int32) : Nil
+    @@req_n = n
+    @@req_seed = seed
+    @@req_ready = true
+  end
+
+  # Every robot available: saved slots first, then the built-ins.
+  def self.fill_pool : Nil
+    @@pool_n = 0
+    k = 0
+    while k < LibIDF.cr_robot_slots && k < 16
+      if LibIDF.cr_robot_len(k) >= 0
+        @@pool[@@pool_n] = RobotStore::CODE_SLOT &+ k
+        @@pool_n = @@pool_n &+ 1
+      end
+      k = k &+ 1
+    end
+    i = 0
+    while i < Roster::COUNT
+      @@pool[@@pool_n] = i
+      @@pool_n = @@pool_n &+ 1
+      i = i &+ 1
+    end
+  end
+
+  # Line-up k: matches of four, then pairs, through the pool.
   def self.lineup(k : Int32) : Nil
-    c = Roster::COUNT
+    fill_pool
+    c = @@pool_n
     if k.unsafe_mod(3) == 2
       @@n = 2
-      @@pick[0] = k.unsafe_mod(c)
-      @@pick[1] = (k &* 7 &+ 3).unsafe_mod(c)
-      @@pick[1] = (@@pick[1] &+ 1).unsafe_mod(c) if @@pick[1] == @@pick[0]
+      a = k.unsafe_mod(c)
+      b = (k &* 7 &+ 3).unsafe_mod(c)
+      b = (b &+ 1).unsafe_mod(c) if b == a
+      @@pick[0] = @@pool[a]
+      @@pick[1] = @@pool[b]
     else
       @@n = 4
       i = 0
       while i < 4
-        @@pick[i] = (k &* 3 &+ i).unsafe_mod(c)
+        @@pick[i] = @@pool[(k &* 3 &+ i).unsafe_mod(c)]
         i = i &+ 1
       end
     end
   end
 
   def self.new_battle : Nil
-    lineup(@@match)
-    @@match = @@match &+ 1
-    @@seed = (millis.to_u32! & 0xFFFF_u32).to_i32! | 1
+    if @@req_ready
+      @@req_ready = false
+      @@n = @@req_n
+      r = 0
+      while r < @@n
+        @@pick[r] = @@req[r]
+        r = r &+ 1
+      end
+      @@seed = @@req_seed
+    else
+      lineup(@@match)
+      @@match = @@match &+ 1
+      @@seed = 0
+    end
+    @@seed = (millis.to_u32! & 0xFFFF_u32).to_i32! | 1 if @@seed <= 0
     r = 0
     while r < @@n
-      s = Roster.source(@@pick[r])
-      RB.load(r, s.to_unsafe, s.bytesize)
+      RobotStore.load(r, @@pick[r])
       r = r &+ 1
     end
     RB.start(@@n, @@seed.to_u64!, RB::CYCLE_LIMIT)
@@ -147,13 +203,32 @@ module RobotsApp
     end
   end
 
+  # A box clipped to the arena (inside its border).
+  def self.abox(x : Int32, y : Int32, w : Int32, h : Int32, black : Bool) : Nil
+    x1 = x &+ w
+    y1 = y &+ h
+    x = ARENA_X if x < ARENA_X
+    y = ARENA_Y if y < ARENA_Y
+    x1 = ARENA_X &+ ARENA if x1 > ARENA_X &+ ARENA
+    y1 = ARENA_Y &+ ARENA if y1 > ARENA_Y &+ ARENA
+    Gfx.box(x, y, x1 &- x, y1 &- y, black) if x1 > x && y1 > y
+  end
+
+  # A square outline s px wide, t px thick, clipped to the arena.
+  def self.aframe(x : Int32, y : Int32, s : Int32, t : Int32) : Nil
+    abox(x, y, s, t, true)
+    abox(x, y &+ s &- t, s, t, true)
+    abox(x, y, t, s, true)
+    abox(x &+ s &- t, y, t, s, true)
+  end
+
   # A thick line of dots from (x, y) in direction deg, len px.
   def self.ray(x : Int32, y : Int32, deg : Int32, len : Int32, t : Int32) : Nil
     k = 0
     while k <= len
       dx = (RB.lcos(deg).to_i64! &* k).unsafe_div(100000_i64).to_i32!
       dy = (RB.lsin(deg).to_i64! &* k).unsafe_div(100000_i64).to_i32!
-      Gfx.box(x &+ dx &- t.unsafe_div(2), y &- dy &- t.unsafe_div(2), t, t, true)
+      abox(x &+ dx &- t.unsafe_div(2), y &- dy &- t.unsafe_div(2), t, t, true)
       k = k &+ 2
     end
   end
@@ -181,7 +256,7 @@ module RobotsApp
           x = px(RB.missile_x(r, k))
           y = py(RB.missile_y(r, k))
           if st == RB::EXPLODING
-            Gfx.frame(x &- 24, y &- 24, 49, 49, 2) # 40 m damage radius
+            aframe(x &- 24, y &- 24, 49, 2) # 40 m damage radius
             Gfx.box(x &- 3, y &- 3, 7, 7, true)
           else
             Gfx.disc(x, y, 4, true)
@@ -227,7 +302,10 @@ module RobotsApp
       marker(r, PANEL_X &+ 12, y &+ 12, 10)
       nm = RC.name(r)
       nl = RC.name_len(r)
-      if nl == 0
+      if nl == 0 && @@pick[r] >= RobotStore::CODE_SLOT
+        x = Gfx.text(PANEL_X &+ 34, y, "SLOT ", 3)
+        number(x, y, @@pick[r] &- RobotStore::CODE_SLOT, 3)
+      elsif nl == 0
         Gfx.text(PANEL_X &+ 34, y, Roster.file(@@pick[r]), 3)
       else
         draw_bytes(PANEL_X &+ 34, y, nm, nl > 12 ? 12 : nl, EPD::BLACK, 3)
@@ -279,7 +357,7 @@ module RobotsApp
       Apps.show_clean
       return
     end
-    new_battle unless RB.robots > 0
+    new_battle if RB.robots == 0 || @@req_ready
     @@frames = 0
     draw
     Apps.show_clean
@@ -302,7 +380,7 @@ module RobotsApp
   def self.tick(now : Int32, inp : LibGames::Input) : Nil
     return unless @@ok
     changed = false
-    if Games.pressed?(inp, Games::BTN_A)
+    if Games.pressed?(inp, Games::BTN_A) || @@req_ready
       new_battle
       @@frames = CLEAN_EVERY # new scene: clean refresh
       changed = true
