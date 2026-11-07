@@ -1190,25 +1190,32 @@ def wt_y(i : Int32) : Int32
   i == 0 ? 120 : (i == 1 ? 300 : (i == 2 ? 460 : 560))
 end
 
+# v9 run order: rows 460, 560, 300 without 0x91 first, row 120 WITH 0x91 last
+# (so a sticky 0x91 can't contaminate the others). Returns the row index.
+def wt_order(k : Int32) : Int32
+  k == 0 ? 2 : (k == 1 ? 3 : (k == 2 ? 1 : 0))
+end
+
 def window_test : Nil
-  log("wtest v8: white base", 0)
+  log("wtest v9: white base", 0)
   EPD.fill(EPD::WHITE)
   fast_bw(3, EPD::LUT_HALF60)
   times = Shared.times_buf
-  i = 0
-  while i < WT_STEPS
+  k = 0
+  while k < WT_STEPS
+    i = wt_order(k)
     y = wt_y(i)
     window_marker(200, y)
     window_marker(650, y)
-    EPD.send91 = i >= 2
+    EPD.send91 = i == 0
     EPD.fast_pulls = 1
-    log2("wtest v8: step / y", i &+ 1, y)
+    log2("wtest v9: run / y", k &+ 1, y)
     EPD.refresh_window2(y, y &+ 79, 25, 39, y, y &+ 79, 81, 96, EPD::LUT_HALF60, 8)
     EPD.send91 = false
     times[i] = EPD.panel_ms
-    log2("wtest v8: step / panel ms", i &+ 1, EPD.panel_ms)
+    log2("wtest v9: run / panel ms", k &+ 1, EPD.panel_ms)
     delay_ms(1500)
-    i = i &+ 1
+    k = k &+ 1
   end
   log("wtest: hold 12 s for a photo", 0)
   delay_ms(12_000)
@@ -1224,7 +1231,7 @@ def window_test : Nil
     draw_bytes(380, wt_y(i) &+ 30, buf, n &+ 2, EPD::BLACK, 2)
     i = i &+ 1
   end
-  draw_text(40, 646, "REF v8: ROWS-ONLY WINDOW, RAM_RW AT START. R3,R4 +0x91", EPD::BLACK, 2)
+  draw_text(40, 646, "REF v9: ORDER R3,R4,R2 NO 0x91, THEN R1 +0x91", EPD::BLACK, 2)
   fast_bw(3, EPD::LUT_HALF60)
   EPD.cog_stop # full COG re-init on the next refresh: nothing of the test survives
 end
