@@ -194,7 +194,7 @@ module Shared
   @@red_ink_plain = false # = SK_RED_INK_PLAIN, switchable at run time
   # Per-app update mode (UPD_*), shell `upd`, saved in NVS: Sketch ink,
   # Life frames, Snake frames.
-  @@upd_sk = UPD_DIFF
+  @@upd_sk = UPD_INK
   @@upd_li = UPD_DIFF
   @@upd_sn = UPD_DIFF
   @@req = 0_u32        # REQ_* bits for the main loop (atomic)
@@ -1058,16 +1058,9 @@ module RedCheck
 end
 
 def draw_sketch_label(wait : Int32, up : Int32, panel : Int32, total : Int32, colour : Bool = false) : Nil
-  # Just the firmware version, top-left of the white screen (the pen stays
-  # below it: Sketch::PEN_Y_MIN). Timings are in the log.
+  # Nothing on screen (the version is in `status` and on DIAG); timings
+  # go to the log.
   log2("sketch: last ink latency / panel ms", wait, panel)
-  v = LibIDF.cr_version
-  k = 0
-  while k < 40 && v[k] != 0_u8
-    k = k &+ 1
-  end
-  EPD.fill_rect(Sketch::X_MIN, Sketch::Y_MIN, k &* 12 &+ 6, 7 &* 2 &+ 4, EPD::WHITE)
-  draw_bytes(Sketch::X_MIN &+ 3, Sketch::Y_MIN &+ 2, v, k, EPD::BLACK, 2)
 end
 
 # Asymmetric marker for the window test: 120x80 outline (6 px), a solid
@@ -1114,6 +1107,57 @@ end
 # WFAST drive frames (of the 20-frame pull) per ladder step 1..4.
 def lad_frames(i : Int32) : Int32
   i == 1 ? 19 : (i == 2 ? 12 : (i == 3 ? 8 : 5))
+end
+
+# Ink command test (DIAG B): which RAM bit pattern drives what, and the
+# pass ladder. White base (full, base LUT x3) with a black bar at row 420;
+# then EPD.refresh_ink pulls on rows (x 200..759, 16 rows):
+#   y 120: 0x10 = 1, 0x11 = 0 (one pull)    y 200: 0x10 = 1, 0x11 = 1 (one pull)
+#   y 280: 0x10 = 0, 0x11 = 1 (one pull)    y 420: black bar, 0x10 = 0, 0x11 = 1
+#   y 520: ladder, 5 segments of 112 px with 1..5 passes (first 0x10 only,
+#          later both). Result stays on screen.
+def ink_bar(p : UInt8*, x0 : Int32, x1 : Int32, y : Int32) : Nil
+  Games.fill_rect(p, x0, y, x1 &- x0, 16)
+end
+
+def ink_test : Nil
+  log("inktest: white base", 0)
+  EPD.fill(EPD::WHITE)
+  draw_text(40, 20, "INK COMMAND TEST", EPD::BLACK, 3)
+  draw_text(40, 124, "N1 O0", EPD::BLACK, 2)
+  draw_text(40, 204, "N1 O1", EPD::BLACK, 2)
+  draw_text(40, 284, "N0 O1", EPD::BLACK, 2)
+  draw_text(40, 424, "BLACK N0 O1", EPD::BLACK, 2)
+  draw_text(40, 524, "PASSES 1-5", EPD::BLACK, 2)
+  ink_bar(EPD.black, 200, 760, 420)
+  fast_bw(3, EPD::LUT_BASE)
+  return unless SkInk.ready?
+  pn = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+  po = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+  return if pn.null? || po.null?
+  Games.zero(pn, EPD::PLANE)
+  Games.zero(po, EPD::PLANE)
+  ink_bar(pn, 200, 760, 120)
+  ink_bar(pn, 200, 760, 200)
+  ink_bar(po, 200, 760, 200)
+  ink_bar(po, 200, 760, 280)
+  ink_bar(po, 200, 760, 420)
+  ink_bar(pn, 200, 760, 520) # ladder pass 1: all five segments
+  log("inktest: pull 1 ms", EPD.refresh_ink(pn, po))
+  k = 2
+  while k <= 5
+    Games.zero(pn, EPD::PLANE)
+    Games.zero(po, EPD::PLANE)
+    x0 = 200 &+ (k &- 1) &* 112
+    ink_bar(pn, x0, 760, 520)
+    ink_bar(po, x0, 760, 520)
+    log2("inktest: pass / ms", k, EPD.refresh_ink(pn, po))
+    k = k &+ 1
+  end
+  LibIDF.heap_caps_free(pn.as(Void*))
+  LibIDF.heap_caps_free(po.as(Void*))
+  EPD.cog_stop
+  log("inktest: done", 0)
 end
 
 def ink_ladder : Nil
@@ -1301,7 +1345,8 @@ UPD_FULL    = 0 # full-screen fast refresh (WIN_LUT)
 UPD_WIN     = 1 # rows-only window (EPD.refresh_window2 mode 8)
 UPD_DIFF    = 2 # whole-panel differential (EPD.refresh_diff, yigitabi5444)
 UPD_DIFFWIN = 3 # differential, DRFW rows 0 .. last changed row
-UPD_COUNT   = 4
+UPD_INK     = 4 # Sketch: ink commands with incremental strength (SkInk)
+UPD_COUNT   = 5
 HOLD_MS      = 1000 # hold User A this long for the colour refresh
 AUTO_COLOUR_MS = 30_000 # NAMETAG/PORTRAIT/SKETCH: colour refresh after this long idle
 
@@ -1313,16 +1358,19 @@ def red_ink_kind : Int32
   WIN_LUT == EPD::LUT_HALF60 ? EPD::LUT_HALF60 : EPD::LUT_NOSHAKE_KEEPRED
 end
 
-SK_HINT_Y = Sketch::Y_MAX - 22
+SK_HINT_Y = Sketch::Y_MAX - 16 # help strip text top (rows 506..519)
 SK_INK_FRAMES = 19 # WFAST black drive frames (of 20) for Sketch window ink
 SK_INK_WFAST  = false # WFAST windows copy ink ~336 rows lower: keep OFF (DIAG B only)
 
 # Help strip at the bottom of Sketch's white area; `ready` adds the
 # "READY" line (entry frame only, removed on the first stroke).
 def draw_sketch_hint(ready : Bool) : Nil
-  EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 20, 46 &* 12 &+ 8, 2 &* 7 &* 2 &+ 10, EPD::WHITE)
-  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y &- 18, "KNOBS: DRAW  A: ERASE  B: CLEAN  HOLD A: COLOR", EPD::BLACK, 2)
-  draw_text(Sketch::X_MIN &+ 3, SK_HINT_Y, "READY - TURN KNOBS TO DRAW", EPD::BLACK, 2) if ready
+  # One small centred line at the bottom of the white screen; the pen
+  # stays above it (Sketch::PEN_Y_MAX). `ready` is no longer drawn.
+  EPD.fill_rect(Sketch::X_MIN, SK_HINT_Y &- 4, Sketch::X_MAX &- Sketch::X_MIN, 7 &* 2 &+ 6, EPD::WHITE)
+  t = "KNOBS: DRAW   A: ERASE   B: CLEAN   HOLD A: COLOR"
+  x = Sketch::X_MIN &+ (Sketch::X_MAX &- Sketch::X_MIN &- t.bytesize &* 12).unsafe_div(2)
+  draw_text(x, SK_HINT_Y, t, EPD::BLACK, 2)
 end
 
 module Store
@@ -1360,7 +1408,7 @@ module Store
 
   @@reset_reason = 0
   @@boots = 0
-  @@saved_sk = UPD_DIFF # values last stored in NVS
+  @@saved_sk = UPD_INK # values last stored in NVS
   @@saved_li = UPD_DIFF
   @@saved_sn = UPD_DIFF
 
@@ -1501,6 +1549,140 @@ end
 SK_WINDOWED   = false # Sketch ink: windowed refresh (EPD::WIN_MODE) - experimental, keep OFF
 GAME_WINDOWED = false # same for Life / Snake frames - experimental, keep OFF
 
+# Etch-a-Sketch ink with incremental line strength (UPD_INK): every pass of
+# the pen over a pixel darkens it one step, like aluminium powder scraped
+# off the glass again. A pass counter per pixel (PSRAM) picks the command
+# for each covered pixel: first pass = EPD ink command 1 (light), later
+# passes = command 3 (a step darker), up to INK_CAP passes; every other
+# pixel gets no drive at all (EPD.refresh_ink).
+INK_CAP = 5
+
+module SkInk
+  @@pass = Pointer(UInt8).null # one byte per pixel: passes so far
+  @@cnew = Pointer(UInt8).null # command planes for the next pull
+  @@cold = Pointer(UInt8).null
+  @@lo = 0 # byte range of the command planes in use (to clear after)
+  @@hi = -1
+
+  def self.ready? : Bool
+    if @@pass.null?
+      @@pass = LibIDF.heap_caps_malloc((EPD::PLANE &* 8).to_u32!, 0x404_u32).as(UInt8*)
+      @@cnew = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+      @@cold = LibIDF.heap_caps_malloc(EPD::PLANE.to_u32!, 0x404_u32).as(UInt8*)
+      return false if @@pass.null? || @@cnew.null? || @@cold.null?
+      Games.zero(@@cnew, EPD::PLANE)
+      Games.zero(@@cold, EPD::PLANE)
+      @@hi = -1
+    end
+    !@@pass.null? && !@@cnew.null? && !@@cold.null?
+  end
+
+  # After a full refresh: what the canvas shows is solid black (full
+  # passes), the rest has none; pending touches are dropped.
+  def self.sync_from_canvas : Nil
+    return unless ready?
+    cv = Sketch.canvas
+    tc = Sketch.touch
+    i = 0
+    while i < EPD::PLANE
+      v = cv[i]
+      q = @@pass + (i &* 8).to_i64!
+      if v == 0_u8
+        k = 0
+        while k < 8
+          q[k] = 0_u8
+          k = k &+ 1
+        end
+      else
+        k = 0
+        while k < 8
+          q[k] = (v & 0x80_u8.unsafe_shr(k)) != 0_u8 ? INK_CAP.to_u8! : 0_u8
+          k = k &+ 1
+        end
+      end
+      tc[i] = 0_u8 unless tc.null?
+      i = i &+ 1
+    end
+  end
+
+  # Marks byte i of the command planes as used.
+  def self.use(i : Int32) : Nil
+    @@lo = i if @@hi < 0 || i < @@lo
+    @@hi = i if i > @@hi
+  end
+
+  # Pixels that just turned white in the black plane (before -> after) get
+  # the lighten command (e.g. the help line removed with the first stroke).
+  def self.lighten(i : Int32, before : UInt8, after : UInt8) : Nil
+    return unless ready?
+    m = before & (after ^ 0xFF_u8)
+    return if m == 0_u8
+    @@cold[i] = @@cold[i] | m
+    @@cnew[i] = @@cnew[i] & (m ^ 0xFF_u8)
+    use(i)
+  end
+
+  # Takes the pen's touches: pass counters up, ink commands set, black
+  # plane updated. True if there is something to drive.
+  def self.take_touches : Bool
+    return false unless ready?
+    tc = Sketch.touch
+    bk = EPD.black
+    rd = EPD.red
+    any = @@hi >= 0
+    i = 0
+    while i < EPD::PLANE
+      t = tc[i]
+      if t != 0_u8
+        tc[i] = 0_u8
+        n = @@cnew[i]
+        o = @@cold[i]
+        q = @@pass + (i &* 8).to_i64!
+        k = 0
+        while k < 8
+          m = 0x80_u8.unsafe_shr(k)
+          if (t & m) != 0_u8
+            c = q[k]
+            if c == 0_u8
+              n = n | m
+            elsif c < INK_CAP.to_u8!
+              n = n | m
+              o = o | m
+            end
+            q[k] = c &+ 1 if c < INK_CAP.to_u8!
+          end
+          k = k &+ 1
+        end
+        if n != @@cnew[i] || o != @@cold[i]
+          @@cnew[i] = n
+          @@cold[i] = o
+          use(i)
+          any = true
+        end
+        bk[i] = bk[i] | t
+        rd[i] = rd[i] & (t ^ 0xFF_u8)
+      end
+      i = i &+ 1
+    end
+    any
+  end
+
+  # One ink pull with the pending commands, then the planes are cleared.
+  def self.pull : Int32
+    rc = EPD.refresh_ink(@@cnew, @@cold)
+    if @@hi >= 0
+      i = @@lo
+      while i <= @@hi
+        @@cnew[i] = 0_u8
+        @@cold[i] = 0_u8
+        i = i &+ 1
+      end
+    end
+    @@hi = -1
+    rc
+  end
+end
+
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
   @@red_frame = false # the red frame is still on the panel (survives re-entry)
@@ -1607,6 +1789,7 @@ module SkState
 
   # Remember the planes as shown (after any full refresh).
   def self.mark_shown : Nil
+    SkInk.sync_from_canvas if Shared.screen == SCR_SKETCH
     pen_seen(Sketch.x, Sketch.y)
     sh = shown
     bk = EPD.black
@@ -1841,7 +2024,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
       red_to_black
       draw_sketch_label(SkState.last_lat, EPD.upload_ms, EPD.panel_ms, 0)
       draw_sketch_hint(true)
-      SkState.hint = true
+      SkState.hint = false # the help strip is permanent (nothing to remove)
       pulls = 3 # full-drive entry (base LUT, shake): cleans residue of earlier updates
     else
       Menu.render(EPD.black, EPD.red)
@@ -2009,7 +2192,7 @@ fun crystal_app_main : Void
         if Ota.b_held? # hold B: OTA update check (src/ota.cr)
           Ota.start(false)
         else
-          ink_ladder
+          ink_test
         end
       end
     elsif scr == SCR_SKETCH
@@ -2027,6 +2210,25 @@ fun crystal_app_main : Void
         end
         SkState.mark_shown
         last_total = millis &- t
+      elsif Shared.upd(SCR_SKETCH) == UPD_INK && SkInk.ready?
+        # Ink with incremental strength (SkInk): only the pixels the pen
+        # covered get driven, each a step darker per pass.
+        if SkState.after_colour?
+          SkState.after_colour = false
+          Sketch.render(EPD.black, EPD.red)
+          fast_bw(2, EPD::LUT_BASE)
+          SkState.mark_shown
+        end
+        SkState.hint = false # nothing to remove: the help strip stays
+        if SkInk.take_touches
+          t = millis
+          Shared.led_mode = LED_CYAN
+          SkInk.pull
+          SkState.pen_seen(Sketch.x, Sketch.y)
+          last_total = millis &- t
+          SkState.last_lat = millis &- last_input
+          log3("sketch: ink upload / panel / latency ms", EPD.upload_ms, EPD.panel_ms, SkState.last_lat)
+        end
       else
         # Live ink: only where the pen moved since the planes were last
         # updated. Ink lies on the path from the old to the new pen position,

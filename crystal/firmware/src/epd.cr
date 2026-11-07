@@ -1128,7 +1128,7 @@ module EPD
 
   # main.c:352-403 part_open: reset, register sequence, table, DC-DC, whole-
   # panel DUW/DRFW, both RAMs = what the film shows.
-  def self.diff_open : Bool
+  def self.diff_open(kind : Int32 = LUT_DIFF) : Bool
     t0 = millis
     cog_stop if @@session_open
     cog_initial(@@quick_open) # main.c:357-366 reset waits + 0x70 71 36
@@ -1154,12 +1154,18 @@ module EPD
     cmd1(0x60_u8, 0x25_u8)
     cmd(LEFT, 0x61_u8, 1, 0x01_u8)
     cmd1(0x02_u8, 0x00_u8)
-    build_diff
+    build_lutb(kind)
     send(BOTH, 0xB0_u8, @@lut, LUTB_BYTES)
     diff_dcdc_on
     cmd(BOTH, 0x13_u8, 6, 0x00_u8, 0x3B_u8, 0x00_u8, 0x00_u8, 0x9F_u8, 0x02_u8) # DUW whole panel
     cmd(BOTH, 0x90_u8, 4, 0x00_u8, 0x3B_u8, 0x00_u8, 0xA9_u8)                 # DRFW whole panel
-    sh = diff_shown
+    # DCTL from the OTP, as write_planes: yigitabi's sequence has no 0x01 and
+    # writes RAM bit-reversed from x 0x3B down (PDi order); without it our
+    # OTP-order writes land mirrored within each COG half (ink test photo).
+    cmd1(0x01_u8, @@otp[0x10]) if @@driver_b
+    # Differential: both RAMs = what the film shows. Ink commands: both
+    # zero (table 0 = no drive everywhere).
+    sh = kind == LUT_DIFF ? diff_shown : Pointer(UInt8).null
     t = LEFT
     while t <= RIGHT
       ram_rw_full(t)
@@ -1176,7 +1182,7 @@ module EPD
     @@session_open = true
     @@lut_latched = true
     @@latched_fast = true
-    @@latched_kind = LUT_DIFF
+    @@latched_kind = kind
     @@diff_open = true
     @@diff_n = 0
     @@restart_ms = millis &- t0
@@ -1191,7 +1197,7 @@ module EPD
   def self.refresh_diff(rows : Int32 = HEIGHT) : Int32
     finish_aborted
     @@spi_fail = false
-    if @@diff_open && @@diff_n >= DIFF_SESSION
+    if @@diff_open && (@@diff_n >= DIFF_SESSION || @@latched_kind != LUT_DIFF)
       cog_stop
     end
     unless @@diff_open
@@ -1236,7 +1242,103 @@ module EPD
     rc
   end
 
+  # ---- ink commands (UPD_INK, Sketch) ----------------------------------------
+  # Same session and 20-frame pull as UPD_DIFF, but both RAMs are written on
+  # every update, so the table index (0x11 << 1) | 0x10 is a per-pixel
+  # COMMAND chosen by the caller, not old/new: 0 = no drive, 1 = first pass
+  # (VDH for INK_F1 frames: light), 3 = another pass (VDH for INK_F3 frames:
+  # a step darker), 2 = lighten (VDL for INK_FE frames). Unmarked pixels get
+  # no drive, so nothing else on the film ever changes (no seams/shadows).
+  LUT_INK = 9
+  @@ink_f1 = 2
+  @@ink_f3 = 2
+  @@ink_fe = 19
+
+  def self.ink_frames(f1 : Int32, f3 : Int32, fe : Int32) : Nil
+    @@ink_f1 = f1 < 1 ? 1 : (f1 > 19 ? 19 : f1)
+    @@ink_f3 = f3 < 1 ? 1 : (f3 > 19 ? 19 : f3)
+    @@ink_fe = fe < 1 ? 1 : (fe > 19 ? 19 : fe)
+    cog_stop if @@diff_open && @@latched_kind == LUT_INK && !busy? # new table: new session
+  end
+
+  def self.ink_f1 : Int32
+    @@ink_f1
+  end
+
+  def self.ink_f3 : Int32
+    @@ink_f3
+  end
+
+  def self.build_ink : Nil
+    k = 0
+    while k < 50
+      q = @@lut + (k &* 8).to_i64!
+      q[0] = 0_u8; q[1] = 1_u8; q[2] = 1_u8; q[3] = 0_u8
+      q[4] = 1_u8; q[5] = 1_u8; q[6] = 1_u8; q[7] = 1_u8
+      k = k &+ 1
+    end
+    f = 0
+    while f < 19
+      g = f.unsafe_div(2)
+      shift = (f & 1) == 1 ? 0 : 2
+      if f < @@ink_f1
+        q = @@lut + ((10 &+ g) &* 8).to_i64!
+        q[0] = q[0] | 1.unsafe_shl(shift).to_u8! # table 1: VDH
+      end
+      if f < @@ink_fe
+        q = @@lut + ((20 &+ g) &* 8).to_i64!
+        q[0] = q[0] | 2.unsafe_shl(shift).to_u8! # table 2: VDL
+      end
+      if f < @@ink_f3
+        q = @@lut + ((30 &+ g) &* 8).to_i64!
+        q[0] = q[0] | 1.unsafe_shl(shift).to_u8! # table 3: VDH
+      end
+      f = f &+ 1
+    end
+  end
+
+  # One ink pull: cmd_new -> 0x10, cmd_old -> 0x11 (whole planes, both
+  # COGs), whole-panel DUW/DRFW. Returns panel ms or -1.
+  def self.refresh_ink(cmd_new : UInt8*, cmd_old : UInt8*) : Int32
+    finish_aborted
+    @@spi_fail = false
+    if @@diff_open && (@@diff_n >= DIFF_SESSION || @@latched_kind != LUT_INK)
+      cog_stop
+    end
+    unless @@diff_open
+      return -1 unless diff_open(LUT_INK)
+    end
+    t_up = millis
+    t = LEFT
+    while t <= RIGHT
+      ram_rw_full(t)
+      send_plane(t, 0x10_u8, cmd_new, Pointer(UInt8).null)
+      ram_rw_full(t)
+      send_plane(t, 0x11_u8, cmd_old, Pointer(UInt8).null)
+      t = t &+ 1
+    end
+    @@upload_ms = millis &- t_up
+    if @@spi_fail
+      cog_stop
+      return -1
+    end
+    rc = trigger(false, FAST_TIMEOUT_MS)
+    @@panel_ms = rc
+    if rc < 0 || @@spi_fail
+      log("EPD: ink pull failed, COG powered down", rc)
+      cog_stop
+      return -1
+    end
+    @@diff_n = @@diff_n &+ 1
+    @@session_images = @@session_images &+ 1
+    rc
+  end
+
   def self.build_lutb(kind : Int32) : Nil
+    if kind == LUT_INK
+      build_ink
+      return
+    end
     if kind == LUT_DIFF
       build_diff
       return

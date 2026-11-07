@@ -49,8 +49,8 @@ module Sketch
   Y_MAX = 522
   # The pen stays clear of the version label at the top and the help strip
   # at the bottom of the white screen (main.cr draws both inside it).
-  PEN_Y_MIN = Y_MIN + 20 # label rows Y_MIN .. Y_MIN + 17
-  PEN_Y_MAX = Y_MAX - 46 # help strip rows Y_MAX - 42 .. Y_MAX - 5
+  PEN_Y_MIN = Y_MIN      # no label on the screen any more
+  PEN_Y_MAX = Y_MAX - 24 # help strip rows Y_MAX - 20 .. Y_MAX - 1
 
   PX_PER_REV      =  240 # pen travel per full knob turn (0..1 knob range)
   DEADBAND        =   12 # counts (of 4096) of ADC noise to ignore
@@ -92,6 +92,9 @@ module Sketch
   R_MAX   = 3 # still drawing, MAX_WAIT_MS since the first change: partial
 
   @@canvas = Pointer(UInt8).null
+  # Pixels the pen covered since the firmware last took them (ink passes,
+  # retraces included): the firmware reads and clears it (touch_take).
+  @@touch = Pointer(UInt8).null
   @@knobs = 2        # 1 = single-knob mode (X knob only, B toggles axis)
   @@single_y = false # single-knob mode drives Y
   @@px = 479
@@ -140,6 +143,10 @@ module Sketch
 
   def self.y : Int32
     @@py
+  end
+
+  def self.touch : UInt8*
+    @@touch
   end
 
   def self.canvas : UInt8*
@@ -205,8 +212,9 @@ module Sketch
   def self.init(knobs : Int32 = 2) : Bool
     if @@canvas.null?
       @@canvas = game_alloc(Games::PLANE)
+      @@touch = game_alloc(Games::PLANE)
       @@led_last = game_alloc(32).as(UInt32*)
-      return false if @@canvas.null? || @@led_last.null?
+      return false if @@canvas.null? || @@touch.null? || @@led_last.null?
     end
     @@knobs = knobs == 1 ? 1 : 2
     @@single_y = false
@@ -245,6 +253,7 @@ module Sketch
   # with 3 white blinks).
   def self.blank : Nil
     Games.zero(@@canvas, Games::PLANE)
+    Games.zero(@@touch, Games::PLANE)
     # Pen back to the centre of the drawable area, and the knob references
     # forgotten: the next reading of each knob becomes its new zero, so the
     # current knob angles map to the centre.
@@ -412,6 +421,7 @@ module Sketch
     end
     return if nx == @@px && ny == @@py
     line(@@canvas, @@px, @@py, nx, ny)
+    line(@@touch, @@px, @@py, nx, ny)
     @@px = nx
     @@py = ny
     @@first_change = now unless @@dirty
