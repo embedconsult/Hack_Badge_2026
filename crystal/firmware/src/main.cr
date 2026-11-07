@@ -1443,8 +1443,8 @@ def colour_refresh : Bool
   ok
 end
 
-SK_WINDOWED   = true # Sketch ink: refresh only the changed rows (EPD::WIN_MODE)
-GAME_WINDOWED = true # same for Life / Snake frames
+SK_WINDOWED   = false # Sketch ink: windowed refresh (EPD::WIN_MODE) - experimental, keep OFF
+GAME_WINDOWED = false # same for Life / Snake frames - experimental, keep OFF
 
 module SkState
   @@colour = false # the red frame is on the panel (keep-red frames)
