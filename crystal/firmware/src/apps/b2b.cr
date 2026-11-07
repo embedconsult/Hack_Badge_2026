@@ -7,7 +7,10 @@
 # Both badges must run on battery: the USB-C port is sink-only (5.1k CC
 # pull-downs, no VBUS output), so the host cannot power the target.
 # Starting takes the USB PHY from the console until reboot, so leaving
-# this app after a start restarts the badge.
+# this app after a start restarts the badge. Hence A asks first (confirm
+# screen: "console will disconnect; reboot to restore"); a second A within
+# CONFIRM_MS starts, B or the timeout cancels. Shell: `usbflash` prints the
+# state.
 
 lib LibIDF
   fun cr_b2b_start : Int32
@@ -37,6 +40,31 @@ module B2bApp
   @@shown_pct = -1
   @@done_at = 0
   @@err = 0
+  @@confirm = 0 # time of the first A (0 = not asking)
+  CONFIRM_MS = 15_000
+  ST_CONFIRM = 100 # UI-only state: waiting for the second A
+
+  def self.state_name(st : Int32) : String
+    st == ST_IDLE ? "idle" : st == ST_WAIT ? "waiting for a badge" : st == ST_SYNC ? "connecting (ROM loader)" :
+      st == ST_COPY ? "copying" : st == ST_VERIFY ? "verifying" : st == ST_DONE ? "done" :
+      st == ST_FAIL ? "failed" : "?"
+  end
+
+  # Shell `usbflash`: state, progress, USB host, last error.
+  def self.report : Nil
+    st = LibIDF.cr_b2b_state
+    LibIDF.cr_print("usbflash: ".to_unsafe)
+    LibIDF.cr_print(state_name(st).to_unsafe)
+    LibIDF.cr_print(@@confirm != 0 ? " (on screen: confirm, press A again)\n".to_unsafe : "\n".to_unsafe)
+    LibIDF.cr_log3("usbflash: state / pct / usb host installed".to_unsafe, st, LibIDF.cr_b2b_pct, LibIDF.cr_b2b_host ? 1 : 0)
+    m = LibIDF.cr_b2b_msg
+    if m[0] != 0_u8
+      LibIDF.cr_print("usbflash: last error: ".to_unsafe)
+      LibIDF.cr_print(m)
+      LibIDF.cr_print("\n".to_unsafe)
+    end
+    LibIDF.cr_print("usbflash: start only on the badge (A twice in USBFLASH); it disconnects this console\n".to_unsafe) unless LibIDF.cr_b2b_host
+  end
 
   def self.icon(x : Int32, y : Int32) : Nil
     Gfx.tile(x, y)
@@ -63,7 +91,15 @@ module B2bApp
     busy = st == ST_WAIT || st == ST_SYNC || st == ST_COPY || st == ST_VERIFY
     TopBar.draw("USB FLASH", "< PREV", "NEXT >", busy ? "" : "A: START", busy ? "B: STOP" : "")
     Gfx.text(48, 80, "FLASH ANOTHER BADGE", 5)
-    if st == ST_IDLE || st == ST_FAIL
+    if st == ST_CONFIRM
+      TopBar.draw("USB FLASH", "< PREV", "NEXT >", "A: START", "B: CANCEL")
+      Gfx.box(40, 180, 880, 64, true)
+      Gfx.text(64, 196, "START USB HOST MODE?", 5, false)
+      Gfx.text(48, 290, "The USB console will disconnect;", 4)
+      Gfx.text(48, 340, "reboot to restore it. Leaving", 4)
+      Gfx.text(48, 390, "this app reboots the badge.", 4)
+      Gfx.text(48, 470, "A again: start    B: cancel", 4)
+    elsif st == ST_IDLE || st == ST_FAIL
       Gfx.text(48, 180, "Copies this badge's firmware onto", 3)
       Gfx.text(48, 216, "another badge over a USB-C cable.", 3)
       Gfx.text(48, 276, "1. Both badges ON BATTERY (unplug", 3)
@@ -104,6 +140,7 @@ module B2bApp
   end
 
   def self.enter : Nil
+    @@confirm = 0
     st = LibIDF.cr_b2b_state
     @@shown_state = st
     @@shown_pct = LibIDF.cr_b2b_pct
@@ -114,10 +151,20 @@ module B2bApp
   def self.tick(now : Int32, inp : LibGames::Input) : Nil
     st = LibIDF.cr_b2b_state
     busy = st == ST_WAIT || st == ST_SYNC || st == ST_COPY || st == ST_VERIFY
-    if Games.pressed?(inp, Games::BTN_A) && !busy && st != ST_DONE
+    if @@confirm != 0 && (Games.pressed?(inp, Games::BTN_B) || now &- @@confirm > CONFIRM_MS)
+      @@confirm = 0 # cancelled
+    elsif @@confirm != 0 && Games.pressed?(inp, Games::BTN_A)
+      @@confirm = 0
       @@err = LibIDF.cr_b2b_start
       st = ST_WAIT if @@err == 0
       @@shown_state = -1 if @@err != 0
+    elsif Games.pressed?(inp, Games::BTN_A) && !busy && st != ST_DONE
+      if LibIDF.cr_b2b_host
+        @@err = LibIDF.cr_b2b_start # host already up (a retry): no console left to lose
+        st = ST_WAIT if @@err == 0
+      else
+        @@confirm = now | 1 # first A: ask
+      end
     elsif Games.pressed?(inp, Games::BTN_B) && busy
       LibIDF.cr_b2b_stop
     end
@@ -128,6 +175,7 @@ module B2bApp
         LibIDF.cr_b2b_restart # USB back to the console
       end
     end
+    st = ST_CONFIRM if @@confirm != 0
     pct = LibIDF.cr_b2b_pct
     pct = 0 unless st == ST_COPY || st == ST_VERIFY || st == ST_DONE
     if st != @@shown_state || pct &- @@shown_pct >= 2 || (st == ST_DONE && pct != @@shown_pct)

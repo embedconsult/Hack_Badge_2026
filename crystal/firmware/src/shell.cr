@@ -93,6 +93,7 @@ module Shell
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
     say("  sketch quickdraw         (Sketch: the six-shooter)\n")
+    say("  usbflash                 (badge-to-badge USB update state)\n")
     say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
     say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
@@ -345,6 +346,8 @@ module Shell
       # reg <osc> <tcon> (decimal): session timing experiment (EPD.x_regs)
       EPD.x_regs(tok_int(1, EPD.x_osc), tok_int(2, EPD.x_tcon)) if @@nt >= 3
       LibIDF.cr_log3("reg: osc / tcon / -".to_unsafe, EPD.x_osc, EPD.x_tcon, 0)
+    elsif tok_is(0, "usbflash")
+      B2bApp.report # src/apps/b2b.cr (read-only: starting needs the badge's buttons)
     elsif tok_is(0, "wifi")
       wifi
     elsif tok_is(0, "ota")
