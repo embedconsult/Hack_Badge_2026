@@ -1215,7 +1215,7 @@ module WTest
   end
 
   def self.pulls=(v : Int32) : Nil
-    @@pulls = v < 1 ? 1 : (v > 9 ? 9 : v)
+    @@pulls = v < 0 ? 1 : (v > 9 ? 9 : v)
   end
 end
 
@@ -1264,6 +1264,14 @@ def wtest : Nil
       r = r &+ 1
     end
     i = i &+ 1
+  end
+  if WTest.pulls == 0 # erase with a normal fast clean (base LUT, 3 pulls)
+    fast_bw(3, EPD::LUT_BASE)
+    LibIDF.heap_caps_free(pn.as(Void*))
+    LibIDF.heap_caps_free(po.as(Void*))
+    Shared.rendering = false
+    log("wtest: fast clean done", 0)
+    return
   end
   EPD.ink_custom = WTest.codes
   n = 0
