@@ -10,6 +10,7 @@ lib LibIDF
   fun cr_log3(msg : UInt8*, a : Int32, b : Int32, c : Int32) : Void
   fun cr_heap_free(caps : UInt32) : Int32
   fun esp_restart : Void
+  fun cr_time_set(y : Int32, mo : Int32, d : Int32, h : Int32, mi : Int32) : Void
 end
 
 module Shell
@@ -95,6 +96,7 @@ module Shell
     banner
     say("version status reboot mode press hold knob text\n")
     say("net wifi ota sketch stroke dump upd flag clean\n")
+    say("clock usbflash inkf\n")
     say("help all: details\n")
   end
 
@@ -102,14 +104,17 @@ module Shell
     say("commands:\n")
     say("  help | version | status | reboot\n")
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
+    say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
+    say("  clock <Y> <M> <D> <h> <m>       (set local time, Schedule NOW/NEXT)\n")
     say("  text <first>[|<last>]           (nametag name, saved)\n")
     say("  press <a|b|plus|minus> | hold a | colour | clean\n")
     say("  knob <l|r> <mV> | knob off\n")
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
     say("  dump <red|black> <row0> <rows>\n")
     say("  sketch quickdraw         (Sketch: the six-shooter)\n")
+    say("  usbflash                 (badge-to-badge USB update state)\n")
     say("  upd [<sketch|life|snake> <full|win|diff|diffwin|ink>]\n")
     say("  flag <QUICK_OPEN|SK_RED_INK_PLAIN|SKIP_ZERO_RED|SK_WIN> <0|1>\n")
     say("  wifi <ssid> <password> | wifi off | wifi forget | wifi status\n")
@@ -365,10 +370,14 @@ module Shell
       # reg <osc> <tcon> (decimal): session timing experiment (EPD.x_regs)
       EPD.x_regs(tok_int(1, EPD.x_osc), tok_int(2, EPD.x_tcon)) if @@nt >= 3
       LibIDF.cr_log3("reg: osc / tcon / -".to_unsafe, EPD.x_osc, EPD.x_tcon, 0)
+    elsif tok_is(0, "usbflash")
+      B2bApp.report # src/apps/b2b.cr (read-only: starting needs the badge's buttons)
     elsif tok_is(0, "wifi")
       wifi
     elsif tok_is(0, "ota")
       ota
+    elsif tok_is(0, "weather")
+      LibIDF.cr_weather_cmd(@@line, @@len) # main/apps_net.c: parses, saves, prints
     elsif tok_is(0, "net")
       if tok_is(1, "ap") && (tok_is(2, "on") || tok_is(2, "off"))
         LibIDF.cr_net_set_ap(tok_is(2, "on"))
@@ -383,6 +392,10 @@ module Shell
         LibIDF.cr_net_print_status
       end
       LibIDF.cr_notify_main
+    elsif tok_is(0, "clock") && @@nt == 6
+      # local (Pasadena) time, for the Schedule app's NOW / NEXT marks
+      LibIDF.cr_time_set(tok_int(1, 2026), tok_int(2, 11), tok_int(3, 7), tok_int(4, 12), tok_int(5, 0))
+      say("ok\n")
     elsif tok_is(0, "text") && @@nt >= 2
       s = @@ts[1]
       e = @@len

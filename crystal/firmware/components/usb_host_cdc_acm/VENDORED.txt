@@ -1,0 +1,2 @@
+Vendored from https://github.com/espressif/esp-usb (host/class/cdc/usb_host_cdc_acm, v2.4.1, commit 51fcfb9), Apache-2.0 (LICENSE).
+Unmodified apart from removing test_app/ and host_test/. Used by main/b2b.c (badge-to-badge update).

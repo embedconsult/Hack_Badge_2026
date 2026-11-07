@@ -24,6 +24,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
+#include "radar.h"
 
 bool cr_wifi_hold(void);               // main/ota.c
 void cr_wifi_release(void);
@@ -112,6 +113,8 @@ typedef struct {
     int8_t their;          // what it hears from me (its heard list), 127 unknown
     int16_t cm;
     int64_t seen, rssi_at;
+    uint8_t nh;            // its heard list (Radar map), from its announce / BOSR
+    radar_heard_t h[RADAR_HEARD];
 } peer_t;
 
 static peer_t s_peer[PEERS];
@@ -610,8 +613,22 @@ static void on_udp(const uint8_t *b, int n, uint32_t ip, int64_t now)
         p->ip = d[0] == K_BADGEOS ? 0 : ip; // bridged ones are reached through their bridge
         p->seen = now;
         int m = d[22];
-        for (int i = 0; i < m && 23 + 9 * (i + 1) <= n; i++)
-            if (!memcmp(d + 23 + 9 * i, s_me, 6)) p->their = (int8_t)d[23 + 9 * i + 6];
+        int nh = 0;
+        radar_heard_t hl[RADAR_HEARD];
+        for (int i = 0; i < m && 23 + 9 * (i + 1) <= n; i++) {
+            const uint8_t *e = d + 23 + 9 * i;
+            if (!memcmp(e, s_me, 6)) p->their = (int8_t)e[6];
+            if (nh < RADAR_HEARD) {
+                memcpy(hl[nh].mac, e, 6);
+                hl[nh].rssi = (int8_t)e[6];
+                hl[nh].cm = (int16_t)(e[7] | e[8] << 8);
+                nh++;
+            }
+        }
+        taskENTER_CRITICAL(&s_mux);
+        memcpy(p->h, hl, sizeof hl);
+        p->nh = nh;
+        taskEXIT_CRITICAL(&s_mux);
         if (fresh) promisc_sync();
     } else if (h->type == 'C' && n > 0) {
         on_command(h, ip, (const char *)d, n, now);
@@ -632,6 +649,17 @@ static void on_espnow(const enow_t *r, int64_t now)
         if (!p->kind) p->kind = K_BADGEOS;
         p->seen = now;
         peer_rssi(p, r->rssi, now);
+        if (m->n <= 8 && r->len >= 11 + m->n * 8) { // its shared FTM ranges (Radar map)
+            taskENTER_CRITICAL(&s_mux);
+            p->nh = 0;
+            for (int i = 0; i < m->n && p->nh < RADAR_HEARD; i++) {
+                radar_heard_t *e = &p->h[p->nh++];
+                memcpy(e->mac, m->r[i].mac, 6);
+                e->rssi = 127;
+                e->cm = m->r[i].cm;
+            }
+            taskEXIT_CRITICAL(&s_mux);
+        }
         int tail = 11 + m->n * 8;
         if (m->n <= 8 && r->len >= tail + 12) {
             if (memcmp(p->name, r->d + tail, 12)) s_ver++;
@@ -791,6 +819,16 @@ void cr_net_set(bool on)
     s_ver++;
 }
 
+// Settings app (main/settings.c): stop network mode for a while without
+// saving anything; cr_net_boot() restarts it as saved. True once stopped.
+bool cr_net_pause(void)
+{
+    s_run = false;
+    for (int i = 0; i < 100 && s_task_alive; i++) vTaskDelay(pdMS_TO_TICKS(50));
+    s_ver++;
+    return !s_task_alive;
+}
+
 void cr_net_boot(void)
 {
     nvs_handle_t h;
@@ -856,4 +894,37 @@ void cr_net_print_status(void)
     int n = cr_net_status_text(b, sizeof b);
     fwrite(b, 1, n, stdout);
     printf("net: pong state %d host %d peer " MACSTR "\n", P.state, P.host, MAC2STR(P.peer));
+}
+
+// ---- Radar (main/radar.c) -------------------------------------------------------
+
+// Peers heard in the last STALE_MS, with their own heard lists. Returns how many.
+int32_t cr_net_peers(radar_peer_t *out, int32_t max)
+{
+    int64_t now = now_ms();
+    int n = 0;
+    taskENTER_CRITICAL(&s_mux);
+    for (int i = 0; i < PEERS && n < max; i++) {
+        peer_t *p = &s_peer[i];
+        if (!p->seen || now - p->seen > STALE_MS) continue;
+        radar_peer_t *o = &out[n++];
+        memcpy(o->mac, p->mac, 6);
+        memcpy(o->name, p->name, 13);
+        o->name[12] = 0;
+        o->kind = p->kind;
+        o->rssi = p->rssi;
+        o->their = p->their;
+        o->cm = p->cm;
+        o->age_ms = (int32_t)(now - p->seen);
+        o->nh = p->nh;
+        memcpy(o->h, p->h, sizeof o->h);
+    }
+    taskEXIT_CRITICAL(&s_mux);
+    return n;
+}
+
+void cr_net_me(uint8_t *mac)
+{
+    if (!s_me[0] && !s_me[1] && !s_me[2]) esp_read_mac(s_me, ESP_MAC_WIFI_STA);
+    memcpy(mac, s_me, 6);
 }
