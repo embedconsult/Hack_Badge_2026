@@ -72,8 +72,14 @@ module Inflate
     @@err
   end
 
+  # Internal RAM (fast) when a block that big is free, else PSRAM: with
+  # Wi-Fi, the robot VM and the 12 KiB shell stacks the largest internal
+  # block can be under the 32 KiB window, and the Etch-a-Sketch frame
+  # then failed to decode (PNG E_MEMORY, a white Sketch screen).
   def self.alloc(n : Int32) : UInt8*
-    LibIDF.heap_caps_malloc(n.to_u32!, 0x804_u32).as(UInt8*) # MALLOC_CAP_INTERNAL | 8BIT
+    p = LibIDF.heap_caps_malloc(n.to_u32!, 0x804_u32).as(UInt8*) # MALLOC_CAP_INTERNAL | 8BIT
+    p = LibIDF.heap_caps_malloc(n.to_u32!, 0x4_u32).as(UInt8*) if p.null? # any 8-bit heap (PSRAM)
+    p
   end
 
   # Allocates buffers and computes the RFC 1951 base/extra tables.
