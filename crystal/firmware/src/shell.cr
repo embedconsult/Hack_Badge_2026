@@ -500,6 +500,7 @@ module Shell
         i = i &+ 1
       end
       run_remote
+      RobotShell.poll(millis) # src/apps/robot_store.cr: `robot put` idle timeout
       LibIDF.vTaskDelay(ms_to_ticks(20_u32))
     end
   end

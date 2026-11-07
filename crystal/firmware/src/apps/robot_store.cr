@@ -107,6 +107,8 @@ module RobotShell
   @@len = 0
   @@over = false
   @@msg = Pointer(UInt8).null
+  @@last = 0 # millis of the last captured line
+  IDLE_MS = 30_000
 
   def self.capturing? : Bool
     @@slot >= 0
@@ -139,10 +141,17 @@ module RobotShell
     @@msg
   end
 
-  # A line while `robot put` is capturing; "." ends the source.
+  # A line while `robot put` is capturing; "." ends the source, "abort"
+  # drops it.
   def self.line(p : UInt8*, n : Int32) : Nil
+    @@last = millis
     if n == 1 && p[0] == 0x2E_u8
       finish
+      return
+    end
+    if Gfx.same_word?(p, n, "abort")
+      @@slot = -1
+      say("robot: put aborted, nothing saved\n")
       return
     end
     b = src_buf
@@ -157,6 +166,15 @@ module RobotShell
     end
     b[@@len &+ n] = 0x0A_u8
     @@len = @@len &+ n &+ 1
+  end
+
+  # Shell loop, every ~20 ms: a capture idle for IDLE_MS (console gone?) is
+  # dropped so later commands are not swallowed.
+  def self.poll(now : Int32) : Nil
+    return unless capturing?
+    return if now &- @@last < IDLE_MS
+    @@slot = -1
+    say("\nrobot: put timed out (30 s without a line), nothing saved\n> ")
   end
 
   def self.finish : Nil
@@ -242,7 +260,10 @@ module RobotShell
         @@slot = k
         @@len = 0
         @@over = false
-        say("robot: send the source, then a line with just .\n")
+        @@last = millis
+        say("(robot source for slot ")
+        say_int(k)
+        say("; end with a line '.'; 'abort' cancels)\n")
       elsif Shell.tok_is(1, "show")
         show(k)
       else
