@@ -206,7 +206,7 @@ module LinkUI
     if scr == SCR_LINK
       LibIDF.cr_net_set(!LibIDF.cr_net_on) if Games.pressed?(inp, Games::BTN_A)
       v = LibIDF.cr_net_version
-      if v != @@ver && now &- @@last >= 1500
+      if v != @@ver && now &- @@last >= 3000
         @@ver = v
         Shared.rendering = true
         draw_link
