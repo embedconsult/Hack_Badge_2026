@@ -936,6 +936,7 @@ module EPD
     @@quick = false
     @@diff_open = false
     @@diff_rows = HEIGHT
+    @@ink_win = false
   end
 
   # After an aborted refresh the COG is still running its waveform: no
@@ -1128,6 +1129,25 @@ module EPD
 
   # main.c:352-403 part_open: reset, register sequence, table, DC-DC, whole-
   # panel DUW/DRFW, both RAMs = what the film shows.
+  # Session timing registers (experiments, shell `reg`): 0x03 OSC second
+  # byte and 0x60 TCON, yigitabi's values by default.
+  @@x_osc = 0x11
+  @@x_tcon = 0x25
+
+  def self.x_regs(osc : Int32, tcon : Int32) : Nil
+    @@x_osc = osc
+    @@x_tcon = tcon
+    cog_stop if @@diff_open && !busy?
+  end
+
+  def self.x_osc : Int32
+    @@x_osc
+  end
+
+  def self.x_tcon : Int32
+    @@x_tcon
+  end
+
   def self.diff_open(kind : Int32 = LUT_DIFF) : Bool
     t0 = millis
     cog_stop if @@session_open
@@ -1138,7 +1158,7 @@ module EPD
     cmd1(0xD6_u8, 0x00_u8)
     cmd1(0xA7_u8, 0x10_u8); delay_ms(3)
     cmd1(0xA7_u8, 0x00_u8); delay_ms(11)
-    cmd(BOTH, 0x03_u8, 2, 0x00_u8, 0x11_u8)
+    cmd(BOTH, 0x03_u8, 2, 0x00_u8, @@x_osc.to_u8!)
     t = LEFT
     while t <= RIGHT
       cmd(t, 0x44_u8, 1, 0x00_u8)
@@ -1151,7 +1171,7 @@ module EPD
       cmd(t, 0xA7_u8, 1, 0x00_u8); delay_ms(11)
       t = t &+ 1
     end
-    cmd1(0x60_u8, 0x25_u8)
+    cmd1(0x60_u8, @@x_tcon.to_u8!)
     cmd(LEFT, 0x61_u8, 1, 0x01_u8)
     cmd1(0x02_u8, 0x00_u8)
     build_lutb(kind)
@@ -1309,6 +1329,12 @@ module EPD
       return -1 unless diff_open(LUT_INK)
     end
     t_up = millis
+    if @@ink_win
+      # back to the whole panel after windowed pulls
+      cmd(BOTH, 0x13_u8, 6, 0x00_u8, 0x3B_u8, 0x00_u8, 0x00_u8, 0x9F_u8, 0x02_u8)
+      cmd(BOTH, 0x90_u8, 4, 0x00_u8, 0x3B_u8, 0x00_u8, 0xA9_u8)
+      @@ink_win = false
+    end
     t = LEFT
     while t <= RIGHT
       ram_rw_full(t)
@@ -1326,6 +1352,54 @@ module EPD
     @@panel_ms = rc
     if rc < 0 || @@spi_fail
       log("EPD: ink pull failed, COG powered down", rc)
+      cog_stop
+      return -1
+    end
+    @@diff_n = @@diff_n &+ 1
+    @@session_images = @@session_images &+ 1
+    rc
+  end
+
+  # Windowed ink pull: the command planes' rows wy0..wy1 (4-aligned) go to
+  # both RAMs through a full-width DUW with RAM_RW at the first row (as the
+  # verified window mode 8), and the waveform scans only rows y0..y1
+  # (DRFW, 4-aligned, inside wy0..wy1). Every other RAM row must already
+  # hold command 0 (the caller rewrites the previous window's rows with
+  # zeros via wy0..wy1), so whatever else the scan touches is not driven.
+  @@ink_win = false
+
+  def self.refresh_ink_rows(cmd_new : UInt8*, cmd_old : UInt8*, y0 : Int32, y1 : Int32,
+                            wy0 : Int32, wy1 : Int32) : Int32
+    finish_aborted
+    @@spi_fail = false
+    if @@diff_open && (@@diff_n >= DIFF_SESSION || @@latched_kind != LUT_INK)
+      cog_stop
+    end
+    unless @@diff_open
+      return -1 unless diff_open(LUT_INK)
+    end
+    t_up = millis
+    t = LEFT
+    while t <= RIGHT
+      cmd(t, 0x13_u8, 6, 0x00_u8, (HALF_BYTES &- 1).to_u8!, (wy0 & 0xFF).to_u8!, wy0.unsafe_shr(8).to_u8!,
+        (wy1 & 0xFF).to_u8!, wy1.unsafe_shr(8).to_u8!)
+      cmd(t, 0x12_u8, 3, 0x00_u8, (wy0 & 0xFF).to_u8!, (@@otp[0x15] | wy0.unsafe_shr(8).to_u8!))
+      send_box(t, 0x10_u8, cmd_new, 0, HALF_BYTES &- 1, wy0, wy1)
+      cmd(t, 0x12_u8, 3, 0x00_u8, (wy0 & 0xFF).to_u8!, (@@otp[0x15] | wy0.unsafe_shr(8).to_u8!))
+      send_box(t, 0x11_u8, cmd_old, 0, HALF_BYTES &- 1, wy0, wy1)
+      cmd(t, 0x90_u8, 4, 0x00_u8, (HALF_BYTES &- 1).to_u8!, y0.unsafe_div(WIN_Y_UNIT).to_u8!, y1.unsafe_div(WIN_Y_UNIT).to_u8!)
+      t = t &+ 1
+    end
+    @@ink_win = true
+    @@upload_ms = millis &- t_up
+    if @@spi_fail
+      cog_stop
+      return -1
+    end
+    rc = trigger(false, FAST_TIMEOUT_MS)
+    @@panel_ms = rc
+    if rc < 0 || @@spi_fail
+      log("EPD: ink window pull failed, COG powered down", rc)
       cog_stop
       return -1
     end

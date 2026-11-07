@@ -240,6 +240,16 @@ module Shared
     @@upd_sk = v ? UPD_WIN : UPD_FULL
   end
 
+  @@ink_win = true # Sketch ink pulls scan only the stroke's rows (flag INK_WIN)
+
+  def self.ink_win? : Bool
+    @@ink_win
+  end
+
+  def self.ink_win=(v : Bool) : Nil
+    @@ink_win = v
+  end
+
   def self.upd(app : Int32) : Int32
     app == SCR_SKETCH ? @@upd_sk : (app == SCR_LIFE ? @@upd_li : (app == SCR_SNAKE ? @@upd_sn : UPD_FULL))
   end
@@ -1581,6 +1591,7 @@ module SkInk
   # passes), the rest has none; pending touches are dropped.
   def self.sync_from_canvas : Nil
     return unless ready?
+    @@pw0 = -1
     cv = Sketch.canvas
     tc = Sketch.touch
     i = 0
@@ -1667,9 +1678,33 @@ module SkInk
     any
   end
 
+  @@pw0 = -1 # rows of the previous windowed pull (both RAMs hold them)
+  @@pw1 = -1
+
   # One ink pull with the pending commands, then the planes are cleared.
+  # INK_WIN: only the command rows are written and scanned; the previous
+  # window's rows are rewritten too (zeros there now).
   def self.pull : Int32
-    rc = EPD.refresh_ink(@@cnew, @@cold)
+    rc = 0
+    if Shared.ink_win? && @@hi >= 0
+      u = EPD::WIN_Y_UNIT
+      y0 = @@lo.unsafe_div(EPD::ROW_BYTES).unsafe_div(u) &* u
+      y1 = @@hi.unsafe_div(EPD::ROW_BYTES).unsafe_div(u) &* u &+ u &- 1
+      y1 = EPD::HEIGHT &- 1 if y1 > EPD::HEIGHT &- 1
+      w0 = y0
+      w1 = y1
+      if @@pw0 >= 0
+        w0 = @@pw0 if @@pw0 < w0
+        w1 = @@pw1 if @@pw1 > w1
+      end
+      rc = EPD.refresh_ink_rows(@@cnew, @@cold, y0, y1, w0, w1)
+      @@pw0 = y0
+      @@pw1 = y1
+      log3("sketch: ink window rows y0 / y1 / written rows", y0, y1, w1 &- w0 &+ 1)
+    else
+      rc = EPD.refresh_ink(@@cnew, @@cold)
+      @@pw0 = -1
+    end
     if @@hi >= 0
       i = @@lo
       while i <= @@hi

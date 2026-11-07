@@ -240,6 +240,8 @@ module Shell
       EPD.quick_open = on
     elsif tok_is(1, "SK_RED_INK_PLAIN")
       Shared.red_ink_plain = on
+    elsif tok_is(1, "INK_WIN")
+      Shared.ink_win = on
     elsif tok_is(1, "SK_WIN")
       Shared.sk_win = on
     elsif tok_is(1, "SKIP_ZERO_RED")
@@ -337,6 +339,10 @@ module Shell
       flag
     elsif tok_is(0, "upd")
       upd
+    elsif tok_is(0, "reg")
+      # reg <osc> <tcon> (decimal): session timing experiment (EPD.x_regs)
+      EPD.x_regs(tok_int(1, EPD.x_osc), tok_int(2, EPD.x_tcon)) if @@nt >= 3
+      LibIDF.cr_log3("reg: osc / tcon / -".to_unsafe, EPD.x_osc, EPD.x_tcon, 0)
     elsif tok_is(0, "wifi")
       wifi
     elsif tok_is(0, "ota")
