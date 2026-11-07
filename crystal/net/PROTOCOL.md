@@ -173,6 +173,23 @@ hotspot happens to be on 1. `net ap on` makes the Crystal badge the network inst
   they cannot run at once; this mode's keys live in the `net` namespace (`ap`, `ap_pass`) and the
   Settings AP should stop network mode (`cr_net_set(false)`) before it starts and restart it after.
 
+## Radar (Crystal app, src/apps/radar.cr + main/radar.c)
+
+No new messages: the Radar uses what the `H` announce already carries.
+
+- **Me to a badge**: the RSSI I measure from it (max over 4 s, net.c) and the RSSI it reports for me in
+  its heard list, averaged in dB; FTM `cm` wins when present (badge os `BOSR` ranges).
+- **Badge to badge**: each badge's heard list (`mac`, `rssi`, `cm`) gives the links between the others,
+  so a badge that hears only some of the group still gets the whole set of pairwise distances.
+- Each link keeps an EMA of its RSSI (weight 0.35 per ~1 s update, forgotten after 30 s), converted with
+  `d = 10 ^ ((-45 - rssi) / 25)` metres.
+- **Map** (3+ badges incl. me): stress majorization of the distance matrix with me pinned at the origin
+  (a fresh trilateration start and a few shuffled starts against folds; the previous layout is kept
+  unless a new one is 30 % better), then rotated/mirrored onto the previous frame (2-D Procrustes) so
+  dots do not jump; first frame: lowest-MAC badge straight up, the next one to its right. Rotation and
+  mirror are not observable (one antenna, no compass), and RSSI distances are rough (RADAR_RESEARCH.md
+  in yigitabi5444's badge os, whose Radar inspired this).
+
 ## 7. Open experiments
 
 1. Direct ESP-NOW on the BeagleBadge: TX done (injection), RX blocked by the CC33xx firmware. Worth
