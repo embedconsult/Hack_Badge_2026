@@ -27,6 +27,8 @@
 #include "esp_random.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_heap_caps.h"
+#include "settings_html.h"
 
 bool cr_wifi_ap_start(const char *ssid, const char *pass, int32_t ch); // main/ota.c
 void cr_wifi_ap_stop(void);
@@ -87,59 +89,28 @@ static uint8_t nv_get_u8(const char *ns, const char *key, uint8_t dflt)
 
 // ---- HTML -------------------------------------------------------------------
 
-// Appends s HTML-escaped (only printable ASCII kept).
-static void put_esc(httpd_req_t *r, const char *s)
+// A whole page from PSRAM, sent in one piece (Content-Length).
+static void *grow(void *old, size_t n)
 {
-    char b[64];
-    int n = 0;
-    for (; *s; s++) {
-        const char *e = NULL;
-        char one[2] = {*s, 0};
-        switch (*s) {
-        case '&': e = "&amp;"; break;
-        case '<': e = "&lt;"; break;
-        case '>': e = "&gt;"; break;
-        case '"': e = "&quot;"; break;
-        case '\'': e = "&#39;"; break;
-        default: e = (*s >= 0x20 && *s <= 0x7E) ? one : ""; break;
-        }
-        size_t k = strlen(e);
-        if (n + k >= sizeof b) { httpd_resp_send_chunk(r, b, n); n = 0; }
-        memcpy(b + n, e, k);
-        n += k;
-    }
-    if (n) httpd_resp_send_chunk(r, b, n);
+    void *p = heap_caps_realloc(old, n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return p ? p : realloc(old, n);
 }
 
-static void put(httpd_req_t *r, const char *s) { httpd_resp_send_chunk(r, s, HTTPD_RESP_USE_STRLEN); }
-
-// HTML-escaped text for a <textarea> (keeps newlines and tabs).
-static void put_text(httpd_req_t *r, const char *s, int n)
+static esp_err_t send_page(httpd_req_t *r, html_t *h)
 {
-    char b[128];
-    int k = 0;
-    for (int i = 0; i < n; i++) {
-        char c = s[i];
-        const char *e = NULL;
-        char one[2] = {c, 0};
-        if (c == '&') e = "&amp;";
-        else if (c == '<') e = "&lt;";
-        else if (c == '>') e = "&gt;";
-        else e = (c == '\n' || c == '\t' || (c >= 0x20 && c <= 0x7E)) ? one : "";
-        size_t m = strlen(e);
-        if (k + m >= sizeof b) { httpd_resp_send_chunk(r, b, k); k = 0; }
-        memcpy(b + k, e, m);
-        k += m;
+    esp_err_t e;
+    if (h->oom || !h->p) {
+        e = httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
+    } else {
+        httpd_resp_set_type(r, "text/html");
+        httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+        e = httpd_resp_send(r, h->p, h->n);
+        if (e != ESP_OK) printf("settings: sending %d bytes failed (%d)\n", h->n, e);
     }
-    if (k) httpd_resp_send_chunk(r, b, k);
+    heap_caps_free(h->p);
+    h->p = NULL;
+    return e;
 }
-
-static const char k_head[] =
-    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Badge settings</title><style>body{font:16px system-ui,sans-serif;max-width:32em;margin:auto;padding:1em}"
-    "fieldset{border:1px solid #bbb;border-radius:8px;margin:0 0 1em}input{font:inherit;width:100%;box-sizing:border-box;"
-    "padding:.4em;margin:.2em 0 .6em}input[type=checkbox]{width:auto}button{font:inherit;background:#b00;color:#fff;"
-    "border:0;border-radius:8px;padding:.7em 1.4em}small{color:#666}</style><h2>Badge settings</h2>";
 
 static void name_line(int i, char *out)
 {
@@ -155,34 +126,11 @@ static esp_err_t h_root(httpd_req_t *r)
     name_line(0, l0);
     name_line(1, l1);
     nv_get_str("ota", "ssid", ssid, sizeof ssid);
-    bool net = nv_get_u8("net", "on", 0);
-    httpd_resp_set_type(r, "text/html");
-    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    put(r, k_head);
-    if (s_msg[0]) { put(r, "<p><b>"); put_esc(r, s_msg); put(r, "</b></p>"); }
-    put(r, "<form method=post action=/save><fieldset><legend>Nametag</legend>Line 1<input name=n1 maxlength=12 value=\"");
-    put_esc(r, l0);
-    put(r, "\">Line 2<input name=n2 maxlength=12 value=\"");
-    put_esc(r, l1);
-    put(r, "\"><small>Up to 12 characters each (A-Z, digits, punctuation).</small></fieldset>"
-           "<fieldset><legend>Wi-Fi the badge joins</legend><small>Used by online update and network mode.</small><br>"
-           "SSID<input name=ssid maxlength=32 value=\"");
-    put_esc(r, ssid);
-    put(r, "\">Password<input name=pass type=password maxlength=63 autocomplete=off placeholder='");
-    put(r, ssid[0] ? "(unchanged if empty)" : "");
-    put(r, "'><label><input type=checkbox name=open value=1> Open network (no password)</label></fieldset>"
-           "<fieldset><legend>Network mode</legend><label><input type=checkbox name=net value=1");
-    if (net) put(r, " checked");
-    put(r, "> Badge link on (UDP + ESP-NOW; starts when you leave Settings)</label><br>"
-           "<label><input type=checkbox name=aj value=1");
-    if (cr_tn_autojoin()) put(r, " checked");
-    put(r, "> Join robot tournaments from nearby badges</label><br><small>When the badge shows Home or ROBOTS, "
-           "or nobody has touched it for a minute; otherwise the top bar says TOURNEY NEARBY.</small></fieldset>"
-           "<button>Save</button></form>");
-    put(r, "<p><a href=/robots>Robots</a>: battle robots for the ROBOTS app &middot; "
-           "<a href=/compete>How to compete</a>: robots, snake bots, tournaments</p>");
-    put(r, NULL);
-    return ESP_OK;
+    html_root_t v = {s_msg, l0, l1, ssid, nv_get_u8("net", "on", 0), cr_tn_autojoin()};
+    html_t h;
+    html_init(&h, grow);
+    html_root(&h, &v);
+    return send_page(r, &h);
 }
 
 static int hexv(char c)
@@ -294,47 +242,14 @@ static esp_err_t h_save(httpd_req_t *r)
 
 // ---- robots (ROBOTS app) -----------------------------------------------------
 
-static const char k_rhead[] =
-    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>Badge robots</title><style>body{font:16px system-ui,sans-serif;max-width:48em;margin:auto;padding:1em}"
-    "textarea{width:100%;box-sizing:border-box;height:28em;font:14px ui-monospace,monospace}"
-    "select,button{font:inherit;margin:.3em 0}button{background:#b00;color:#fff;border:0;border-radius:8px;"
-    "padding:.6em 1.2em}td{padding:.1em .6em}small{color:#666}</style><h2>Robots</h2>"
-    "<p><small>Robots in the <a href='https://jkridner.beagleboard.io/crystal-robots/'>crystal-robots</a> language "
-    "(same as the website). Saved robots join the ROBOTS app's line-ups; the shell's "
-    "<code>robot run</code> picks a battle. <a href=/compete>How to compete</a></small></p>";
-
 #define ROBOT_BODY_MAX 30000
 
-// The robots page: slot list, then the editor (src[0, n]) for `slot`.
-static void robots_page(httpd_req_t *r, int slot, const char *src, int n, const char *msg)
+static esp_err_t robots_page(httpd_req_t *r, int slot, const char *src, int n, const char *msg)
 {
-    char name[17], line[96];
-    httpd_resp_set_type(r, "text/html");
-    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
-    put(r, k_rhead);
-    if (msg && msg[0]) { put(r, "<p><b>"); put_esc(r, msg); put(r, "</b></p>"); }
-    put(r, "<table>");
-    for (int k = 0; k < cr_robot_slots(); k++) {
-        int len = cr_robot_len(k);
-        if (len >= 0) cr_robot_name(k, name);
-        snprintf(line, sizeof line, "<tr><td>Slot %d<td>", k);
-        put(r, line);
-        if (len < 0) put(r, "<i>empty</i>");
-        else { put_esc(r, name[0] ? name : "(no name)"); snprintf(line, sizeof line, " <small>%d bytes</small>", len); put(r, line); }
-        snprintf(line, sizeof line, "<td><a href='/robots?slot=%d'>%s</a>", k, len < 0 ? "write" : "edit");
-        put(r, line);
-    }
-    put(r, "</table><form method=post action=/robots>Slot <select name=slot>");
-    for (int k = 0; k < cr_robot_slots(); k++) {
-        snprintf(line, sizeof line, "<option value=%d%s>%d</option>", k, k == slot ? " selected" : "", k);
-        put(r, line);
-    }
-    put(r, "</select><textarea name=src spellcheck=false placeholder='main(\"Name\") do&#10;  drive(rand(360), 50)&#10;end'>");
-    if (src && n > 0) put_text(r, src, n);
-    put(r, "</textarea><button>Check and save</button> <small>An empty editor empties the slot.</small></form>"
-           "<p><a href=/>Settings</a></p>");
-    put(r, NULL);
+    html_t h;
+    html_init(&h, grow);
+    html_robots(&h, slot, src, n, msg);
+    return send_page(r, &h);
 }
 
 static esp_err_t h_robots(httpd_req_t *r)
@@ -348,17 +263,16 @@ static esp_err_t h_robots(httpd_req_t *r)
     uint8_t *src = malloc(max + 1);
     if (!src) return httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "out of memory");
     int n = cr_robot_read(slot, src, max);
-    robots_page(r, slot, (const char *)src, n < 0 ? 0 : n, NULL);
+    esp_err_t e = robots_page(r, slot, (const char *)src, n < 0 ? 0 : n, NULL);
     free(src);
-    return ESP_OK;
+    return e;
 }
 
 static esp_err_t h_robots_save(httpd_req_t *r)
 {
     char msg[160], v[8];
     if (r->content_len > ROBOT_BODY_MAX) {
-        robots_page(r, 0, NULL, 0, "Not saved: too long");
-        return ESP_OK;
+        return robots_page(r, 0, NULL, 0, "Not saved: too long");
     }
     int max = cr_robot_max();
     char *body = malloc(r->content_len + 1);
@@ -394,60 +308,17 @@ static esp_err_t h_robots_save(httpd_req_t *r)
         else
             snprintf(msg, sizeof msg, "Not saved: flash error");
     }
-    robots_page(r, slot, src, n < 0 ? 0 : n, msg);
+    esp_err_t e = robots_page(r, slot, src, n < 0 ? 0 : n, msg);
     free(src);
-    return ESP_OK;
+    return e;
 }
 
 // ---- how to compete (static) ----------------------------------------------------
 
-static const char k_compete[] =
-    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-    "<title>How to compete</title><style>body{font:16px system-ui,sans-serif;max-width:44em;margin:auto;padding:1em}"
-    "code,pre{font:14px ui-monospace,monospace;background:#f3f3f3}pre{padding:.6em;overflow:auto}"
-    "td{padding:.15em .5em;vertical-align:top}h3{margin-top:1.4em}</style>"
-    "<h2>How to compete</h2><p>Two games on this badge, two ways to win: write a <b>robot</b> "
-    "(ROBOTS) or a <b>snake bot</b> (SNAKES).</p>"
-    "<h3>ROBOTS: battle robots</h3>"
-    "<p>Robots are small programs in the <a href='https://jkridner.beagleboard.io/crystal-robots/'>crystal-robots</a> "
-    "language (Ruby-like, after CROBOTS). Try them on that website: the badge plays every battle exactly "
-    "like it. Then paste yours on <a href=/robots>/robots</a> (checked and saved to a slot).</p>"
-    "<pre>global(dir, 0)\n\nmain(\"Spinner\") do\n  while true\n    r = scan(dir, 10)    # anyone within 10 deg?\n"
-    "    if r > 0 &amp;&amp; r &lt;= 700\n      cannon(dir, r)     # fire at that range\n    else\n      dir = (dir + 20) % 360\n"
-    "    end\n    if damage &gt; 50\n      drive(rand(360), 40)\n    end\n  end\nend</pre>"
-    "<table><tr><td><code>scan(deg, res)</code><td>distance (m) to the nearest robot within deg &plusmn; res (res &le; 10), 0 if none"
-    "<tr><td><code>cannon(deg, range)</code><td>fire a missile (range &le; 700 m, two in the air at most); 1 fired, 0 not"
-    "<tr><td><code>drive(deg, speed)</code><td>speed 0..100 %; the heading only changes at 50 % or less"
-    "<tr><td><code>damage speed loc_x loc_y</code><td>own damage (100: destroyed), speed, position (field 1000 x 1000 m, 0,0 lower left)"
-    "<tr><td><code>rand(n) sqrt(x)</code><td>0..n-1; square root"
-    "<tr><td><code>sin cos tan atan</code><td>degrees, scaled by 100000 (<code>atan(100000 * y / x)</code>)"
-    "<tr><td><code>puts x</code> <code>sleep</code><td>show a value on the badge; wait"
-    "<tr><td><code>global(name, v)</code><td>a global with a start value; <code>NAME = 3</code> constants; <code>def f(a) ... end</code>"
-    "<tr><td>control<td><code>if/elsif/else</code>, <code>while</code>, <code>until</code>, <code>case/when</code>, "
-    "<code>break</code>, <code>return</code>; <code>main(\"Name\") do ... end</code> is the robot</table>"
-    "<p>0 deg is east, 90 north. Walls and collisions hurt; missiles explode where they land.</p>"
-    "<p><b>Tournaments</b>: on ROBOTS press B after a battle (<b>TOURNEY</b>), or shell <code>robot tourney</code>: every "
-    "saved robot and the 10 built-ins in a round robin of 4-robot battles, 3 points for the last one standing, 1 for "
-    "surviving to the cycle limit, then a final of the top four. With network mode on and other badges around, "
-    "<b>LINK TOURNEY</b> (<code>robot tourney net</code>) pulls in every badge's saved robots; every badge plays it "
-    "and cross-checks. <code>robot standings [net]</code> prints the table.</p>"
-    "<h3>SNAKES: snake bots over HTTP</h3>"
-    "<p>A snake bot is a small web server you run (laptop, phone, Pi, cloud) that speaks the open snake-bot API: "
-    "<code>GET /</code> (info), <code>POST /start</code>, <code>POST /move</code> answering "
-    "<code>{\"move\": \"up|down|left|right\", \"shout\": \"...\"}</code> within 500 ms, <code>POST /end</code>. "
-    "The board is 11 x 11 (y up), standard rules: eat to grow and heal, avoid walls, bodies and longer heads. "
-    "Existing Battlesnake bots work as they are. API, rules and an example bot in Python: "
-    "<a href='https://github.com/embedconsult/Hack_Badge_2026/blob/crystal/crystal/net/snakes/README.md'>"
-    "crystal/net/snakes/README.md</a> in the badge repo.</p>"
-    "<p>Bring it: <code>snakes add &lt;name&gt; http://&lt;ip&gt;:&lt;port&gt;</code> on the badge's USB shell, then "
-    "<code>snakes play</code>, or <code>snakes league 10</code>: ten games against the other bots and the house snake, "
-    "with an Elo table in the SNAKES lobby (bots are matched by name).</p>"
-    "<p><a href=/>Settings</a> &middot; <a href=/robots>Robots</a></p>";
-
 static esp_err_t h_compete(httpd_req_t *r)
 {
     httpd_resp_set_type(r, "text/html");
-    return httpd_resp_send(r, k_compete, sizeof k_compete - 1);
+    return httpd_resp_send(r, html_compete, html_compete_len);
 }
 
 // Phones probe these to detect a captive portal: answer with the page.

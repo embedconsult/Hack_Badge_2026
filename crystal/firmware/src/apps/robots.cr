@@ -786,8 +786,12 @@ module RobotsApp
       x = draw_bytes(x, y, Tour.name(c), nl, EPD::BLACK, 2)
       Gfx.text(x, y, Tour.final_winner >= 0 ? " (WON THE FINAL)" : " (FINAL DRAWN: TOP OF THE TABLE)", 2)
     end
-    draw_table(y &+ 30, @@tnet ? 20 : 21)
-    draw_link_line(624) if @@tnet
+    if @@tnet # the verdict: did every badge get the same tournament?
+      draw_link_line(y &+ 24)
+      draw_table(y &+ 54, 19)
+    else
+      draw_table(y &+ 30, 21)
+    end
     Gfx.text(24, 650, "PTS: 3 A WIN (LAST ONE STANDING), 1 A DRAW (ALIVE AT THE CYCLE LIMIT). DMG: AVERAGE DAMAGE", 1)
   end
 

@@ -76,6 +76,8 @@ static void put16(uint8_t *p, uint16_t v) { p[0] = v, p[1] = v >> 8; }
 static uint32_t get32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t get16(const uint8_t *p) { return p[0] | p[1] << 8; }
 
+static void print_verdict(void);
+
 static void event(int what)
 {
     if (s_io && s_io->event) s_io->event(what);
@@ -294,7 +296,7 @@ static void finish_org(void)
     for (int k = 1; k < T.nb; k++)
         if (!T.b[k].gone) send_w(T.b[k].addr);
     rn_unpin_all();
-    printf("tourney: %08x done\n", (unsigned)T.tid);
+    print_verdict();
     event(TN_EV_DONE);
 }
 
@@ -480,6 +482,7 @@ static void part_rx(rn_addr_t from, const uint8_t mac[6], char sub, const uint8_
         T.st = S_DONE;
         rn_unpin_all();
         printf("tourney: %08x standings from %s\n", (unsigned)T.tid, T.b[0].name);
+        print_verdict();
         event(TN_EV_DONE);
     }
 }
@@ -692,8 +695,16 @@ int tn_status(char *buf, int max)
             else if (a == 2) none++;
             else if (diff < 0) diff = i;
         }
-        if (diff >= 0) {
-            snprintf(buf, max, "%s got a DIFFERENT result!", T.b[diff].name[0] ? T.b[diff].name : "a badge");
+        if (diff >= 0) { // every badge that disagrees with the organizer, by name
+            int k = 0;
+            for (int i = 0; i < nb && k < max - 1; i++) {
+                int a = T.w[10 + i];
+                if (T.role == R_PART && i == T.me) a = T.mine_done && T.my_hash == official ? 1 : T.mine_done ? 0 : 2;
+                if (a != 0) continue;
+                const char *nm = i == T.me ? "this badge" : T.b[i].name[0] ? T.b[i].name : "a badge";
+                k += snprintf(buf + k, max - k, "%s%s", k ? ", " : "", nm);
+            }
+            if (k < max - 1) snprintf(buf + k, max - k, " got a DIFFERENT result!");
             return TN_DIFFERENT;
         }
         if (none) snprintf(buf, max, "%d badges got the same result, %d sent none", same, none);
@@ -703,4 +714,12 @@ int tn_status(char *buf, int max)
     }
     buf[0] = 0;
     return TN_IDLE;
+}
+
+// The verdict on the console once the standings are in (both roles).
+static void print_verdict(void)
+{
+    char b[96];
+    tn_status(b, sizeof b);
+    printf("tourney: %08x VERDICT: %s\n", (unsigned)T.tid, b);
 }
