@@ -217,7 +217,7 @@ describe "RB battle" do
         RB.start(names.size, seed.to_u64, 500_000)
         RB.run
         expect = String.build do |io|
-          io << "cycles " << RB.cycles << " winner " << RB.winner << '\n'
+          io << "cycles " << RB.cycles << " winner " << RB.winner << " hash " << RB.result_hash << '\n'
           names.size.times do |r|
             io << "robot " << r << " damage " << RB.damage(r) << " x " << RB.x(r) << " y " << RB.y(r)
             io << " restarts " << RB.restarts(r) << " cycles " << RB.robot_cycles(r) << " failed "

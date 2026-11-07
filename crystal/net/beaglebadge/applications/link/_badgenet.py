@@ -122,6 +122,7 @@ class Link:
         self.on_reply = None   # f(src_mac, status, seq, text)
         self.on_command = None  # f(src_mac, line, addr) -> status (simulators)
         self.on_tunnel = None  # f(bridge_mac, src_mac, rssi, payload)
+        self.on_packet = None  # f(type, src_mac, body, addr): other types (robot battles B K G J Z)
         self.next_hello = 0
         self.rx_count = 0
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -182,7 +183,7 @@ class Link:
             self.next_hello = now + 1000
         for _ in range(32):
             try:
-                data, addr = self.sock.recvfrom(512)
+                data, addr = self.sock.recvfrom(2048)
             except Exception:
                 break
             self._rx(data, addr, now)
@@ -243,6 +244,11 @@ class Link:
                 self.on_tunnel(src, mac, rssi, payload)
             if payload[:4] == b"PONG" and self.on_pong and len(payload) >= 25:
                 self.on_pong(mac, payload[:25], src)
+        elif self.on_packet:
+            p = self.peers.get(src)
+            if p is not None:
+                p.seen = now
+            self.on_packet(t, src, bytes(b), addr)
 
     def live_peers(self, kinds=None):
         now = ticks()

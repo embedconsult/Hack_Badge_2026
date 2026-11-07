@@ -2,12 +2,22 @@
 """Pretend to be a Crystal Supercon badge (and one bridged badge os badge) on
 the badge link protocol, for testing the BeagleBadge apps without the ESP32.
 
-    python3 sim_badge.py [seconds] [--port 4627]
+    python3 sim_badge.py [seconds] [--port 4627] [--name SimCrystal] [--bcast host:port]
+                         [--engine path/to/rb] [--challenge BADGE robot.cr robot.cr [...]] [--seed N]
 
 Binds its own port (default 4627, so it can run next to a launcher app on
 the same BeagleBadge; peers reply to the source address), announces to the
-broadcast port 4626, accepts remote commands (prints them), and plays Pong
-with a simple AI paddle when it gets a `pong` command.
+broadcast port 4626 (or --bcast), accepts remote commands (prints them), and
+plays Pong with a simple AI paddle when it gets a `pong` command.
+
+Robot battles (robonet.py; PROTOCOL.md B K G J Z): it answers challenges
+(a badge's `robot challenge <its name> ...`), receiving the robots it lacks,
+and with --challenge it challenges the badge whose name starts with BADGE
+(or whose MAC ends with those hex digits) to a battle of the robot files.
+With --engine (the badge's own engine built for this machine:
+crystal/firmware/test/robonet/run.sh builds it as test/robonet/bin/rb) it
+simulates the battle too and compares its result with the badge's; it
+exits 0 on the same result, 3 on a different one, 4 on a failure.
 """
 import os
 import sys
@@ -19,22 +29,48 @@ for d in (os.path.join(HERE, "beaglebadge", "applications", "link"), "/opt/badge
         sys.path.insert(0, d)
         break
 import _badgenet as bn  # noqa: E402
+sys.path.insert(0, HERE)
+import robonet  # noqa: E402
 
 secs = 120.0
 port = 4627
+name = "SimCrystal"
+bcast = None
+engine = None
+challenge = None   # (badge, [files])
+seed = None
 args = sys.argv[1:]
 while args:
     a = args.pop(0)
     if a == "--port":
         port = int(args.pop(0))
+    elif a == "--name":
+        name = args.pop(0)
+    elif a == "--bcast":
+        h, pp = args.pop(0).rsplit(":", 1)
+        bcast = (h, int(pp))
+    elif a == "--engine":
+        engine = args.pop(0)
+    elif a == "--seed":
+        seed = int(args.pop(0))
+    elif a == "--challenge":
+        badge = args.pop(0)
+        files = []
+        while args and not args[0].startswith("--"):
+            files.append(args.pop(0))
+        challenge = (badge, files)
     else:
         secs = float(a)
 
-ME = bytes.fromhex("f412fa000001")      # fake Crystal badge
+ME = bytes.fromhex("f412fa%06x" % (port & 0xFFFFFF))  # fake Crystal badge
 OS_MAC = bytes.fromhex("f412fa0000aa")  # fake badge os badge behind it
-link = bn.Link(name="SimCrystal", kind=bn.K_CRYSTAL,
+link = bn.Link(name=name, kind=bn.K_CRYSTAL,
                caps=bn.CAP_REMOTE | bn.CAP_PONG | bn.CAP_BRIDGE | bn.CAP_SKETCH,
                mac=ME, port=port)
+if bcast:
+    link.bcast = bcast
+robots = robonet.RoboNet(lambda addr, t, body: link.send(addr, t, body), engine=engine)
+link.on_packet = lambda t, src, body, addr: robots.rx(src, t, body, addr)
 state = {"screen": 0, "name": "Jason|Kridner"}
 link.screen = 0
 pong_peer = {"addr": None}
@@ -64,6 +100,8 @@ def on_command(src, line, addr):
         pong.pair_now(src, bn.ticks())
         state["screen"] = 7
         print("sim: pong paired, host =", pong.host, flush=True)
+    elif w[0] == "robot" and (len(w) == 1 or w[1] in ("list", "run")):
+        pass
     elif w[0] not in ("press", "hold", "colour", "knob", "stroke", "status", "clean"):
         return 1
     link.screen = state["screen"]
@@ -80,7 +118,19 @@ link.on_pong = on_pong
 
 end = time.time() + secs
 last_os = 0
+sources = [open(f, "rb").read() for f in challenge[1]] if challenge else []
+challenged = False
 while time.time() < end:
+    robots.tick()
+    if challenge and not challenged:
+        for p in link.live_peers((bn.K_CRYSTAL, bn.K_BEAGLE)):
+            if p.addr and (p.name.lower().startswith(challenge[0].lower()) or
+                           bn.mac_str(p.mac).replace(":", "").endswith(challenge[0].lower())):
+                robots.challenge(p.addr, p.mac, sources, seed or (int(time.time()) & 0x7FFFFFFF) | 1)
+                challenged = True
+                break
+    if challenge and robots.verdict:
+        break
     now = bn.ticks()
     # we run on the BeagleBadge itself: "hear" its wlan0 MAC
     link.heard_list = [(bn.my_mac(), -52 - (now // 3000) % 12, -1)]
@@ -99,4 +149,7 @@ while time.time() < end:
         body += bytes((1,)) + ME + bytes(((-61) & 0xFF, 0xFF, 0xFF))
         link.sock.sendto(b"BLK" + bytes((1, ord("H"), 0)) + OS_MAC + body, link.bcast)
     time.sleep(0.01)
-print("sim: done, rx", link.rx_count, "pong state", pong.state, "score", pong.g[6:8])
+print("sim: done, rx", link.rx_count, "pong state", pong.state, "score", pong.g[6:8],
+      "robots", robots.verdict)
+if challenge:
+    sys.exit(0 if robots.verdict == "same" else 3 if robots.verdict == "different" else 4)

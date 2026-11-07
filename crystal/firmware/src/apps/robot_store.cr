@@ -9,6 +9,10 @@
 #   robot show <slot> | robot del <slot>
 #   robot run <r1> <r2> [r3] [r4] [@seed]  r = a slot number or a built-in
 #                                 name (sniper, rook, ...); opens ROBOTS
+#   robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]
+#                                 the same battle on this badge and another
+#                                 one (name or last MAC digits, network mode
+#                                 on); both compare their results
 
 require "../robots/battle"
 require "../robots/roster"
@@ -22,6 +26,13 @@ lib LibIDF
   fun cr_robot_name(k : Int32, out : UInt8*) : Bool
   fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
   fun vTaskDelay(ticks : UInt32) : Void
+  # main/net.c + main/robonet.c: badge-to-badge battles
+  fun cr_rn_add(src : UInt8*, n : Int32) : Int32
+  fun cr_rn_read(i : Int32, buf : UInt8*, max : Int32) : Int32
+  fun cr_rn_challenge(name : UInt8*, nl : Int32, idx : Int32*, n : Int32, seed : UInt32, limit : UInt32) : Int32
+  fun cr_rn_take_match(id : UInt32*, seed : UInt32*, limit : UInt32*, n : Int32*, idx : Int32*) : Int32
+  fun cr_rn_result(id : UInt32, cycles : UInt32, winner : Int32, n : Int32, dmg : UInt8*, hash : UInt32) : Void
+  fun cr_rn_status(buf : UInt8*, max : Int32) : Int32
   fun cr_print(s : UInt8*) : Void
 end
 
@@ -42,6 +53,7 @@ end
 
 module RobotStore
   CODE_SLOT = 100 # line-up code of slot k: CODE_SLOT + k; built-ins: roster index
+  CODE_NET  = 200 # robonet cache entry i: CODE_NET + i (badge-to-badge battles)
 
   @@buf = Pointer(UInt8).null
 
@@ -73,7 +85,12 @@ module RobotStore
   def self.load(r : Int32, c : Int32) : Bool
     RobotLock.take
     ok = false
-    if c >= CODE_SLOT
+    if c >= CODE_NET
+      b = buf
+      n = LibIDF.cr_rn_read(c &- CODE_NET, b, RL::SRC_MAX)
+      n = 0 if n < 0
+      ok = RB.load(r, b, n)
+    elsif c >= CODE_SLOT
       b = buf
       n = LibIDF.cr_robot_read(c &- CODE_SLOT, b, RL::SRC_MAX)
       n = 0 if n < 0
@@ -204,6 +221,48 @@ module RobotShell
     end
   end
 
+  # Hand the robots to robonet and challenge the badge named by token 2.
+  def self.challenge(n : Int32, seed : Int32) : Nil
+    @@idx = game_alloc(4 &* 4).as(Int32*) if @@idx.null?
+    idx = @@idx
+    k = 0
+    while k < n
+      c = @@codes[k]
+      i = -1
+      if c >= RobotStore::CODE_SLOT
+        b = src_buf
+        len = LibIDF.cr_robot_read(c &- RobotStore::CODE_SLOT, b, RL::SRC_MAX)
+        i = LibIDF.cr_rn_add(b, len) if len >= 0
+      else
+        s = Roster.source(c)
+        i = LibIDF.cr_rn_add(s.to_unsafe, s.bytesize)
+      end
+      if i < 0
+        say("robot: cannot send robot ")
+        say_int(k &+ 1)
+        say("\n")
+        return
+      end
+      idx[k] = i
+      k = k &+ 1
+    end
+    seed = (millis & 0x7FFFFFFF) | 1 if seed <= 0
+    r = LibIDF.cr_rn_challenge(Shell.tok_ptr(2), Shell.tok_len(2), idx, n, seed.to_u32!, RB::CYCLE_LIMIT.to_u32!)
+    if r == 0
+      say("robot: challenge sent (seed ")
+      say_int(seed)
+      say("); ROBOTS opens on both badges when they agree\n")
+    elsif r == -2
+      say("robot: a badge-to-badge battle is still going on\n")
+    elsif r == -3
+      say("robot: no such badge on the link (net status lists them)\n")
+    elsif r == -4
+      say("robot: network mode is off (net on)\n")
+    else
+      say("robot: cannot challenge\n")
+    end
+  end
+
   def self.list : Nil
     say("slots:\n")
     k = 0
@@ -270,16 +329,28 @@ module RobotShell
         say(LibIDF.cr_robot_write(k, src_buf, 0, Pointer(UInt8).null) ? "robot: slot emptied\n" : "robot: failed\n")
       end
     elsif Shell.tok_is(1, "run")
-      run
+      run(false)
+    elsif Shell.tok_is(1, "challenge")
+      run(true)
     else
       say("usage: robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
+      say("       robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]\n")
     end
   end
 
-  def self.run : Nil
+  @@codes = Pointer(Int32).null
+  @@idx = Pointer(Int32).null
+
+  # `robot run` (vs = false) or `robot challenge <badge>` (vs = true).
+  def self.run(vs : Bool) : Nil
+    @@codes = game_alloc(4 &* 4).as(Int32*) if @@codes.null?
     n = 0
     seed = 0
-    i = 2
+    i = vs ? 3 : 2
+    if vs && Shell.tokens < 3
+      say("usage: robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]\n")
+      return
+    end
     while i < Shell.tokens
       p = Shell.tok_ptr(i)
       if p[0] == 0x40_u8 # @seed
@@ -319,7 +390,7 @@ module RobotShell
           say("robot: at most 4 robots\n")
           return
         end
-        RobotsApp.request(n, c)
+        @@codes[n] = c
         n = n &+ 1
       end
       i = i &+ 1
@@ -327,6 +398,12 @@ module RobotShell
     if n < 2
       say("robot: a battle needs 2 to 4 robots\n")
       return
+    end
+    return challenge(n, seed) if vs
+    k = 0
+    while k < n
+      RobotsApp.request(k, @@codes[k])
+      k = k &+ 1
     end
     RobotsApp.request_run(n, seed)
     id = Apps.find("ROBOTS".to_unsafe, 6)

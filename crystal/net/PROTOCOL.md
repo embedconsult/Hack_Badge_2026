@@ -96,8 +96,11 @@ shell task so only the main task ever drives the e-paper):
 | `pong` | go to the PONG screen and pair with the sender at once (no button dance) |
 | `pong seek` | go to the PONG screen and start badge os pairing, as if User A was pressed there |
 | `status` | logs status on the badge console (reply is just ok) |
+| `robot` / `robot list` | lists the robot slots and built-in robots on the badge console |
+| `robot run <r1> <r2> [r3] [r4] [@seed]` | a robot battle on the ROBOTS screen (slot numbers or built-in names) |
 
-Everything else (`wifi`, `ota`, `reboot`, `net`, `dump`, `flag`, `upd`) is refused from the network.
+Everything else (`wifi`, `ota`, `reboot`, `net`, `dump`, `flag`, `upd`, and `robot put/del/challenge`) is
+refused from the network.
 Remote control is only active while the badge has network mode on (`net on`, or the LINK screen).
 
 ### `P` pong (unicast; `P_PAIR` broadcast)
@@ -129,6 +132,56 @@ Body: `mac[6]`, `rssi` int8, then an ESP-NOW payload (<= 200 bytes).
   broadcast). The frame leaves with the **bridge's** MAC, so a BeagleBadge playing Pong with a badge os
   badge through a bridge uses the bridge's MAC as its identity inside `pkt_t` (`peer` fields, host
   election). Only one tunnelled game per bridge.
+
+### Robot battles: `G` challenge, `J` answer, `B` source chunk, `K` chunk ack, `Z` result (unicast)
+
+Badge-to-badge battles of the ROBOTS app (crystal-robots robots; badge code: `main/robonet.c`,
+Python: `crystal/net/robonet.py`). Nothing of the battle itself goes over the air: **both badges
+simulate it** with the same engine (it is deterministic: same robot sources in the same order, same
+seed and cycle limit give the same battle), then exchange results to cross-check. Robots are named by
+CRC-32 (zlib/IEEE) and length of their source, so a badge that already has a robot (a built-in, or
+from an earlier battle; the badge keeps 8 sources) is not sent it again. All numbers little endian;
+seeds are below 2^31.
+
+| Type | Body |
+|---|---|
+| `G` challenge | `id` u32 (random), `seed` u32, `limit` u32 (CROBOTS cycles, normally 500000), `n` u8 (2..4), then `n` x {`crc` u32, `len` u16}: the robots in battle order |
+| `J` answer to `G` | `id` u32, `status` u8 (0 accepted, 1 missing robots, 2 busy), `missing` u8 (bit k = robot k, for status 1) |
+| `B` source chunk | `crc` u32, `len` u16 (whole source, <= 8160), `off` u16 (multiple of 512), then `min(512, len - off)` source bytes |
+| `K` chunk ack | `crc` u32, `off` u16, `status` u8 (0 stored, 1 refused) |
+| `Z` result | `id` u32, `cycles` u32, `winner` i8 (robot index, -1 none), `n` u8, `damage` n x u8, `hash` u32, `have` u8 (1 = I have your `Z`) |
+
+Flow (the challenger is A):
+
+1. A sends `G` (every 400 ms until answered, 15 tries). B answers `J`: 0 if it has every robot and is
+   free, 1 with the bit mask of the robots it lacks, 2 if a battle is going on.
+2. On `J` 1, A sends the missing sources as `B` chunks, one at a time, each repeated every 400 ms
+   until B's matching `K`; then `G` again. B assembles the chunks and keeps a source when its CRC-32
+   checks out.
+3. On `J` 0 both badges switch to ROBOTS and play the battle (the Crystal badge: the same as
+   `robot run`, with the given seed and limit).
+4. When its battle ends, each badge sends `Z` and repeats it every second until it has the peer's `Z`.
+   A badge answers a `Z` whose `have` is 0 with its own `Z`. With both, each compares cycles, winner,
+   damages and `hash` (FNV-1a 32 of cycles, robot count, and per robot x, y, damage, restarts,
+   cycles run, active, failed: `RB.result_hash` in `src/robots/battle.cr`) and shows
+   "<peer> got the same result" or "a DIFFERENT result!".
+
+On the Crystal badge: `robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]` in the USB shell (network
+mode on; `<badge>` = the start of its announced name, or the last hex digits of its MAC). Host test:
+`crystal/firmware/test/robonet/run.sh` runs the badge's `robonet.c` against `sim_badge.py` over UDP
+on localhost (both directions, a peer with a different result, 30 % packet loss).
+
+On a BeagleBadge, against a real Supercon badge:
+
+```sh
+# the badge engine for the BeagleBadge (aarch64): RB_STATIC=1 crystal/firmware/test/robonet/run.sh
+# builds crystal/firmware/test/robonet/bin/rb statically; copy it and the robot files over, then
+python3 sim_badge.py 120 --name Beagle --engine ./rb                      # answer: badge runs `robot challenge Beagle sniper rook`
+python3 sim_badge.py 120 --name Beagle --engine ./rb --challenge <badge> sniper.cr rook.cr --seed 42
+```
+
+`sim_badge.py` prints each step and the verdict (exit 0 same, 3 different, 4 failed). Without
+`--engine` it still transfers robots and answers, but cannot compare.
 
 ## 5. ESP-NOW side (Crystal badge, compatible with badge os)
 
