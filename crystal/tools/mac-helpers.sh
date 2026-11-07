@@ -24,13 +24,17 @@ if [ -n "$DEV" ]; then
 fi
 trap '[ -n "$pid" ] && kill "$pid" 2>/dev/null; exit 0' INT TERM
 
-command -v ffmpeg >/dev/null || echo "note: install ffmpeg for the camera (brew install ffmpeg)"
+# MacPorts installs to /opt/local/bin and may name it ffmpeg7 or ffmpeg6.
+export PATH="$PATH:/opt/local/bin:/opt/homebrew/bin:/usr/local/bin"
+FFMPEG=""
+for f in ffmpeg ffmpeg8 ffmpeg7 ffmpeg6; do command -v "$f" >/dev/null && { FFMPEG=$(command -v "$f"); break; }; done
+[ -n "$FFMPEG" ] && echo "camera: using $FFMPEG" || echo "note: no ffmpeg found (MacPorts: sudo port install ffmpeg; Homebrew: brew install ffmpeg)"
 echo "camera: waiting for $REQ/snap (cameras: ffmpeg -f avfoundation -list_devices true -i \"\")"
 while true; do
   if [ -f "$REQ/snap" ]; then
     cam=$(tr -dc '0-9' <"$REQ/snap"); cam=${cam:-0}
     rm -f "$REQ/snap" "$REQ/snap.jpg"
-    ffmpeg -loglevel error -f avfoundation -framerate 30 -video_size 1280x720 -i "$cam" \
+    "${FFMPEG:-ffmpeg}" -loglevel error -f avfoundation -framerate 30 -video_size 1280x720 -i "$cam" \
       -frames:v 1 -y "$REQ/snap.tmp.jpg" 2>"$REQ/snap.log" && mv "$REQ/snap.tmp.jpg" "$REQ/snap.jpg"
     echo "snap: $(date +%T) camera $cam -> $([ -f "$REQ/snap.jpg" ] && echo ok || echo failed)"
   fi
