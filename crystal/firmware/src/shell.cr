@@ -390,6 +390,11 @@ module Shell
     elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
+    elsif tok_is(0, "wbar")
+      WBar.set(tok_int(1, 8), tok_int(2, WIN_LUT))
+      Shared.request(Shared::REQ_WBAR)
+      LibIDF.cr_notify_main
+      say("ok\n")
     elsif tok_is(0, "wtest")
       # wtest <A> <B> <C>: 20 level digits each (see main.cr wtest)
       ok = @@nt >= 4

@@ -211,6 +211,7 @@ module Shared
   REQ_QUICKDRAW = 16_u32 # (8 = REQ_REDRAW, src/net.cr)
   REQ_FORGET    = 32_u32 # knob override switched on/off: no pen jump
   REQ_WTEST     = 64_u32 # erase waveform test (WTest.codes)
+  REQ_WBAR      = 128_u32 # window addressing test (wbar)
 
   @@fake = 0_u32 # buttons the shell holds down (until @@fake_until)
   @@fake_until = 0
@@ -1274,6 +1275,46 @@ def wt_group(p : UInt8*, y : Int32) : Nil
   end
 end
 
+# Window addressing test (shell `wbar <mode> [kind]`): a white base with a
+# full refresh, then four bars (rows 100, 300, 400, 560, 16 rows each, at
+# x 100 / 300 / 500 / 700, 120 px wide), each drawn into the black plane and
+# put up with its own rows-only refresh_window2 (mode given, rows = bar +-
+# 8). Photograph: each bar must land at its rows/x, nothing anywhere else.
+module WBar
+  @@mode = 8
+  @@kind = 3
+
+  def self.mode : Int32
+    @@mode
+  end
+
+  def self.kind : Int32
+    @@kind
+  end
+
+  def self.set(m : Int32, k : Int32) : Nil
+    @@mode = m
+    @@kind = k
+  end
+end
+
+def wbar_test : Nil
+  Shared.rendering = true
+  EPD.fill(EPD::WHITE)
+  fast_bw(3, EPD::LUT_BASE)
+  i = 0
+  while i < 4
+    y = i == 0 ? 100 : (i == 1 ? 300 : (i == 2 ? 400 : 560))
+    x = 100 &+ i &* 200
+    EPD.fill_rect(x, y, 120, 16, EPD::BLACK)
+    EPD.fast_pulls = 1
+    rc = EPD.refresh_window2(y &- 8, y &+ 23, 0, EPD::HALF_BYTES &- 1, y &- 8, y &+ 23, 0, EPD::HALF_BYTES &- 1, WBar.kind, WBar.mode)
+    log3("wbar: bar y / mode / panel ms", y, WBar.mode, rc)
+    i = i &+ 1
+  end
+  Shared.rendering = false
+end
+
 def wtest : Nil
   Shared.rendering = true
   log("wtest: start", 0)
@@ -2093,17 +2134,59 @@ def qd_hex3(p : UInt8*) : Int32
   v
 end
 
+# Quick draw on the window path (upd sketch win): the rows the pen touched
+# since the last pull, full width, one WIN_LUT pull (as the live UPD_WIN path).
+def qd_window_pull : Nil
+  tc = Sketch.touch
+  y0 = -1
+  y1 = -1
+  r = 0
+  while r < EPD::HEIGHT
+    i = r &* EPD::ROW_BYTES
+    e = i &+ EPD::ROW_BYTES
+    hit = false
+    while i < e
+      if tc[i] != 0_u8
+        hit = true
+        tc[i] = 0_u8
+      end
+      i = i &+ 1
+    end
+    if hit
+      y0 = r if y0 < 0
+      y1 = r
+    end
+    r = r &+ 1
+  end
+  return if y0 < 0
+  Sketch.render(EPD.black, EPD.red)
+  red_to_black
+  Shared.led_mode = LED_CYAN
+  EPD.fast_pulls = 1
+  EPD.refresh_window2(y0, y1, 0, EPD::HALF_BYTES &- 1, y0, y1, 0, EPD::HALF_BYTES &- 1, WIN_LUT, 8)
+  log2(EPD.panel_ms > 250 ? "sketch: qd pull panel / upload ms (OVER 250)" : "sketch: qd pull panel / upload ms",
+    EPD.panel_ms, EPD.upload_ms)
+end
+
 def quick_draw : Nil
   return unless SkInk.ready?
   log("sketch: quick draw", 0)
   t0 = millis
   base = QD_PTS.to_unsafe
+  win = Shared.upd(SCR_SKETCH) == UPD_WIN # test the rows-only window path with quick draw
   pulls = 0
   k = 0
   while k < QD_N
     p = base + (k &* 6).to_i64!
     x = qd_hex3(p)
-    if x == 0xFFF
+    if win && x != 0xFFF && (k & 7) == 7
+      qd_window_pull # window test path: a rows-only pull every 8 points, like live drawing
+      pulls = pulls &+ 1
+    end
+    if x == 0xFFF && win
+      qd_window_pull
+      pulls = pulls &+ 1
+    elsif x == 0xFFF
       Shared.led_mode = pulls & 1 == 0 ? LED_YELLOW : LED_CYAN
       SkInk.take_touches
       SkInk.pull
@@ -2609,6 +2692,7 @@ fun crystal_app_main : Void
       SkTrack.reset
     end
     wtest if (reqs & Shared::REQ_WTEST) != 0_u32
+    wbar_test if (reqs & Shared::REQ_WBAR) != 0_u32
     if (reqs & Shared::REQ_QUICKDRAW) != 0_u32 && scr == SCR_SKETCH
       Shared.rendering = true
       quick_draw
