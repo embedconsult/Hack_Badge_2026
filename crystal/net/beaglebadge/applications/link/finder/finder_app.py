@@ -18,6 +18,15 @@ import _badgenet as bn
 import _linkui as ui
 
 
+ALPHA = 0.3  # RSSI EMA per refresh (~1.5 s): ~5 s to settle
+
+
+def zone(d):
+    if d is None:
+        return "?"
+    return "near" if d < 1.5 else ("medium" if d < 5 else "far")
+
+
 def dist_text(d):
     if d is None:
         return "  ?  "
@@ -42,24 +51,51 @@ class FinderApp(app.App):
             self.link = None
             ui.label(self.screen, "Network error:\n%s\nIs Wi-Fi up?" % e, 10, 80, 16)
         self.hint = ui.title_bar(self.screen, "Badge Finder", "searching...  UDP 4626")
-        self.list = ui.RowList(self.screen, 4, 60, 392, row_h=34, rows=7, size=16)
+        self.list = ui.RowList(self.screen, 4, 60, 392, row_h=34, rows=7, size=16, cols=[0, 128, 162, 222, 330])
         self.detail = None
         self.focus_mac = None
-        self.hist = {}  # mac -> [(t, d)]
+        self.hist = {}  # mac -> [(t, d)] smoothed distances, last 8 s
+        self.ema = {}   # mac -> smoothed RSSI
+        self.last = {}  # mac -> (metres, rssi, how) of the last refresh
+        self.up = ui.symbol("UP", "^")
+        self.down = ui.symbol("DOWN", "v")
         self.last_draw = 0
         self.timer = lv.timer_create(self.loop, 50, None)
 
-    def rows(self):
-        out = []
+    def smooth(self, p):
+        """(metres, smoothed RSSI, how): EMA over the badge's own max-over-4-s RSSI."""
+        d, rssi, how = self.link.peer_distance(p)
+        if how.startswith("FTM") or rssi is None:
+            return d, rssi, how
+        e = self.ema.get(p.mac)
+        e = rssi if e is None else e + ALPHA * (rssi - e)
+        self.ema[p.mac] = e
+        return bn.distance_m(e), e, how
+
+    def arrow(self, mac):
+        h = self.hist.get(mac, [])
+        if len(h) < 3:
+            return ""
+        old, new = h[0][1], h[-1][1]
+        if new < old * 0.8:
+            return self.up       # getting closer
+        if new > old * 1.25:
+            return self.down     # moving away
+        return "-"
+
+    def rows(self, now):
         peers = []
         for p in self.link.live_peers((bn.K_CRYSTAL, bn.K_BADGEOS)):
-            d, rssi, how = self.link.peer_distance(p)
-            peers.append((d if d is not None else 999, p, d, rssi, how))
+            d, rssi, how = self.smooth(p)
+            self.last[p.mac] = (d, rssi, how)
+            self.trend(p.mac, d, now)
+            peers.append((d if d is not None else 999, p, d, rssi))
         peers.sort(key=lambda t: t[0])
-        for _, p, d, rssi, how in peers:
+        out = []
+        for _, p, d, rssi in peers:
             kind = "SC" if p.kind == bn.K_CRYSTAL else "os"
-            r = "%ddBm" % rssi if rssi is not None else "--"
-            out.append(("%-12s %s %6s %-4s %s" % (p.label()[:12], kind, dist_text(d), bn.bucket(d), r), p))
+            r = "%d" % rssi if rssi is not None else "--"
+            out.append(((p.label()[:12], kind, dist_text(d), zone(d) + " " + self.arrow(p.mac), r), p))
         return out
 
     def open_detail(self, p):
@@ -79,29 +115,27 @@ class FinderApp(app.App):
         self.focus_mac = None
         self.hint.set_text("UP/DOWN pick  SELECT focus  BACK exit")
 
+    def trend_word(self, mac):
+        a = self.arrow(mac)
+        return {self.up: "getting closer", self.down: "moving away", "-": "steady"}.get(a, "")
+
     def trend(self, mac, d, now):
         h = self.hist.setdefault(mac, [])
         if d is not None:
             h.append((now, d))
         while h and time.ticks_diff(now, h[0][0]) > 8000:
             h.pop(0)
-        if len(h) < 3 or d is None:
-            return ""
-        old = h[0][1]
-        if d < old * 0.8:
-            return "warmer"
-        if d > old * 1.25:
-            return "colder"
-        return "steady"
 
     def draw(self, now):
-        items = self.rows()
+        items = self.rows(now)
         if self.detail:
             p = self.link.peers.get(self.focus_mac)
             if p is None:
                 return
-            d, rssi, how = self.link.peer_distance(p)
-            self.d_big.set_text("%s  %s" % (dist_text(d), bn.bucket(d)))
+            d, rssi, how = self.last.get(p.mac, (None, None, "RSSI"))
+            if rssi is not None:
+                rssi = int(rssi)
+            self.d_big.set_text("%s %s %s" % (dist_text(d), zone(d), self.arrow(p.mac)))
             via = ""
             if p.kind == bn.K_BADGEOS:
                 br = self.link.peers.get(p.via)
@@ -109,13 +143,10 @@ class FinderApp(app.App):
             age = time.ticks_diff(now, p.seen) // 1000
             self.d_info.set_text("%s, %s%s\n%s  seen %ds ago  %s" % (
                 bn.KIND_NAME.get(p.kind, "?"), how, via,
-                ("%d dBm" % rssi) if rssi is not None else "no RSSI yet", age, self.trend(p.mac, d, now)))
+                ("%d dBm" % rssi) if rssi is not None else "no RSSI yet", age, self.trend_word(p.mac)))
             w = 4 if rssi is None else max(4, min(380, (rssi + 100) * 6))
             self.d_bar.set_width(w)
             return
-        for _, p in items:
-            d, _, _ = self.link.peer_distance(p)
-            self.trend(p.mac, d, now)
         self.items = items
         self.list.set_items([t for t, _ in items] or ["no badges heard yet",
                                                       "(Supercon: LINK screen, A = net on)"])

@@ -94,6 +94,7 @@ shell task so only the main task ever drives the e-paper):
 | `sketch quickdraw` | Sketch draws its six-shooter |
 | `text <line1>[\|<line2>]` | set the nametag name (saved), shows the nametag |
 | `pong` | go to the PONG screen and pair with the sender at once (no button dance) |
+| `pong seek` | go to the PONG screen and start badge os pairing, as if User A was pressed there |
 | `status` | logs status on the badge console (reply is just ok) |
 
 Everything else (`wifi`, `ota`, `reboot`, `net`, `dump`, `flag`, `upd`) is refused from the network.

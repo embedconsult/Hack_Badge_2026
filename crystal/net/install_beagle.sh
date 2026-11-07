@@ -14,7 +14,9 @@ for f in _badgenet.py _linkui.py README.md finder/finder_app.py finder/README.md
   mkdir -p "$TMP/link/$(dirname "$f")"
   curl -fsSL "$BASE/beaglebadge/applications/link/$f?$(date +%s)" -o "$TMP/link/$f"
 done
-curl -fsSL "$BASE/sim_badge.py?$(date +%s)" -o /opt/badge_launcher/tools/sim_badge.py 2>/dev/null || true
+for t in sim_badge.py espnow_nl80211.py fake_badgeos.py; do
+  curl -fsSL "$BASE/$t?$(date +%s)" -o /opt/badge_launcher/tools/$t 2>/dev/null || true
+done
 if [ -d "$DST" ] && [ ! -d "$DST.orig" ]; then cp -a "$DST" /root/link.orig; fi
 rm -rf "$DST"
 mv "$TMP/link" "$DST"

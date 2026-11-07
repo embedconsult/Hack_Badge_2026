@@ -360,6 +360,7 @@ static void send_hello(int64_t now)
     for (int i = 0; i < PEERS; i++) {
         peer_t *p = &s_peer[i];
         if (!p->seen || p->kind != K_BADGEOS || now - p->seen > STALE_MS) continue;
+        if (memcmp(p->via, zero6, 6)) continue; // learned from another bridge's announce: not ours to repeat
         uint8_t o[23 + 9];
         memset(o, 0, sizeof o);
         o[0] = K_BADGEOS, o[1] = CAP_PONG, o[2] = 255;
@@ -564,7 +565,10 @@ static void on_command(const hdr_t *h, uint32_t ip, const char *line, int n, int
     uint8_t r[2 + 40] = {0, h->seq};
     int w = strcspn(buf, " ");
     bool ok = false;
-    if (w == 4 && !strncmp(buf, "pong", 4)) {
+    if (w == 4 && !strncmp(buf, "pong", 4) && !strcmp(buf + 4, " seek")) {
+        pong_press(now); // like User A on the PONG screen: badge os pairing (ESP-NOW or UDP)
+        ok = push_line("mode pong", 9);
+    } else if (w == 4 && !strncmp(buf, "pong", 4)) {
         pong_paired(h->src, false, now);
         ok = push_line("mode pong", 9);
     } else {
@@ -626,7 +630,7 @@ static void on_espnow(const enow_t *r, int64_t now)
             memcpy(p->name, r->d + tail, 12), p->name[12] = 0;
         }
     }
-    bool mine = s_screen == SCR_PONG && !memcmp(r->d, "PONG", 4) && r->len == sizeof(pkt_t);
+    bool mine = (s_screen == SCR_PONG || P.state != L_FREE) && !memcmp(r->d, "PONG", 4) && r->len == sizeof(pkt_t);
     if (mine) {
         peer_t *p = peer_find(r->src, false);
         if (p) peer_rssi(p, r->rssi, now);
