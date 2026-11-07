@@ -15,6 +15,12 @@ require "./lang"
 
 module RC
   MAX_ROBOTS = 4
+  CHECK_SLOT = MAX_ROBOTS # an extra program slot for checking uploads
+  SLOTS      = MAX_ROBOTS + 1
+  # Deepest parse tree accepted. The checker and the compiler recurse once
+  # per tree level, and they also run on the shell and HTTP tasks (small
+  # stacks). Real robots stay far below this (the upstream ones: <= 21).
+  MAX_DEPTH = 48
   CODE_MAX   = 16384
   SYM_MAX    = 1024
   NAME_MAX   = 24
@@ -88,6 +94,7 @@ module RC
   @@name_len = Pointer(Int32).null
   # compile-time scratch
   @@tok_sym = Pointer(Int32).null # leaf node -> sym, -1
+  @@depth = Pointer(Int32).null   # tree depth below each node
   @@slot_of = Pointer(Int32).null # sym -> slot in the function being compiled
   @@slot_epoch = Pointer(Int32).null
   @@epoch = 0
@@ -109,7 +116,7 @@ module RC
   def self.setup : Bool
     return true if @@ready
     return false unless RL.setup
-    n = MAX_ROBOTS
+    n = SLOTS
     @@code = game_alloc(n &* CODE_MAX &* 4).as(Int32*)
     @@code_len = game_alloc(n &* 4).as(Int32*)
     @@src = game_alloc(n &* (RL::SRC_MAX &+ 1))
@@ -126,6 +133,7 @@ module RC
     @@name = game_alloc(n &* NAME_MAX)
     @@name_len = game_alloc(n &* 4).as(Int32*)
     @@tok_sym = game_alloc(RL::NODE_MAX &* 4).as(Int32*)
+    @@depth = game_alloc(RL::NODE_MAX &* 4).as(Int32*)
     @@slot_of = game_alloc(SYM_MAX &* 4).as(Int32*)
     @@slot_epoch = game_alloc(SYM_MAX &* 4).as(Int32*)
     @@set_g = game_alloc(SYM_MAX)
@@ -138,7 +146,7 @@ module RC
                     @@main_entry.null? || @@main_slots.null? || @@name.null? ||
                     @@name_len.null? || @@tok_sym.null? || @@slot_of.null? ||
                     @@slot_epoch.null? || @@set_g.null? || @@set_c.null? || @@set_l.null? ||
-                    @@fn_chk.null?
+                    @@fn_chk.null? || @@depth.null?
     i = 0 # game_alloc memory is not zeroed on the badge
     while i < SYM_MAX
       @@slot_epoch[i] = 0
@@ -519,6 +527,47 @@ module RC
     end
   end
 
+  # Tree depth, without recursion: children always have smaller indices.
+  def self.tree_depth : Int32
+    nn = RL.nodes
+    i = 0
+    while i < nn
+      d = 1
+      k = kids(i)
+      j = 0
+      while j < k
+        c = @@depth[kid(i, j)] &+ 1
+        d = c if c > d
+        j = j &+ 1
+      end
+      @@depth[i] = d
+      i = i &+ 1
+    end
+    @@depth[RL.root]
+  end
+
+  def self.shallow? : Bool
+    return true if tree_depth <= MAX_DEPTH
+    # point at the outermost node that is too deep
+    i = RL.root
+    while kids(i) > 0
+      deepest = kid(i, 0)
+      j = 1
+      while j < kids(i)
+        deepest = kid(i, j) if @@depth[kid(i, j)] > @@depth[deepest]
+        j = j &+ 1
+      end
+      break if @@depth[i] <= MAX_DEPTH
+      i = deepest
+    end
+    RL.err_clear
+    RL.err_s("Program is nested too deeply (more than ")
+    RL.err_int(MAX_DEPTH)
+    RL.err_s(" levels)")
+    RL.err_at(RL.origin(i))
+    false
+  end
+
   # ---- code emission -------------------------------------------------------------------
   def self.emit(v : Int32) : Nil
     if @@pc >= CODE_MAX
@@ -869,6 +918,7 @@ module RC
       @@fn_slots[@@sbase &+ s] = 0
       s = s &+ 1
     end
+    return false unless shallow?
     return false unless check_program
     root = RL.root
     nk = kids(root)

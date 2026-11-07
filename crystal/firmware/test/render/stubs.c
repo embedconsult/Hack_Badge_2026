@@ -58,3 +58,26 @@ const uint8_t *cr_snk_name(int32_t i) { return s_who[i] < 0 ? (const uint8_t *)"
 const uint8_t *cr_snk_shout(int32_t i) { return (const uint8_t *)"turn 12: up"; }
 const uint8_t *cr_snk_err_name(int32_t e) { return (const uint8_t *)"timeout"; }
 uint32_t esp_random(void) { return 12345; }
+
+// ROBOTS (main/robots.c): slots in memory.
+static char s_rsrc[8][8192], s_rname[8][17];
+static int s_rlen[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
+int32_t cr_robot_slots(void) { return 8; }
+int32_t cr_robot_max(void) { return 8160; }
+int32_t cr_robot_len(int32_t k) { return s_rlen[k]; }
+int32_t cr_robot_read(int32_t k, uint8_t *b, int32_t max) {
+    if (s_rlen[k] < 0) return -1;
+    memcpy(b, s_rsrc[k], s_rlen[k]);
+    return s_rlen[k];
+}
+bool cr_robot_write(int32_t k, const uint8_t *s, int32_t n, const char *name) {
+    s_rlen[k] = n > 0 ? n : -1;
+    if (n > 0) memcpy(s_rsrc[k], s, n);
+    snprintf(s_rname[k], 17, "%s", name ? name : "");
+    return true;
+}
+bool cr_robot_name(int32_t k, char *out) { strcpy(out, s_rname[k]); return s_rlen[k] >= 0; }
+uint32_t cr_atomic_xchg(uint32_t *p, uint32_t v) { uint32_t o = *p; *p = v; return o; }
+void vTaskDelay(uint32_t t) {}
+void cr_print(const char *s) { fputs(s, stdout); }
+void cr_notify_main(void) {}
