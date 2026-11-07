@@ -82,13 +82,17 @@ module Shell
     return SCR_LIFE if tok_is(i, "life")
     return SCR_SNAKE if tok_is(i, "snake")
     return SCR_DIAG if tok_is(i, "diag")
+    return SCR_LINK if tok_is(i, "link")
+    return SCR_PONG if tok_is(i, "pong")
     -1
   end
 
   def self.help : Nil
     say("commands:\n")
     say("  help | version | status | reboot\n")
-    say("  mode <nametag|portrait|sketch|life|snake|diag>\n")
+    say("  mode <nametag|portrait|sketch|life|snake|diag|link|pong>\n")
+    say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
+    say("  text <first>[|<last>]           (nametag name, saved)\n")
     say("  press <a|b|plus|minus> | hold a | colour | clean\n")
     say("  knob <l|r> <mV> | knob off\n")
     say("  stroke x0 y0 x1 y1        (Sketch canvas, then a refresh)\n")
@@ -269,7 +273,7 @@ module Shell
     elsif tok_is(0, "mode")
       s = screen_of(1)
       if s < 0
-        say("usage: mode <nametag|portrait|sketch|life|snake|diag>\n")
+        say("usage: mode <nametag|portrait|sketch|life|snake|diag|link|pong>\n")
       else
         Shared.target = s
         LibIDF.cr_notify_main
@@ -347,6 +351,28 @@ module Shell
       wifi
     elsif tok_is(0, "ota")
       ota
+    elsif tok_is(0, "net")
+      if tok_is(1, "on")
+        LibIDF.cr_net_set(true)
+        say("net: on (saved)\n")
+      elsif tok_is(1, "off")
+        LibIDF.cr_net_set(false)
+        say("net: off (saved)\n")
+      else
+        LibIDF.cr_net_print_status
+      end
+      LibIDF.cr_notify_main
+    elsif tok_is(0, "text") && @@nt >= 2
+      s = @@ts[1]
+      e = @@len
+      while e > s && @@line[e &- 1] == 0x20_u8
+        e = e &- 1
+      end
+      LibIDF.cr_name_set(@@line + s.to_i64!, e &- s)
+      Shared.target = SCR_NAMETAG
+      Shared.request(Shared::REQ_REDRAW)
+      LibIDF.cr_notify_main
+      say("ok\n")
     else
       say("unknown command (help)\n")
     end
@@ -377,7 +403,32 @@ module Shell
         end
         i = i &+ 1
       end
+      run_remote
       LibIDF.vTaskDelay(ms_to_ticks(20_u32))
+    end
+  end
+
+  # Command lines from the network (main/net.c already allowed them): run
+  # them here like typed ones, in a second line buffer.
+  @@rline = Pointer(UInt8).null
+
+  def self.run_remote : Nil
+    @@rline = LibIDF.heap_caps_malloc(128_u32, 0x804_u32).as(UInt8*) if @@rline.null?
+    return if @@rline.null?
+    while true
+      n = LibIDF.cr_net_take_line(@@rline, 127)
+      return if n <= 0
+      keep_line = @@line
+      keep_len = @@len
+      @@line = @@rline
+      @@len = n
+      say("[net] ")
+      @@rline[n] = 0_u8
+      LibIDF.cr_print(@@rline)
+      say("\n")
+      execute
+      @@line = keep_line
+      @@len = keep_len
     end
   end
 end

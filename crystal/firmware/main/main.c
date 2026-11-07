@@ -34,6 +34,7 @@ void crystal_app_main(void);           // src/main.cr: EPD demo
 void crystal_knob_task(void *arg);     // src/main.cr: LED blink + knob log
 void crystal_shell_task(void *arg);    // src/shell.cr: debug shell on the console
 void cr_ota_boot_guard(void);          // main/ota.c: roll back an unconfirmed new image
+void cr_net_boot(void);                // main/net.c: network mode, if saved on
 
 void cr_log(const char *msg, int32_t v) { printf("%s: %ld\n", msg, (long)v); }
 void cr_log2(const char *msg, int32_t a, int32_t b) { printf("%s: %ld %ld\n", msg, (long)a, (long)b); }
@@ -136,5 +137,6 @@ void app_main(void)
     printf("app_main: starting tasks\n");
     xTaskCreatePinnedToCore(crystal_knob_task, "knob", 12288, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(crystal_shell_task, "shell", 6144, NULL, 1, NULL, 1);
+    cr_net_boot();
     crystal_app_main();
 }
