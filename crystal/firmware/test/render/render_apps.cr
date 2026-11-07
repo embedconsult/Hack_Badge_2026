@@ -97,6 +97,7 @@ require "../../src/apps/builtin"
 require "../../src/apps/home"
 require "../../src/apps/settings"
 require "../../src/apps/schedule"
+require "../../src/apps/snakes"
 
 inp = Games.input(1000, 1000, 0_u32, 0_u32)
 press = ->(b : UInt32) { Games.input(1000, 1000, b, 0_u32) }
@@ -114,3 +115,20 @@ ScheduleApp.tick(1, press.call(Games::BTN_B))
 Render.name = "schednow"
 LibIDF.set_time(2026, 11, 7, 14, 10)
 ScheduleApp.enter
+
+# SNAKES: lobby, a 4-house-snake game after 12 and 40 turns, the result
+Render.name = "snakes"
+SnakesApp.enter
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 2 houses
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 3
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 4
+SnakesApp.tick(1, press.call(Games::BTN_A)) # play
+200.times { SnakesApp.tick(1, inp) }
+SnakesApp.tick(1, press.call(Games::BTN_B)) # stop
+Render.name = "snakesbots"
+SnakesApp.tick(1, press.call(Games::BTN_B)) # lobby
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 0 houses -> 2 bots
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 1 house
+SnakesApp.tick(1, press.call(Games::BTN_B)) # 2 houses
+SnakesApp.tick(1, press.call(Games::BTN_A)) # play: 2 house + 2 bots
+30.times { SnakesApp.tick(1, inp) }

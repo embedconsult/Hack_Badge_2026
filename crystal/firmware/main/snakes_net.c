@@ -341,6 +341,10 @@ void cr_snk_turn(const int32_t *snap, int32_t nsnap)
 void cr_snk_end(const int32_t *snap, int32_t nsnap)
 {
     while (s_busy) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_net == NET_FAIL || !s_in_game) { // no Wi-Fi: nobody to tell
+        s_in_game = false;
+        return;
+    }
     take_snap(snap, nsnap);
     post(J_END);
 }

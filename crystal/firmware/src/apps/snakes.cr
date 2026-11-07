@@ -79,6 +79,7 @@ module SnakesApp
   @@drawn = 0
   @@msg = 0 # lobby message: 0 none, 1 no Wi-Fi, 2 no entrants
   @@play_req = false
+  @@net_drawn = 0
   @@buf = Pointer(UInt8).null
 
   # Shell `snakes play` (shell task): start a game as soon as the app runs.
@@ -279,8 +280,9 @@ module SnakesApp
     draw_board
     xx = Gfx.text(SIDE, 64, "TURN ", 3)
     num(xx, 64, R.turn, 3)
+    @@net_drawn = LibIDF.cr_snk_net
     if @@state == ST_START
-      Gfx.text(SIDE, 100, LibIDF.cr_snk_net == 1 ? "JOINING WI-FI..." : "STARTING...", 2)
+      Gfx.text(SIDE, 100, @@net_drawn == 1 ? "JOINING WI-FI..." : "STARTING...", 2)
     elsif @@paused
       Gfx.text(SIDE, 100, "PAUSED", 2)
     end
@@ -581,6 +583,9 @@ module SnakesApp
           @@state = ST_TURN
           LibIDF.cr_snk_turn(@@snap, @@nsnap)
         end
+      elsif LibIDF.cr_snk_net != @@net_drawn
+        draw_game
+        Apps.show
       end
     elsif @@state == ST_TURN
       if b
