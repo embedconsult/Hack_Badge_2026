@@ -1733,11 +1733,14 @@ end
 
 # "Quick draw" (hold B 2 s in Sketch, shell `sketch quickdraw`): a six-
 # shooter drawn in one continuous Etch-a-Sketch path of straight segments,
-# fast, three passes so it ends darker (our own drawing, facing left).
-# Points in a 100 x 64 box, scaled x5 and centred on the pen area.
-QD_PTS = "0012000E040E040C070C070E2C0E2C0A400A420C480C4C0650064E0E52125A265E36563A4C384628421E402438263420341C381C3A213C1C401C400A401C361C360A361C2C1C2C1600160012" # x, y pairs as hex bytes
-QD_N     = 38 # points
-QD_SCALE = 5
+# fast, three passes so it ends darker (our own drawing, facing left):
+# sight blade, rear notch, top strap, hammer spur, flared grip with
+# checkering zigzag, rounded trigger guard and curved trigger, recoil
+# shield, fluted cylinder with pin, ejector rod, muzzle with bore. Points in
+# a 200 x 128 box (generated, curves as short segments), scaled x2.5 and
+# centred on the pen area.
+QD_PTS = "0C1E121E12171616191E621E621A8C1A921A9417971A99179C1A9E16A110A70DAB0FA913A417A21EA82EB046B55CB66AB570B473B176AE77AB78A778A476A174967690688E548C469350A04C9558A5549760AA5C9968AD649C70AD649968AA5C9760A5549558A04C93508C468842874C864F845180537D547A5476527350714D704A70407C407A45774A794C7C477F408A408A3E8A3D8F3B93379532962C952693218F1D8A1B841A7E1A6A1A671B651D64206438653B673D6A3E7E3E813D833B84388420831D811B7E1A6C1A6A2382236A236A2C822C6A2C6A3582356A35642C5C2B5C2E642E64322E322E2E2A2E2A34623462322E322E2C0C2C0C1E0C250D230E22102211231225112710280E280D270C250C2C" # x, y pairs as hex bytes
+QD_N     = 138 # points
 
 def qd_hex(i : Int32) : Int32
   p = QD_PTS.to_unsafe + (i &* 2).to_i64!
@@ -1747,11 +1750,11 @@ def qd_hex(i : Int32) : Int32
 end
 
 def qd_x(k : Int32) : Int32
-  479 &- 50 &* QD_SCALE &+ qd_hex(k &* 2) &* QD_SCALE
+  479 &- 250 &+ (qd_hex(k &* 2) &* 5).unsafe_div(2) # 200 x 128 box, x2.5
 end
 
 def qd_y(k : Int32) : Int32
-  (Sketch::PEN_Y_MIN &+ Sketch::PEN_Y_MAX).unsafe_div(2) &- 32 &* QD_SCALE &+ qd_hex(k &* 2 &+ 1) &* QD_SCALE
+  (Sketch::PEN_Y_MIN &+ Sketch::PEN_Y_MAX).unsafe_div(2) &- 160 &+ (qd_hex(k &* 2 &+ 1) &* 5).unsafe_div(2)
 end
 
 def quick_draw : Nil
@@ -1761,7 +1764,7 @@ def quick_draw : Nil
   pass = 0
   while pass < 3
     # first pass in three pulls (it "draws"), the others in one each
-    parts = pass == 0 ? 3 : 1
+    parts = pass == 0 ? 4 : 1
     part = 0
     k = 0
     while part < parts
