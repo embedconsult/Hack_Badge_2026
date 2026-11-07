@@ -1721,7 +1721,8 @@ end
 
 # Sketch frame in preview (B/W) mode: frame red as checker, normal fast LUT.
 def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Nil
-  if Menu.needs_background?
+  erase = Menu.needs_background? # A (erase): fresh background, pen at the centre
+  if erase
     sketch_background
     red_to_black
   end
@@ -1729,13 +1730,16 @@ def sketch_frame_bw(wait : Int32, up : Int32, panel : Int32, total : Int32) : Ni
   draw_sketch_label(wait, up, panel, total)
   draw_sketch_hint(false)
   Shared.led_mode = LED_CYAN
-  if Menu.want_clean?
+  if Menu.want_clean? && !erase
+    # B (clean): black flash, white, then the drawing, all full drive with
+    # the shake: incremental (diff/window) updates never clean residue.
     EPD.raw = true
-    sketch_clean(EPD::LUT_BASE) # real full drive with the shake: incremental
-    EPD.raw = false              # (diff/window) updates never clean residue
+    sketch_clean(EPD::LUT_BASE)
+    EPD.raw = false
   else
-    fast_bw(2, EPD::LUT_BASE)
+    fast_bw(3, EPD::LUT_BASE) # A (erase): one full-drive frame, as entry
   end
+  Sketch.forget_knobs # turns during the refresh must not make the pen jump
 end
 
 # Sketch colour: redraw the frame with red, overlay the drawing, slow refresh.
@@ -1844,6 +1848,7 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
       draw_mode_label(Menu.mode, 0, 0, 0, 0)
     end
     fast_bw(pulls, kind)
+    Sketch.forget_knobs if scr == SCR_SKETCH # no jump from turns during the entry refresh
     SkState.mark_shown
     if scr == SCR_SKETCH
       SkState.set_entry(EPD.upload_ms, EPD.panel_ms, EPD.restart_ms)

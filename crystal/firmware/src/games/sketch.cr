@@ -222,6 +222,16 @@ module Sketch
     true
   end
 
+  # Forget the knob references (and sub-pixel remainders): the next reading
+  # of each knob becomes its zero. Called after long full refreshes so turns
+  # made while the panel was busy don't make the pen jump.
+  def self.forget_knobs : Nil
+    @@last_x = -1
+    @@last_y = -1
+    @@fx = 0
+    @@fy = 0
+  end
+
   # (Re)launch, as upstream's `launched`: blank frame + cleaning flash.
   # Also forgets the knob references so turns made elsewhere don't jump.
   def self.resync : Nil
