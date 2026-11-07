@@ -1,4 +1,4 @@
-# Hack_Badge_2026 — native Crystal firmware (`crystal` branch)
+# Hack_Badge_2026 — native firmware for the Supercon 2026 badge
 
 Firmware for the **Hackaday Supercon 2026 "Billboard Badge"** (ESP32-S3 with a
 9.7" 960×672 black/white/red e-paper), rewritten as native
