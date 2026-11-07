@@ -24,6 +24,9 @@ lib LibIDF
   fun cr_robot_read(k : Int32, buf : UInt8*, max : Int32) : Int32
   fun cr_robot_write(k : Int32, src : UInt8*, n : Int32, name : UInt8*) : Bool
   fun cr_robot_name(k : Int32, out : UInt8*) : Bool
+  fun cr_robot_tbl_save(which : Int32, p : UInt8*, n : Int32) : Bool
+  fun cr_robot_tbl_load(which : Int32, p : UInt8*, max : Int32) : Int32
+  fun cr_robot_tbl_print(which : Int32) : Void
   fun cr_atomic_xchg(p : UInt32*, v : UInt32) : UInt32
   fun vTaskDelay(ticks : UInt32) : Void
   # main/net.c + main/robonet.c: badge-to-badge battles
@@ -332,10 +335,30 @@ module RobotShell
       run(false)
     elsif Shell.tok_is(1, "challenge")
       run(true)
+    elsif Shell.tok_is(1, "tourney")
+      tourney
+    elsif Shell.tok_is(1, "standings")
+      LibIDF.cr_robot_tbl_print(Shell.tok_is(2, "net") ? 1 : 0) # main/robots.c
     else
       say("usage: robot [list] | robot put|show|del <slot> | robot run <r1> <r2> [r3] [r4] [@seed]\n")
       say("       robot challenge <badge> <r1> <r2> [r3] [r4] [@seed]\n")
+      say("       robot tourney [seed] [seeds] | robot standings\n")
     end
+  end
+
+  # `robot tourney [seed] [seeds]`: a tournament of every robot here.
+  def self.tourney : Nil
+    seed = Shell.tok_int(2, 0)
+    seeds = Shell.tok_int(3, 3)
+    if seed < 0 || seeds < 1 || seeds > Tour::MAX_SEEDS
+      say("usage: robot tourney [seed] [seeds 1..4]\n")
+      return
+    end
+    RobotsApp.request_tourney(seed.to_u32!, seeds)
+    id = Apps.find("ROBOTS".to_unsafe, 6)
+    Shared.target = id if id >= 0
+    LibIDF.cr_notify_main
+    say("robot: tournament starting on the ROBOTS screen (robot standings prints the result)\n")
   end
 
   @@codes = Pointer(Int32).null
