@@ -362,6 +362,32 @@ module Shell
     elsif tok_is(0, "sketch") && tok_is(1, "quickdraw")
       Shared.request(Shared::REQ_QUICKDRAW)
       say("ok\n")
+    elsif tok_is(0, "wtest")
+      # wtest <A> <B> <C>: 20 level digits each (see main.cr wtest)
+      ok = @@nt >= 4
+      t = 1
+      while ok && t <= 3
+        ok = false if @@tl[t] != 20
+        t = t &+ 1
+      end
+      if ok
+        c = WTest.codes
+        t = 1
+        while t <= 3
+          k = 0
+          while k < 20
+            c[(t &- 1) &* 20 &+ k] = (@@line + (@@ts[t] &+ k).to_i64!).value &- 48_u8
+            k = k &+ 1
+          end
+          t = t &+ 1
+        end
+        WTest.pulls = tok_int(4, 1)
+        Shared.request(Shared::REQ_WTEST)
+        LibIDF.cr_notify_main
+        say("ok\n")
+      else
+        say("usage: wtest <A> <B> <C> (20 digits 0-3 each)\n")
+      end
     elsif tok_is(0, "diffe")
       # diffe <vdl> <vdh>: diff table black -> white drive frames (new session)
       EPD.diff_erase(tok_int(1, EPD.diff_el), tok_int(2, EPD.diff_eh)) if @@nt >= 3
