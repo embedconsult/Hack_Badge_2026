@@ -81,6 +81,23 @@ module Shell
     Apps.find(@@line + @@ts[i].to_i64!, @@tl[i])
   end
 
+  SOURCE_URL = "https://github.com/embedconsult/Hack_Badge_2026/tree/crystal"
+
+  def self.banner : Nil
+    say("badge ")
+    LibIDF.cr_print(LibIDF.cr_version)
+    say("\n")
+    say(SOURCE_URL)
+    say("\n")
+  end
+
+  def self.help_short : Nil
+    banner
+    say("version status reboot mode press hold knob text\n")
+    say("net wifi ota sketch stroke dump upd flag clean\n")
+    say("help all: details\n")
+  end
+
   def self.help : Nil
     say("commands:\n")
     say("  help | version | status | reboot\n")
@@ -256,11 +273,10 @@ module Shell
   def self.execute : Nil
     tokenize
     return if @@nt == 0
-    if tok_is(0, "help")
-      help
-    elsif tok_is(0, "version")
-      LibIDF.cr_print(LibIDF.cr_version)
-      say("\n")
+    if tok_is(0, "help") || tok_is(0, "?")
+      @@nt > 1 ? help : help_short
+    elsif tok_is(0, "version") || tok_is(0, "hello") || tok_is(0, "helo")
+      banner
     elsif tok_is(0, "status")
       status
     elsif tok_is(0, "reboot")
@@ -389,7 +405,9 @@ module Shell
     @@tl = LibIDF.heap_caps_malloc((TOK_MAX &* 4).to_u32!, 0x804_u32).as(Int32*)
     rx = LibIDF.heap_caps_malloc(64_u32, 0x804_u32).as(UInt8*)
     return if @@line.null? || @@ts.null? || @@tl.null? || rx.null?
-    say("\ncrystal shell ready (help)\n> ")
+    say("\n")
+    banner
+    say("type help\n> ")
     while true
       n = LibIDF.cr_console_read(rx, 64)
       i = 0
