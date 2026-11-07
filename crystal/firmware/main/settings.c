@@ -498,7 +498,7 @@ int32_t cr_settings_start(void)
     httpd_uri_t u_compete = {.uri = "/compete", .method = HTTP_GET, .handler = h_compete};
     httpd_register_uri_handler(s_http, &u_compete);
     httpd_register_uri_handler(s_http, &u_any);
-    printf("settings: AP %s up, http://192.168.4.1/\n", s_ssid);
+    printf("settings: AP %s up (password %s, also on the screen), http://192.168.4.1/\n", s_ssid, s_pass);
     return 0;
 }
 
