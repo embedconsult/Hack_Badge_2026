@@ -10,6 +10,7 @@ lib LibIDF
   fun cr_log3(msg : UInt8*, a : Int32, b : Int32, c : Int32) : Void
   fun cr_heap_free(caps : UInt32) : Int32
   fun esp_restart : Void
+  fun cr_time_set(y : Int32, mo : Int32, d : Int32, h : Int32, mi : Int32) : Void
 end
 
 module Shell
@@ -104,6 +105,7 @@ module Shell
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
     say("  net on | net off | net status   (badge link: UDP 4626 + ESP-NOW)\n")
     say("  net ap on | net ap off          (own access point on channel 1, for badge os)\n")
+    say("  clock <Y> <M> <D> <h> <m>       (set local time, Schedule NOW/NEXT)\n")
     say("  text <first>[|<last>]           (nametag name, saved)\n")
     say("  press <a|b|plus|minus> | hold a | colour | clean\n")
     say("  knob <l|r> <mV> | knob off\n")
@@ -383,6 +385,10 @@ module Shell
         LibIDF.cr_net_print_status
       end
       LibIDF.cr_notify_main
+    elsif tok_is(0, "clock") && @@nt == 6
+      # local (Pasadena) time, for the Schedule app's NOW / NEXT marks
+      LibIDF.cr_time_set(tok_int(1, 2026), tok_int(2, 11), tok_int(3, 7), tok_int(4, 12), tok_int(5, 0))
+      say("ok\n")
     elsif tok_is(0, "text") && @@nt >= 2
       s = @@ts[1]
       e = @@len
