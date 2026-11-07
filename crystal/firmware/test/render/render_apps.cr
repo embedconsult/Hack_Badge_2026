@@ -162,6 +162,17 @@ RobotsApp.tick(1, press.call(Games::BTN_A)) # the final, replayed
 RobotsApp.tick(1, press.call(Games::BTN_A)) # back to the table
 RobotsApp.tick(1, press.call(Games::BTN_B)) # exit: line-ups again
 
+# a link tournament of the two cached robots (tourney_net stubbed)
+Render.name = "robotslinktourney"
+lib LibIDF
+  fun stub_tn_offer : Void
+end
+LibIDF.stub_tn_offer
+RobotsApp.tick(1, inp) # progress
+RobotsApp.tick(1, inp) # all played, result sent, standings
+RobotsApp.tick(1, inp) # the organizer's standings arrive
+RobotsApp.tick(1, press.call(Games::BTN_B))
+
 # SNAKES: lobby, a 4-house-snake game after 12 and 40 turns, the result
 Render.name = "snakes"
 SnakesApp.enter

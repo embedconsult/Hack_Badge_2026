@@ -57,7 +57,7 @@ necessarily zero terminated.
 | Offset | Size | Field |
 |---|---|---|
 | 12 | 1 | kind: 1 = BeagleBadge, 2 = Supercon/Crystal, 3 = Supercon/badge os (sent *by a bridge* for it) |
-| 13 | 1 | caps bits: 1 remote control, 2 pong, 4 ESP-NOW bridge, 8 sketch, 16 robot battles (G J B K Z) |
+| 13 | 1 | caps bits: 1 remote control, 2 pong, 4 ESP-NOW bridge, 8 sketch, 16 robot battles (G J B K Z, tournaments T) |
 | 14 | 1 | screen id (Crystal: 0 nametag 1 portrait 2 sketch 3 life 4 snake 5 diag 6 link 7 pong; else 255) |
 | 15 | 1 | flags: 1 = in a pong game |
 | 16 | 6 | `via`: the bridge's MAC for kind 3, else zero. The badge itself has the MAC in the header |
@@ -180,6 +180,43 @@ mode on; `<badge>` = the start of its announced name, or the last hex digits of 
 on localhost: both directions, a peer with a different result, 30 % packet loss, and the real port
 layout (badge code on its link port, broadcasting to it; simulator on its own port listening on the
 link port too) with a badge that holds its result back 10 s.
+
+### Robot tournaments: `T` (unicast), sources as `B` chunks
+
+A tournament of every robot badge's saved robots (badge code: `main/tourney_net.c`, Python:
+`crystal/net/tourney.py`; schedule and scoring: `src/robots/tourney.cr`). Nothing of the battles goes
+over the air: every badge plays the **whole** tournament itself (round robin of 2-4 robot line-ups,
+`seeds` battles per line-up, then a final of the top four; the same robots in the same order with the
+same seed give the same tournament) and the organizer compares the tournament hashes.
+
+The **organizer** is the badge with the lowest MAC among those announcing caps bit 16. A badge asked to
+start one (`robot tourney net`, B: LINK TOURNEY on ROBOTS) organizes if it is the lowest, else sends `O`
+to the lowest, which waits 2.5 s (to hear every announce), then organizes with every live robot badge,
+the asker included.
+
+Every `T` body starts with `sub` (one ASCII letter) and `tid` u32 (the tournament; 0 in `O`):
+
+| sub | From -> to | Rest of the body |
+|---|---|---|
+| `O` organize | asker -> lowest MAC | `seed` u32 (0: pick one), `seeds` u8 (1..4) |
+| `Q` query | organizer -> each badge | (none); repeated every 400 ms, 20 s, then the badge is left out |
+| `E` entries | badge -> organizer | `n` u8 (<= 8), then `n` x {`crc` u32, `len` u16}: its slot robots |
+| `S` send me | anyone -> a badge that has it | `crc` u32, `len` u16, `got` u32 (bit k: chunk k already here). The receiver sends up to 4 of the missing chunks as ordinary `B` messages; the asker repeats every 400 ms |
+| `P` plan | organizer -> each badge | `seed` u32, `seeds` u8, `nb` u8 badges, `n` u8 robots (2..48); `nb` x {`mac`[6], `name`[12]} (badge 0 = organizer); `n` x {`crc` u32, `len` u16, `owner` u8 (badge index, 255 = built-in)}: the robots in tournament order. Every second until acknowledged |
+| `A` ack | badge -> organizer | `missing` u8: robots it still lacks (it fetches them with `S` from the organizer; 0 = playing) |
+| `R` result | badge -> organizer | `hash` u32 of its whole tournament (`Tour.hash`); every second until `W` |
+| `W` standings | organizer -> each badge | `hash` u32 (the organizer's), `nb` u8, `nb` x `agree` u8 (1 same hash, 0 different, 2 no result), `tlen` u16, then the standings: per rank {`robot` u8, `wins` u8, `draws` u8, `played` u8, `damage` u16 (sum)}, then `champion` u8 and `final winner` u8 (robot, 255 none) |
+
+Order of the robots: the organizer's slots, then each badge's in MAC order, then the organizer's
+built-ins; a robot already in the list (same CRC and length) is not added again. Robots whose source
+cannot be fetched within 60 s are left out; badges that never take the plan (60 s) or send no result
+(15 min) are reported as "sent none". Every badge shows the organizer's standings, with the owner
+badge of each robot, and the verdict ("all 3 badges got the same result" / "<badge> got a DIFFERENT
+result!"); the Crystal badge saves them in NVS (`robot standings net`) and replays the final.
+
+Host test: `crystal/firmware/test/robonet/tourney.sh` runs `main/tourney_net.c` (host_badge) with two
+`sim_badge.py --mine ... [--tourney N]` simulators on localhost: the badge code organizing, a simulator
+organizing (the badge code asks it), a simulator with a lying engine caught, 20 % packet loss.
 
 On a BeagleBadge, against a real Supercon badge:
 

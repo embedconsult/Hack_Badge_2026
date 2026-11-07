@@ -102,6 +102,15 @@ def tourney(argc : Int32, argv : UInt8**) : Int32
     m > 2 ? idx[2] : -1, m > 3 ? idx[3] : -1, Tour.final_seed, Tour.final_winner)
   LibC.printf("champion %d\n".to_unsafe, Tour.champion)
   LibC.printf("hash %u\n".to_unsafe, Tour.hash)
+  t = game_alloc(Tour::MAX &* Tour::CENTRY &+ 2)
+  tl = Tour.compact(t)
+  LibC.printf("table ".to_unsafe)
+  k = 0
+  while k < tl
+    LibC.printf("%02x".to_unsafe, t[k].to_i32!)
+    k = k &+ 1
+  end
+  LibC.printf("\n".to_unsafe)
   0
 end
 

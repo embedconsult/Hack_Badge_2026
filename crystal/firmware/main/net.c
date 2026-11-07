@@ -30,6 +30,7 @@
 #include "lwip/sockets.h"
 #include "radar.h"
 #include "robonet.h"
+#include "tourney_net.h"
 #include "esp_heap_caps.h"
 #include "freertos/semphr.h"
 
@@ -607,6 +608,61 @@ static void *rn_alloc(size_t n)
 
 static const rn_io_t s_rn_io = {rn_send, rn_event, rn_alloc};
 
+// ---- robot tournaments (main/tourney_net.c), same lock as robonet ----------------
+int32_t cr_robot_slots(void);                                     // main/robots.c
+int32_t cr_robot_read(int32_t k, uint8_t *buf, int32_t max);
+int32_t cr_roster_count(void);                                    // src/apps/robot_store.cr
+const uint8_t *cr_roster_src(int32_t i, int32_t *len);
+
+static void tn_event(int what)
+{
+    s_ver++;
+    if (what == TN_EV_RUN) push_line("mode robots", 11); // every badge plays it on ROBOTS
+    cr_notify_main();
+}
+
+// This badge's slot robots into the robonet cache.
+static int tn_mine(int *idx, int max)
+{
+    static uint8_t *buf;
+    if (!buf) buf = rn_alloc(RN_SRC_MAX);
+    int n = 0;
+    for (int k = 0; buf && k < cr_robot_slots() && n < max; k++) {
+        int len = cr_robot_read(k, buf, RN_SRC_MAX);
+        int i = len > 0 ? rn_add(buf, len) : -1;
+        if (i >= 0) idx[n++] = i;
+    }
+    return n;
+}
+
+static int tn_builtins(int *idx, int max)
+{
+    int n = 0;
+    for (int k = 0; k < cr_roster_count() && n < max; k++) {
+        int32_t len = 0;
+        const uint8_t *src = cr_roster_src(k, &len);
+        int i = rn_add(src, len);
+        if (i >= 0) idx[n++] = i;
+    }
+    return n;
+}
+
+static int tn_peers(tn_peer_t *out, int max, int64_t now)
+{
+    int n = 0;
+    for (int i = 0; i < PEERS && n < max; i++) {
+        peer_t *p = &s_peer[i];
+        if (!p->seen || now - p->seen > STALE_MS || !p->ip || !(p->caps & CAP_ROBOTS) || p->kind == K_BADGEOS) continue;
+        out[n].addr = (rn_addr_t){p->ip, p->port ? p->port : PORT};
+        memcpy(out[n].mac, p->mac, 6);
+        snprintf(out[n].name, sizeof out[n].name, "%s", p->name);
+        n++;
+    }
+    return n;
+}
+
+static const tn_io_t s_tn_io = {rn_send, tn_event, tn_mine, tn_builtins, tn_peers};
+
 static void rn_lock(void)
 {
     if (!s_rn_lock) {
@@ -618,6 +674,7 @@ static void rn_lock(void)
         taskEXIT_CRITICAL(&s_rn_mux);
         if (mine) {
             rn_init(&s_rn_io);
+            tn_init(&s_tn_io, s_me, s_name[0]);
             return; // holding it
         }
         vSemaphoreDelete(m);
@@ -715,6 +772,70 @@ int32_t cr_rn_status(char *buf, int32_t max)
     return v;
 }
 
+// Shell `robot tourney net` / the ROBOTS app: a tournament with the robot
+// badges around. 0 started, -1 one is going on, -2 no robot badges heard,
+// -4 network mode off.
+int32_t cr_tn_start(uint32_t seed, int32_t seeds)
+{
+    if (!s_run || s_sock < 0) return -4;
+    rn_lock();
+    tn_set_me(s_me, s_name[0]);
+    int r = tn_start(seed, seeds, now_ms());
+    rn_unlock();
+    return r;
+}
+
+// Robot badges heard now (the ROBOTS app offers a link tournament).
+int32_t cr_tn_peers(void)
+{
+    if (!s_run || s_sock < 0) return 0;
+    tn_peer_t p[TN_PEERS];
+    return tn_peers(p, TN_PEERS, now_ms());
+}
+
+int32_t cr_tn_take_run(uint32_t *tid, uint32_t *seed, int32_t *seeds, int32_t *n, int32_t *idx, uint8_t *owner)
+{
+    rn_lock();
+    int ix[TN_ROBOTS], ns = 0, nn = 0;
+    bool ok = tn_take_run(tid, seed, &ns, &nn, ix, owner);
+    rn_unlock();
+    if (!ok) return 0;
+    *seeds = ns, *n = nn;
+    for (int k = 0; k < nn; k++) idx[k] = ix[k];
+    return 1;
+}
+
+void cr_tn_result(uint32_t tid, uint32_t hash, const uint8_t *table, int32_t len)
+{
+    rn_lock();
+    tn_result(tid, hash, table, len, now_ms());
+    rn_unlock();
+}
+
+int32_t cr_tn_standings(uint32_t *tid, uint32_t *hash, uint8_t *table, int32_t max)
+{
+    rn_lock();
+    int32_t n = tn_standings(tid, hash, table, max);
+    rn_unlock();
+    return n;
+}
+
+int32_t cr_tn_status(char *buf, int32_t max)
+{
+    rn_lock();
+    int32_t v = tn_status(buf, max);
+    rn_unlock();
+    return v;
+}
+
+// Name of badge k of the tournament into out (13 bytes).
+void cr_tn_badge(int32_t k, char *out)
+{
+    rn_lock();
+    snprintf(out, 13, "%s", tn_badge_name(k));
+    rn_unlock();
+}
+
 uint32_t cr_rn_match_id(void)
 {
     rn_lock();
@@ -809,6 +930,12 @@ static void on_udp(const uint8_t *b, int n, uint32_t ip, uint16_t port, int64_t 
         rn_lock();
         rn_rx(from, h->src, p && p->name[0] ? p->name : "badge", h->type, d, n, now);
         rn_unlock();
+    } else if (h->type == 'T') {
+        peer_t *p = peer_find(h->src, false);
+        rn_addr_t from = {ip, port};
+        rn_lock();
+        tn_rx(from, h->src, p && p->name[0] ? p->name : "badge", d, n, now);
+        rn_unlock();
     } else if (h->type == 'E' && n > 7) {
         espnow_to(d, d + 7, n - 7); // tunnel: UDP -> ESP-NOW, sent with my MAC
     }
@@ -880,6 +1007,9 @@ static void net_task(void *arg)
     if (!s_run) goto out;
     esp_wifi_set_ps(WIFI_PS_NONE);
     esp_read_mac(s_me, s_ap ? ESP_MAC_WIFI_SOFTAP : ESP_MAC_WIFI_STA); // the MAC our ESP-NOW frames carry
+    rn_lock();
+    tn_set_me(s_me, s_name[0]); // tournaments: the lowest MAC organizes
+    rn_unlock();
     s_rxq = xQueueCreate(8, sizeof(enow_t));
     s_espnow = esp_now_init() == ESP_OK;
     if (s_espnow) {
@@ -925,6 +1055,7 @@ static void net_task(void *arg)
         pong_tick(now);
         rn_lock();
         rn_tick(now);
+        tn_tick(now);
         rn_unlock();
         if (now >= next_hello) {
             for (int i = 0; i < PEERS; i++)
