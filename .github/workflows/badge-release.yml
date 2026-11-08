@@ -1,27 +1,26 @@
 # Publish a CI firmware build as a GitHub release (the badge's OTA source).
 #
-# DISABLED BY DEFAULT. Publishing a release is the user's decision: every badge
-# with Wi-Fi installs the newest release whose build number is greater than its
-# own, automatically when idle (a4e337c, Ota.auto_tick). Nothing runs this workflow automatically.
+# Automatic: every successful `firmware` run from a push to `crystal` is
+# published as release build-<N>, marked latest. Badges with Wi-Fi install the
+# newest release whose build number is greater than their own (Ota.auto_tick),
+# or on demand with shell `ota` / holding User B on the DIAG screen.
 #
-# To publish, all three are needed:
-#   1. Repository variable BADGE_RELEASES_ENABLED = true
-#      (Settings > Secrets and variables > Actions > Variables). Without it the
-#      job is skipped.
-#   2. Run it by hand: Actions > badge-release > Run workflow (or
-#      `gh workflow run badge-release.yml -f run_id=<id> -f confirm=publish`).
-#      GitHub lists workflow_dispatch workflows only once the file is on the
-#      default branch.
-#   3. Inputs: run_id = a successful `firmware` workflow run (its artifact
-#      badge-firmware-<build> is published), confirm = publish.
+# The repository variable BADGE_RELEASES_ENABLED = true must be set (it is);
+# unset it to stop all publishing.
 #
-# The release is tagged build-<N> at the run's commit, marked latest, with the
-# assets the badge fetches (firmware/main/ota.c, tools/release.sh):
+# By hand (to republish an older run): Actions > badge-release > Run workflow,
+# run_id = a successful `firmware` run, confirm = publish.
+#
+# Release assets (firmware/main/ota.c, tools/release.sh):
 #   badge-app.bin       = crystal_blink.bin (the app image for the other OTA slot)
 #   badge-version.txt   = "<git describe> <N>" (main/ota.c reads N)
 name: badge-release
 
 on:
+  workflow_run:
+    workflows: [firmware]
+    types: [completed]
+    branches: [crystal]
   workflow_dispatch:
     inputs:
       run_id:
@@ -34,16 +33,26 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: badge-release
+  cancel-in-progress: false
+
 jobs:
   release:
-    if: vars.BADGE_RELEASES_ENABLED == 'true' && inputs.confirm == 'publish'
+    if: >-
+      vars.BADGE_RELEASES_ENABLED == 'true' && (
+        (github.event_name == 'workflow_dispatch' && inputs.confirm == 'publish') ||
+        (github.event_name == 'workflow_run' &&
+         github.event.workflow_run.conclusion == 'success' &&
+         github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_branch == 'crystal'))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: read
     env:
       GH_TOKEN: ${{ github.token }}
-      RUN_ID: ${{ inputs.run_id }}
+      RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || inputs.run_id }}
     steps:
       - name: Check the run
         run: |
@@ -66,6 +75,10 @@ jobs:
           echo "N=$N" >> "$GITHUB_ENV"
       - name: Publish release
         run: |
+          if gh release view "build-$N" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release build-$N already exists; nothing to do"
+            exit 0
+          fi
           gh release create "build-$N" -R "$GITHUB_REPOSITORY" --target "$SHA" --latest \
             --title "Badge firmware build $N" \
             --notes "Crystal badge firmware build $N ($SHA), from firmware run $RUN_ID. Install on a badge: shell \`ota\`, or hold User B on the DIAG screen." \
