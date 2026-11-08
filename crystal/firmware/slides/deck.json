@@ -1,0 +1,790 @@
+[
+  {
+    "id": "agency",
+    "title": "Amplifying Agency: Technology as an opportunity",
+    "notes": "* “Ideas are equal. Opportunities are not.” - RJ\n* How do we amplify the good in every idea?\n* Even better, how do we enable students to amplify the good they see in the ideas of others?\n* In this AI-generated illustration based on https://interactioninstitute.org/illustrating-equality-vs-equity/, I want you to think about the crates as a technology.\n* When the tallest child uses this technology to aide the shortest, he has amplified that child’s agency.\n* Each child enjoys the benefit.",
+    "body": "<p class=\"byline\">Jason Kridner · Northville educators</p>",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/equity.png",
+    "alt": "Three children watch baseball from crates. In the second panel the tallest stands on the ground and the shortest has two crates.",
+    "time": "0–2 min",
+    "origin": "Jason’s 2026-10-19 forum review, speaker bullets",
+    "annotation": "Jason’s spoken interpretation: equality versus equity. The taller child becomes happier through giving his unnecessary crate and being of service. The shortest child can watch the game rather than peek through a gap. Treat this as the intended reading, not a claim that every viewer will infer it unaided.",
+    "type": "cover",
+    "credit": {
+      "label": "Based on Interaction Institute for Social Change, “Illustrating Equality vs. Equity”",
+      "url": "https://interactioninstitute.org/illustrating-equality-vs-equity/"
+    }
+  },
+  {
+    "id": "today",
+    "title": "Today",
+    "bullets": [
+      "Why should everyone know the basics of how a computer works?",
+      "Can I compute anything computable with just 2 instructions?",
+      "How does the AI know?",
+      "<b>Demonstration:</b> BeagleBadge + BeagleConnect Zepto “Interactor”",
+      "How can we work together to amplify the agency of your students?"
+    ],
+    "body": "",
+    "notes": "Tell them what you are going to tell them. One line per part, no detail yet. Each exercise opens with what it will show and ends with what we saw, and the hour ends with a summary.",
+    "time": "2–3 min",
+    "origin": "Structure: tell them what you will tell them, tell them, tell them what you told them (Jason, 2026-10-21)"
+  },
+  {
+    "id": "technology",
+    "title": "Technology can be as simple as a stick",
+    "notes": "* Computers and AI models are just highly-flexible tools",
+    "body": "",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/bonobo-stick-pencil.png",
+    "alt": "A bonobo holds a stick with ants beside an ant mound, in a colored-pencil illustration.",
+    "time": "3–5 min",
+    "origin": "Jason’s 2026-10-19 forum review, speaker bullets",
+    "type": "split",
+    "bullets": [
+      "Using tools to amplify agency",
+      "Found everywhere"
+    ]
+  },
+  {
+    "id": "virtues",
+    "title": "Managing complexity",
+    "notes": "To find agency, the behavior of your medium has to be predictable. If you can't intuit what will happen when you act, that's the definition of not having agency.\n\nWhile the medium might not appear to have any value judgement of its own, it may amplify some outcomes more than others. Choosing a medium, or developing a medium, impacts outcomes and is therefore a moral choice.\n\nI believe the baseline is that each of us wants to be a positive force in the world. This is simply an article of faith for me, but I generally just don't see the value in concluding that anyone is fundamentally guided by bad intentions. Instead, I see the world as amplifying the bad in their ideas, rather than building on the good. Ultimately, none of us lives in a bubble, isolated from the rest of the world, so it is our role to look for the best in the ideas and help them flourish.\n\nWhen a system gets complex enough, it will drift towards failure unless it is continuously maintained\n\nTolerating failure locally, using readily available and replaceable building blocks, prevents the failure of the whole",
+    "body": "",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/forest-cabin.png",
+    "alt": "Woodland cabin, waterwheel and hand-operated wooden mechanism assembled from visible materials.",
+    "time": "5–8 min",
+    "origin": "Jason’s wiki, verbatim speaker bullets",
+    "annotation": "These are Jason’s framing and beliefs. The illustration provides a medium for discussing them; it does not establish the engineering reliability of the depicted structure.",
+    "type": "split",
+    "bullets": [
+      "Doing good feels good",
+      "Agency requires predictable medium",
+      "Medium amplifies specific outcomes",
+      "Complexity drifts towards failure",
+      "Plentiful medium supports addressing risk"
+    ],
+    "credit": {
+      "label": "Inspired by Primitive Villa, “I Finally Built the Giant Water Wheel My Jungle Home Needed”",
+      "url": "https://www.youtube.com/watch?v=Y651d0he5YQ"
+    }
+  },
+  {
+    "id": "meet-chloe",
+    "title": "Meet Chloe",
+    "notes": "I want to tell you the story of Chloe and her experience of technology.\n\nThe image on the next slide was inspired by a Pearl Jam concert t-shirt I had as a kid.\n\nOn one side, the t-shirt said \"9 out of 10 kids prefer crayons to guns\".\n\nThe other side had this image on it, with the word \"choices\".\n\nThe image can invoke some strong emotions, and it is meant to, but for the purpose of this story, this is simply how I imagine Chloe making a choice to find her own self-expression with drawing, even if she didn't know she was making that choice.\n\nLet's please save any political discussion for the right time and place. If you are offended or frightened, it is not my intent, but I accept your judgement and am happy to revisit with you how to express my idea better. Please visit with me after the presentation.",
+    "body": "",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/soccer.png",
+    "alt": "Chloe running with a soccer ball, looking across the field.",
+    "type": "portrait",
+    "time": "8–9 min",
+    "origin": "Jason’s wiki, verbatim speaker bullets",
+    "annotation": "The slogan is a recalled shirt slogan, not a statistical claim.",
+    "bullets": [
+      "Entirely fictional character",
+      "Loves drawing",
+      "Learns tough lessons about her medium",
+      "Inspired by Pearl Jam 1992 concert t-shirt stating on one side<br><em>“9 out of 10 kids prefer crayons to guns”</em>",
+      "On the other side, something like this …"
+    ]
+  },
+  {
+    "id": "drawing",
+    "title": "Choices",
+    "notes": "Crayons helped Chloe find a voice for self-expression\n\nThis isn't a binary choice; Chloe could have found any number of mediums\n\nFor me, computers and electronics became my medium\n\nFor you, how did you learn to express your ideas?",
+    "body": "",
+    "time": "9–10 min",
+    "origin": "Jason’s wiki, verbatim speaker bullets",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-choices.png",
+    "alt": "Chloe drawing a colorful house with crayons, with a revolver lying untouched beside her."
+  },
+  {
+    "id": "masters",
+    "title": "Chloe fell in love with drawing",
+    "notes": "Chloe visits an art museum and looks at The Starry Night. The same illustration also shows her visit to the crayon factory and the classroom making crayons.",
+    "body": "",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/crayons-to-starry-night.png",
+    "alt": "Three scenes: Chloe at a crayon factory, watching a teacher pour purple wax, and looking at The Starry Night.",
+    "time": "10–11 min",
+    "origin": "Jason’s wiki heading; proposed connective narration based on his supplied image",
+    "annotation": "The Starry Night supersedes the fictional pencil tree in the earlier story. This is an AI-generated depiction of a museum visit, not a reproduction offered as a source image. The UV file is mutable: a later replacement will appear here without changing the deck.",
+    "frames": [
+      0,
+      33.5,
+      68.5,
+      100
+    ],
+    "steps": [
+      {
+        "fade": [
+          2,
+          3
+        ],
+        "text": "She was able to understand the source of her tools",
+        "over": [
+          2,
+          3
+        ]
+      },
+      {
+        "fade": [
+          1,
+          3
+        ],
+        "text": "She was even able to envision how to change those tools herself",
+        "over": [
+          3
+        ]
+      },
+      {
+        "fade": [
+          1,
+          2
+        ],
+        "text": "And when seeing the masters in the craft, she was inspired, seeing only herself in her own way",
+        "over": [
+          1,
+          2
+        ]
+      }
+    ]
+  },
+  {
+    "id": "confidence",
+    "title": "Chloe was able to express herself",
+    "notes": "On a school trip to the crayon factory, Chloe stands on tiptoe at the rail. A worker shows them wax, color, a mold. She points to a tray of purple crayons.\n\n“Could you make it darker?”\n\nThe worker shows her where the color goes in.\n\nBack in class, they make their own. The teacher handles the hot wax. Chloe chooses the scraps. When hers has cooled, she rubs it across a corner of paper, frowns, and puts more blue scraps beside the mold for the next batch.\n\nShe takes both crayons home. She has plans for the second one.",
+    "body": "",
+    "time": "11–12 min",
+    "origin": "Jason’s wiki heading; fictional narration retained from story v3",
+    "annotation": "Return verbally to the factory and classroom scenes just shown. Understanding the process gives Chloe practical confidence, without implying complete independence from society or supply chains.",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-bridget-v4/01-purple-discovery.webp",
+    "alt": "Young Chloe discovers a purple evening sky by rubbing the side of her broken crayon over a house drawing.",
+    "type": "split",
+    "bullets": [
+      "She adapted to her tools and adapted her tools to her",
+      "When one crayon broke, she grabbed the next and it behaved mostly like she expected"
+    ]
+  },
+  {
+    "id": "mastery",
+    "title": "Chloe mastered",
+    "notes": "Years pass. Her bedroom fills with houses, including a dreadful clay one she won't let anybody throw away. On a borrowed tablet, she learns to make their windows light up. Somebody is still reading.\n\nOne afternoon, on her way home, she sees the factory windows covered with brown paper. She slows down. The little entrance where her class lined up is chained shut.\n\nShe still has the two purple crayons.",
+    "body": "<p class=\"statement\">She still has the two purple crayons.</p>",
+    "time": "12–13 min",
+    "origin": "Jason’s wiki heading; fictional narration retained from story v3",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-bridget-v4/02-window-practice.webp",
+    "alt": "An older Chloe practices a glowing window in colored pencil beside a computer showing an early animation.",
+    "type": "split"
+  },
+  {
+    "id": "story-5",
+    "title": "The house answers, softly.",
+    "body": "<p class=\"scene\">Impossible rooms, rain becoming music, a visitor who asks to stay.</p>",
+    "notes": "Now imagine Chloe years further on, working with AI. She sketches, asks, rejects, redraws. Together with the system, she makes a house you can walk through, though its rooms could never fit inside its walls. Rain on the roof becomes music. A visitor whistles, and a staircase curls toward the sound.\n\nChloe spends three evenings getting the rain right.\n\nAt the opening, a woman hums a tune her father used to whistle. The house answers, softly. She asks if she can stay a little longer. Chloe finds her a chair.",
+    "type": "split",
+    "time": "13–17 min · story continuation",
+    "narrative": true,
+    "origin": "Fictional narrative retained from story v3",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-bridget-v4/03-immersive-house.webp",
+    "alt": "Adult Chloe sits beside a visitor moved by her immersive purple house, with luminous windows and rain."
+  },
+  {
+    "id": "story-windows",
+    "title": "The windows stopped glowing",
+    "body": "<p class=\"scene\">A folder of her first animations that no longer play. On the wall, the paper drawings from the same year, still glowing.</p>",
+    "notes": "As a teenager, Chloe made her first animations in Flash: little windows that lit up one by one, posted for her friends to play in their browsers.\n\nAt the end of 2020, Adobe stopped supporting Flash Player, and a few weeks later it blocked Flash content from running at all. Chloe was one of millions of people whose animations and games stopped playing that winter.\n\nYears later she opens the folder. Nothing plays. On the wall above her desk, the paper drawings from the same year are still glowing.\n\nDo not dwell on the brand. The point is that Chloe’s work depended on something she could not see inside, keep running or replace. Much of that work has since been rescued with emulators, but only because people outside the company understood how it worked.",
+    "type": "split",
+    "time": "13–17 min · story continuation",
+    "narrative": true,
+    "origin": "Story scene: Chloe as one of the many creators whose Flash animations stopped playing when Adobe ended Flash Player at the end of 2020 (Jason, 2026-10-26)",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-bridget-v4/07-dark-animations.png",
+    "alt": "Adult Chloe at her desk in the evening looks up thoughtfully at her colored-pencil drawings of glowing houses pinned to the wall, while her laptop shows a grid of grey, empty animation thumbnails.",
+    "sources": [
+      "flash"
+    ]
+  },
+  {
+    "id": "story-alebrije",
+    "title": "“You have exhausted your 100 credits”",
+    "body": "<p class=\"scene\">A sloth-faced alebrije with giraffe legs and enormous antlers, one burst of marigolds from finished.</p>",
+    "notes": "When Bridget went to school, she learned about alebrijes in Spanish class: the brightly painted fantasy creatures of Mexican folk art. The technology teacher came in one day and introduced the class to Photoshop Express, where Bridget learned how to make her own alebrije: a gloriously colorful flying bird with a sloth face, air-striding giraffe legs, and antlers the size of Disneyland.\n\nJust when Bridget was about to put the finishing touch on with a burst of marigolds, she got the notice: “You have exhausted your 100 credits.”\n\nLet it land. Chloe’s crayons never ran out halfway through a picture. Bridget’s tool did, and nothing in the lesson showed her how it worked or what else she could have used.",
+    "type": "split",
+    "time": "13–17 min · story continuation",
+    "narrative": true,
+    "origin": "Jason’s first-hand observation, 2026-10-22",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-bridget-v4/08-alebrije.png",
+    "alt": "Bridget stares in dismay at a school laptop showing her colorful flying alebrije with a sloth face, giraffe legs and antlers, half covered by a grey pop-up box, with marigolds beside her."
+  },
+  {
+    "id": "story-9",
+    "title": "What can the child carry away?",
+    "body": "<p class=\"scene\">Bridget slides her drawing under a placemat. “Mine doesn’t do anything.” Chloe pulls up a chair, and they ask it together.</p>",
+    "notes": "This is the turning point of the story. Take it slowly.\n\nAt the kitchen table, Bridget slides her own drawing under a placemat.\n\n“Mine doesn’t do anything.”\n\nChloe pulls up a chair. She thinks of her windows that no longer glow; Bridget thinks of her alebrije, one burst of marigolds from finished. They look at the drawing between them and ask the same question: what can the child carry away?\n\nNow make the contrast explicit, pointing back to the “Choices” slide (slide 6). Chloe chose crayons: a medium she could understand, make, take apart and master, and nobody could switch it off. Bridget is being guided down a different path. Her tools are impressive, but they run out of credits or stop working, she cannot see inside them, and along the way paper and crayons stopped looking like a real way to express herself. Her drawing “doesn’t do anything” only because she has been taught that the things that matter happen somewhere else.\n\nWe are putting Bridget in a very different situation from the one Chloe had, and most of us never chose to. The rest of today is about giving children like Bridget back what Chloe had: tools they can understand, and the confidence that their own marks count.",
+    "type": "split",
+    "time": "13–17 min · story continuation",
+    "narrative": true,
+    "origin": "Jason’s restructuring of the story’s turning point, 2026-10-22; combines the kitchen-table scene with the closing question",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/chloe-bridget-v4/04-bridget-drawing.webp",
+    "alt": "Bridget slides her purple-sky house drawing beneath a placemat as Chloe gently leans toward her."
+  },
+  {
+    "id": "crayon-bridge",
+    "title": "A crayon for computing",
+    "bullets": [
+      "Chloe understood her crayon: she could even make one",
+      "A crayon is a tiny tool that can draw any picture",
+      "Is there a tool that simple that can compute anything?",
+      "Three people found one"
+    ],
+    "body": "",
+    "notes": "Pick up from the question on the last slide: what can the child carry away? Chloe’s first tool was a crayon. She knew where it came from, how it was made, and how to make a darker purple. Nothing about it was hidden, and with enough marks it could make any picture.\n\nBridget’s tools were the opposite: powerful, but locked away. So ask the question the next three slides answer: is there a tool for computing that is as simple and open as a crayon, one a child can understand completely, that can still compute anything a computer can? The surprising answer is yes, and we will build it on your tables with crayons.",
+    "time": "17–18 min",
+    "origin": "Bridge from the Chloe and Bridget story to Exercise 1, written for Jason’s 2026-10-21 request",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/crayon-computing.png",
+    "type": "split",
+    "alt": "A child’s hand draws with a purple crayon: on the left of the paper a house under a purple sky, on the right the marks turn into rows of tally marks and empty boxes."
+  },
+  {
+    "id": "turing",
+    "title": "Hilbert, Turing, Minsky",
+    "bullets": [
+      "1928, David Hilbert: what can following fixed rules ever work out?",
+      "1936, Alan Turing: a person with pencil and paper, following rules, can work out anything that can be worked out",
+      "… but some questions no rules can ever settle",
+      "1961, Marvin Minsky: two rules are enough. Add one. Take one."
+    ],
+    "body": "",
+    "notes": "Three steps, thirty years apart.\n\nIn 1928 the mathematician David Hilbert asked whether there could be a fixed procedure, rules followed without any insight, that settles every mathematical question. To answer, someone had to say exactly what following rules means.\n\nIn 1936 Alan Turing did. He pictured a person working with pencil and paper: looking at one mark at a time, writing or erasing a mark, and deciding what to do next from a fixed list of rules. He argued that anything that can be worked out by following rules can be worked out this way, and he showed that one set of rules can carry out any other set it is given. He also proved some questions can never be settled by any rules, which answered Hilbert: no. The illustration is an imagined Turing machine, not a picture of Turing.\n\nIn 1961 Marvin Minsky showed how small this can get: piles of counters and two kinds of instruction, add one and take one (checking whether the pile is empty), are enough to do anything Turing’s rule-follower can. That is the tool we will use, and it is as simple as a crayon.",
+    "time": "18–20 min",
+    "sources": [
+      "turing"
+    ],
+    "origin": "Proposed facilitation notes written for the three-exercise structure",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/turing-tape.png",
+    "alt": "An imagined 1930s study: a paper tape of squares marked 0 and 1 runs under a brass read-and-write head, beside a rule table pinned to the wall and a window onto college rooftops.",
+    "type": "split"
+  },
+  {
+    "id": "what-computation",
+    "title": "What is a computation?",
+    "bullets": [
+      "Marks go in",
+      "Rules are followed exactly",
+      "Marks come out",
+      "You already teach this: counting crayons into cups"
+    ],
+    "body": "<p class=\"small\">3 crayons in one cup, 5 in another. Rule: move the crayons one at a time from the second cup to the first. Count: 8.</p>",
+    "notes": "This is the whole idea, and it needs no technical words. A computation is changing marks into other marks by following rules exactly. The marks can be anything: pencil strokes, crayons, crayon dots, counting bears, beads, holes in punched cards, or the tiny electrical charges inside a computer. The rules never need to understand what the marks mean.\n\nKindergarten classrooms already do this every day. Adding by counting crayons, bears or beads into cups is a computation: marks in (3 crayons, 5 crayons), a rule followed exactly (move one at a time until the cup is empty), marks out (8 crayons). The child who moves the crayons does not need to “know” 3 + 5 = 8; the rule produces it. That is exactly the program we are about to run.\n\nWhat Minsky showed is that nothing more than this, cups, counters and rules about adding and taking one, is needed for any computation at all.",
+    "time": "20–22 min",
+    "origin": "Bridge from the Chloe and Bridget story to Exercise 1, written for Jason’s 2026-10-21 request",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/crayons-into-cups.png",
+    "type": "split",
+    "alt": "A child’s hand moves a purple crayon from one paper cup into another full of crayons on a classroom table, with five crayons lined up in front."
+  },
+  {
+    "id": "universality",
+    "title": "Turing completeness",
+    "body": "<p class=\"small\">With enough memory and time, a system that can do these can compute anything a Turing machine can.</p>",
+    "notes": "A system is Turing complete if it can simulate any Turing machine, given unlimited memory and time. In practice that takes three things: memory it can read and write, a way to choose the next step based on what it reads, and repetition. Every general-purpose computer and nearly every programming language has them. So do some surprising systems, such as spreadsheet formulas and the card game Magic: The Gathering.\n\nTwo limits keep this honest. Real machines have finite memory, so they are Turing complete only in the idealised sense. And completeness is about what can be computed, not how fast: some programs never halt, and no machine can always tell which.\n\nThe Turing test is a different idea. It asks about behaviour in a conversation, not about what can be computed. Keep the two separate.\n\nThe counter machine has all three: the cups or cups are memory, the take rule chooses the next step by whether a cup is empty, and going back to an earlier step is repetition.",
+    "time": "22–23 min",
+    "sources": [
+      "turing"
+    ],
+    "origin": "Proposed facilitation notes adapted from previous workshop draft",
+    "bullets": [
+      "Read and write memory",
+      "Choose the next step by what you read",
+      "Repeat"
+    ]
+  },
+  {
+    "id": "mechanisms",
+    "title": "Exercise 1 · Understanding the mechanism",
+    "body": "<p class=\"small\">Read the logic. Predict its behavior. Change what it does.</p>",
+    "notes": "Tell them what Exercise 1 will show, in four lines. Then the goal underneath: whatever students build, can they read the logic, predict what it will do and change it?\n\nBring Turing’s clerk back to the classroom. Students can use agents to help write code and still learn to inspect the logic themselves. The important difference is whether they can explain and test the mechanism, rather than depending entirely on another system to make it work. This is practical, conditional agency, not total independence. Reusing code is valuable; the question is whether the path to understanding and changing it is available.\n\nDo not reduce this to “computers execute reliably, but AI makes mistakes.” The point is the accessible reasoning route: for an explicit algorithm and stated inputs, we can sometimes derive an outcome before running it, and teach why. Repeatability alone does not give us that explanation. Neither a successful demo nor access to a source file guarantees comprehension.\n\nInvite one example of a classroom activity that ends at operating a product, then one that exposes an underlying mechanism. Keep this brief. The upcoming activity is deliberately small enough to understand completely.",
+    "time": "23–24 min",
+    "origin": "Proposed facilitation notes adapted from previous workshop draft",
+    "bullets": [
+      "A machine with only two rules",
+      "Two programs: add and multiply",
+      "How small steps climb to any program",
+      "Why that makes it Turing complete"
+    ]
+  },
+  {
+    "id": "card-machine",
+    "title": "The counter machine",
+    "bullets": [
+      "Memory: four cups of crayons, numbered 1 to 4",
+      "Program: ADD and TAKE cards, each with its own Step number",
+      "Write the numbers on the cards",
+      "Keep a finger on the current card"
+    ],
+    "body": "",
+    "notes": "This machine never changes for the rest of the exercise. Only the program changes, and the program is nothing but numbers written on blank cards. Write different numbers and you have a different program. A real computer is the same: its program is just numbers in memory, right next to its data. That is Turing’s stored-program idea, built with crayons.\n\nThe memory holds numbers, nothing else: count the crayons in a cup. Print the step cards from machine-cards.html; the setup pages already have the numbers filled in, and the blank cards are for writing your own programs. Because each card carries its own Step number, the cards can lie on the table in any order, just as a computer’s memory has numbered addresses. Each table needs a box of 24 crayons.",
+    "time": "24–25 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/counter-machine.png",
+    "type": "split",
+    "alt": "Four teachers around a table with four paper cups of crayons and a row of step cards; one points at a card, one moves a crayon between cups, one writes on a sheet."
+  },
+  {
+    "id": "machine-step",
+    "title": "Two kinds of step",
+    "body": "<div class=\"two-col\"><div class=\"steps example\"><div class=\"pos\"><div class=\"step-card add\"><span class=\"box index\"><span class=\"lbl\">Step</span><span class=\"num\">1</span></span><strong>ADD</strong><span class=\"say\">Put 1 crayon in the cup</span><span class=\"box \"><span class=\"lbl\">Cup</span><span class=\"num\">1</span></span><span class=\"box \"><span class=\"lbl\">Next step</span><span class=\"num\">2</span></span></div></div><div class=\"pos\"><div class=\"step-card take\"><span class=\"box index\"><span class=\"lbl\">Step</span><span class=\"num\">2</span></span><strong>TAKE</strong><span class=\"say\">Take 1 crayon from the cup</span><span class=\"box \"><span class=\"lbl\">Cup</span><span class=\"num\">2</span></span><span class=\"box \"><span class=\"lbl\">Got one → step</span><span class=\"num\">3</span></span><span class=\"box \"><span class=\"lbl\">Empty → step</span><span class=\"num\">STOP</span></span></div></div></div><ol class=\"short\"><li>Keep a finger on the current card and do what it says.</li><li>Move your finger to the card with the Step number it names.</li><li>Repeat until STOP.</li></ol></div>",
+    "notes": "Left, step 1: ADD a crayon to cup 1, then go to step 2. Right, step 2: TAKE a crayon from cup 2; if you got one go to step 3; if the cup was empty, STOP. That is the whole machine. ADD always succeeds. TAKE is the only place a choice happens: it checks whether the cup is empty. That one check is enough to build loops, comparisons and everything else.\n\nOne person moves crayons in the cups, one keeps a finger on the current card and reads it aloud, one checks. Nobody needs to know what the program does.",
+    "time": "25–26 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs"
+  },
+  {
+    "id": "prog-add",
+    "title": "Program 1 · Add",
+    "body": "<p class=\"small\">Put 3 crayons in cup 1 and 5 in cup 2. Start at step 1. When it stops, count cup 1.</p>",
+    "notes": "Two cards. The program moves crayons from cup 2 to cup 1 one at a time until cup 2 is empty. Cup 1 ends with 8, after 11 moves.\n\nThe program has no numbers for the data in it. Put any two numbers in cups 1 and 2 and it adds them; the only limit is how many crayons you have. That is the difference between a program and its data.",
+    "time": "26–29 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs",
+    "program": [
+      {
+        "op": "TAKE",
+        "dish": 2,
+        "next": 2,
+        "empty": 0
+      },
+      {
+        "op": "ADD",
+        "dish": 1,
+        "next": 1
+      }
+    ]
+  },
+  {
+    "id": "prog-multiply",
+    "title": "Program 2 · Multiply",
+    "body": "<p class=\"small\">Put 3 crayons in cup 1 and 4 in cup 2. Start at step 1. When it stops, count cup 3.</p>",
+    "notes": "Six cards, same two kinds of step. Steps 2 to 4 pour cup 2 into cup 3, keeping a copy in cup 4. Steps 5 and 6 pour cup 4 back into cup 2. Step 1 repeats all of that once for every crayon in cup 1: a loop inside a loop. Cup 3 ends with 12 and cup 2 is back to 4, after 70 moves: about four minutes.\n\nAsk tables to predict before they start. Then ask what they would change to multiply 6 by 7: only the crayons in the cups, never the program. Then ask what they would change to make it add instead: only the crayons on the cards.",
+    "time": "29–34 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs",
+    "program": [
+      {
+        "op": "TAKE",
+        "dish": 1,
+        "next": 2,
+        "empty": 0
+      },
+      {
+        "op": "TAKE",
+        "dish": 2,
+        "next": 3,
+        "empty": 5
+      },
+      {
+        "op": "ADD",
+        "dish": 3,
+        "next": 4
+      },
+      {
+        "op": "ADD",
+        "dish": 4,
+        "next": 2
+      },
+      {
+        "op": "TAKE",
+        "dish": 4,
+        "next": 6,
+        "empty": 1
+      },
+      {
+        "op": "ADD",
+        "dish": 2,
+        "next": 5
+      }
+    ]
+  },
+  {
+    "id": "subroutines",
+    "title": "Bigger steps from small ones",
+    "body": "<div class=\"sub-diagram\"><div class=\"sub-col\"><span class=\"cap\">Program 1’s two cards…</span><div class=\"mini\"><b>TAKE</b> cup 2<br>got one → 2 · empty → STOP</div><div class=\"mini\"><b>ADD</b> cup 1<br>→ 1</div></div><div class=\"sub-arrow\">=</div><div class=\"sub-col\"><span class=\"cap\">…are one new step:</span><div class=\"mini big\"><b>MOVE</b><br>cup 2 into cup 1</div></div><div class=\"sub-arrow\">→</div><div class=\"sub-col\"><span class=\"cap\">Multiply is just:</span><div class=\"mini big\">repeat for every crayon in cup 1:<br><b>COPY</b> cup 2 into cup 3</div></div></div>",
+    "notes": "Programmers call a group of steps that does one job a subroutine. Once the two Add cards work, nobody needs to think about them again: they are a new step, MOVE. Multiply is MOVE, done twice so nothing is lost (that is COPY), inside a loop. Every new step is built only from steps we already trust.\n\nA subroutine can even be shared: before jumping into it, put crayons in a spare cup saying which step to come back to. That “return address” is just another number in memory. Real computers do exactly this every time one part of a program calls another.",
+    "time": "34–36 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs"
+  },
+  {
+    "id": "ladder",
+    "title": "Climbing to any program",
+    "body": "<ol class=\"ladder\"><li><b>ADD · TAKE</b> the whole machine</li><li><b>CLEAR · MOVE · COPY</b> a few cards each</li><li><b>add · subtract · compare</b></li><li><b>multiply · divide · remainder</b></li><li><b>numbered memory cells</b> packed into one big number</li><li><b>a CPU’s instructions</b> LOAD · STORE · ADD · JUMP · CALL</li><li><b>any program</b> a spreadsheet, a web browser, an AI model</li></ol>",
+    "notes": "Reveal the rungs from the bottom. Each rung is built only from the rungs below it, exactly as the subroutines were.\n\nClear, move and copy are a few cards each. Subtract is TAKE from two cups together; compare is subtracting until one cup runs out and seeing which one. Divide and remainder are repeated subtraction, and Euclid’s algorithm is built from them.\n\nThe surprising rung is memory. A real computer has billions of numbered cells. A counter machine can keep many cells in one cup as one big number: treat its digits as the cells, the way 4,207 holds 4, 2, 0 and 7. Reading cell 2 is dividing and taking the remainder, which we already have. So the machine can have arrays, lists and pointers.\n\nWith memory cells and arithmetic, each instruction a real processor has (load, store, add, compare, jump, call) is a subroutine. A processor itself runs one loop: fetch the next instruction from memory, decode it, carry it out. That loop is a program too, and it can be written for the counter machine. So any program a computer runs, from a spreadsheet to an AI model, could in principle be run with cups and crayons.\n\nWe do not need the details, and nobody would build a computer this way: it would take more crayons than there are grains of sand, and forever to run. The point is that nothing more is needed. That is what Turing complete means.",
+    "time": "36–38 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs"
+  },
+  {
+    "id": "you-machine",
+    "title": "Why the counter machine is Turing complete",
+    "bullets": [
+      "One machine; only the step cards changed",
+      "Any program can be climbed to from ADD and TAKE",
+      "Marvin Minsky, 1961: it can do anything a Turing machine can",
+      "The real limits are crayons and time"
+    ],
+    "body": "",
+    "notes": "This is the definition from slide 17, and the ladder is why it holds. The cups are memory that can be read (TAKE checks it) and written (ADD and TAKE change it); TAKE chooses the next step by what it finds; going back to an earlier step is repetition. Minsky proved in 1961 that a machine with just these two kinds of step can do anything a Turing machine can, and so anything any computer can. With only two cups it still works, but the programs have to pack everything into enormous numbers; more cups make programs shorter.\n\nThe program is itself just symbols on cards. Write it in crayons instead and a bigger program could read and run it: Turing’s universal machine, and the idea behind every stored-program computer.\n\nA program can also run forever. One card, ADD to cup 1 then go to step 1, never stops; it just fills cup 1 until the crayons run out. Turing proved there is no general method that can look at any program and decide whether it will stop: the halting problem.",
+    "time": "38–40 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs"
+  },
+  {
+    "id": "classroom",
+    "title": "Take it to your classroom",
+    "bullets": [
+      "Euclid’s algorithm: the greatest common divisor (GCD)",
+      "Square roots, without multiplying",
+      "A program that never stops",
+      "Blank cards: write your own"
+    ],
+    "body": "<p class=\"small\">Printable cards and setup pages: machine-cards.html. Homework, from two instructions to a processor: homework.html</p>",
+    "extras": [
+      {
+        "title": "Euclid’s algorithm: GCD",
+        "setup": "Put 12 crayons in cup 1 and 8 in cup 2. When it stops, count cup 3: the greatest common divisor, 4. About 80 moves.",
+        "about": "From Euclid’s Elements, around 300 BC, and still inside the encryption that protects websites. It takes from both cups until one is empty, keeps the difference and repeats.",
+        "program": [
+          {
+            "op": "TAKE",
+            "dish": 1,
+            "next": 2,
+            "empty": 4
+          },
+          {
+            "op": "TAKE",
+            "dish": 2,
+            "next": 3,
+            "empty": 7
+          },
+          {
+            "op": "ADD",
+            "dish": 3,
+            "next": 1
+          },
+          {
+            "op": "TAKE",
+            "dish": 2,
+            "next": 5,
+            "empty": 0
+          },
+          {
+            "op": "ADD",
+            "dish": 2,
+            "next": 6
+          },
+          {
+            "op": "TAKE",
+            "dish": 3,
+            "next": 9,
+            "empty": 1
+          },
+          {
+            "op": "ADD",
+            "dish": 1,
+            "next": 8
+          },
+          {
+            "op": "TAKE",
+            "dish": 3,
+            "next": 10,
+            "empty": 1
+          },
+          {
+            "op": "ADD",
+            "dish": 1,
+            "next": 6
+          },
+          {
+            "op": "ADD",
+            "dish": 2,
+            "next": 8
+          }
+        ]
+      },
+      {
+        "title": "Square root",
+        "setup": "Put 16 crayons in cup 1 and 1 crayon in cup 2. When it stops, count cup 3: the square root, 4. About 100 moves; 9 takes about 60.",
+        "about": "No multiplication anywhere. It takes away 1, then 3, then 5, then 7 crayons: each odd number adds one more layer to a square, because 1 + 3 + 5 + 7 = 4 × 4. For a number that is not a perfect square it gives the whole-number part.",
+        "program": [
+          {
+            "op": "TAKE",
+            "dish": 2,
+            "next": 2,
+            "empty": 4
+          },
+          {
+            "op": "TAKE",
+            "dish": 1,
+            "next": 3,
+            "empty": 0
+          },
+          {
+            "op": "ADD",
+            "dish": 4,
+            "next": 1
+          },
+          {
+            "op": "ADD",
+            "dish": 3,
+            "next": 5
+          },
+          {
+            "op": "TAKE",
+            "dish": 4,
+            "next": 6,
+            "empty": 7
+          },
+          {
+            "op": "ADD",
+            "dish": 2,
+            "next": 5
+          },
+          {
+            "op": "ADD",
+            "dish": 2,
+            "next": 8
+          },
+          {
+            "op": "ADD",
+            "dish": 2,
+            "next": 1
+          }
+        ]
+      },
+      {
+        "title": "A program that never stops",
+        "setup": "All cups empty. Does it stop?",
+        "about": "It fills cup 1 until the crayons run out: the machine running out of memory. Turing proved no general method can decide, for every program, whether it will stop.",
+        "program": [
+          {
+            "op": "ADD",
+            "dish": 1,
+            "next": 1
+          }
+        ]
+      }
+    ],
+    "notes": "These are for later, with students, not for running now. Each has a printed setup page in machine-cards.html and instructions on the activity sheet. Good classroom challenges: write a program that subtracts, one that doubles, one that decides whether a number is even. Students can check each other’s programs by running them.",
+    "time": "40–41 min",
+    "origin": "Exercise 1 design: a counter machine (Minsky) with printed ADD and TAKE step cards and crayons as memory; programs verified by simulation in verify.cjs"
+  },
+  {
+    "id": "ex1-recap",
+    "title": "Exercise 1 · What we saw",
+    "bullets": [
+      "Two rules, add one and take one, made a working computer",
+      "A program is just numbers written on cards",
+      "Small steps build bigger ones, all the way to any program",
+      "That is Turing completeness: as simple as a crayon"
+    ],
+    "body": "",
+    "notes": "Tell them what you told them. The machine only does what its cards say, and every card can be read: that is the understanding Chloe had of her crayon. Next, a machine that seems to do far more, and whose workings are much harder to see.",
+    "time": "41–42 min",
+    "origin": "Structure: tell them what you will tell them, tell them, tell them what you told them (Jason, 2026-10-21)"
+  },
+  {
+    "id": "turk",
+    "title": "Exercise 2 · A machine that seemed to think",
+    "body": "",
+    "notes": "Open Exercise 2 from where Exercise 1 ended. The counter machine does exactly what its cards say, and we can read every card. For a long time people have been just as fascinated by machines that seem to think for themselves.\n\nWolfgang von Kempelen built the Turk to impress Empress Maria Theresa’s court and presented it in 1770. A turbaned figure sat at a cabinet and played chess against visitors. Before each show the operator opened the cabinet doors to display clockwork, while a strong human player stayed hidden inside and moved the figure’s arm with levers. After Kempelen’s death, Johann Mälzel bought it and toured Europe and the United States. Reported opponents include Benjamin Franklin in Paris and Napoleon. Edgar Allan Poe published an essay in 1836 arguing that a person must be inside. The Turk burned in a museum fire in Philadelphia in 1854.\n\nUse the illustration to ask what the audience could see and what they could not. It is an AI-generated artistic scene, not documentary evidence of a specific encounter.\n\nThe bridge: today’s AI chat systems can feel like the Turk, with fluent answers coming out of a box. There is no person hidden inside them, but there is no rule table someone wrote either. The next slide shows where people still are.",
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/mech-turk-pencil.png",
+    "alt": "Colored-pencil illustration of the chess automaton, with a concealed operator visible inside its cabinet.",
+    "type": "split",
+    "time": "42–44 min",
+    "sources": [
+      "turk"
+    ],
+    "origin": "Proposed facilitation notes adapted from previous workshop draft",
+    "bullets": [
+      "1770: Kempelen’s chess “automaton”",
+      "Shown across Europe and America",
+      "A hidden chess master worked it",
+      "Destroyed by fire, 1854"
+    ]
+  },
+  {
+    "id": "human-work",
+    "title": "The Turk returns",
+    "body": "",
+    "notes": "Amazon named its marketplace for small paid tasks after the chess automaton, and called it “artificial artificial intelligence”. Requesters post tasks that are easy for people but hard for computers: label a photo, transcribe a sentence, rate an answer. Workers around the world complete them for small payments. Some of the best-known training datasets were built this way; the labels for the ImageNet photo collection were gathered on Amazon Mechanical Turk.\n\nThis is where the people went. A language model is trained on enormous numbers of examples written, labelled and judged by people. It learns, for each situation, how likely each next word is. Like the original Turk, the human work is easy to forget once it is hidden behind a machine.\n\nAsk whose judgment the labels capture, who decides what a good answer is, and how the workers are paid. Do not claim that any particular current AI company used Amazon Mechanical Turk.",
+    "time": "44–46 min",
+    "sources": [
+      "mturk"
+    ],
+    "origin": "Proposed facilitation notes written for the three-exercise structure",
+    "type": "split",
+    "bullets": [
+      "2005: Amazon opens “Mechanical Turk”",
+      "People are paid per task to label, rate and write",
+      "Their answers become training data",
+      "The people are hidden again, inside the data"
+    ],
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/hidden-workers.webp",
+    "alt": "Colored-pencil illustration of six people in homes around the world, each labelling photos on a laptop, with dotted lines running from them to a softly glowing, featureless machine in the centre."
+  },
+  {
+    "id": "hat-goal",
+    "title": "What to watch for",
+    "bullets": [
+      "Your table plays the people: everyone suggests the next word",
+      "The hat plays the model: it picks one suggestion by chance",
+      "One word at a time, the story grows",
+      "Watch: which words were likely? Why do two runs differ?"
+    ],
+    "body": "",
+    "notes": "Say what the exercise is for before anyone starts, so tables know what to notice. Every table is going to act out what a language model does when it answers. The people at the table supply possible next words, the way people’s writing and judgments supply a model’s training data. The hat chooses one of those words by chance, weighted by how many people suggested it, the way a model picks its next word from the likelihoods it learned. Then everyone looks at the story so far and suggests again.\n\nTwo things to watch: which words show up on many slips (the likely ones), and how a single chosen word changes everything that follows. Afterwards we will connect both to how real models are trained and how they respond.",
+    "time": "46–47 min",
+    "origin": "Proposed facilitation notes adapted from previous workshop draft"
+  },
+  {
+    "id": "hat",
+    "title": "A word from the hat",
+    "body": "<p class=\"small\">Your table will write one sentence together, one word at a time.</p>",
+    "notes": "Give tables a moment to gather materials and choose a reader. The reader keeps the response sheet, reads aloud and draws the slips; everyone, including the reader, writes a slip each turn. Anyone may dictate a slip or swap roles for accessibility. No phone, account or microphone is needed.\n\nThe next three slides carry the complete instructions. Leave each one up long enough for tables to start on their own, then walk the room rather than narrating from the front.",
+    "time": "47–48 min",
+    "origin": "Proposed facilitation notes written for the three-exercise structure",
+    "bullets": [
+      "Tables of 4 to 6 people",
+      "A hat or cup, small paper slips and pencils",
+      "One response sheet per table",
+      "Choose one reader"
+    ],
+    "image": "https://ollama.openbeagle.org/mechanical-turk/uv/assets/word-hat.png",
+    "alt": "Five teachers around a table; one reaches into an upturned hat full of folded slips while the others watch, with pencils and a response sheet nearby.",
+    "type": "split"
+  },
+  {
+    "id": "hat-prompt",
+    "title": "The prompt",
+    "body": "<p class=\"prompt-setup\">Tell a short story about a surprising discovery at school.</p><p class=\"prompt\">“At recess, we found a…”</p><p class=\"small\">Reader: write this at the top of the response sheet.</p>",
+    "notes": "Read the instruction first: tell a short story about a surprising discovery at school. That is what a person would type to a chatbot. Then the sentence starts for them, the way a model’s answer begins.\n\nEvery table uses this exact prompt. The words drawn from the hat continue the sentence, so the first slip finishes “we found a…”. Expect nouns on the first turn and more variety later.\n\nDo not suggest answers. Whatever people propose is the data.",
+    "time": "48–49 min",
+    "origin": "Proposed facilitation notes written for the three-exercise structure; setup line restored from Jason’s earlier wording (check-in 46eec5ed66), 2026-10-26"
+  },
+  {
+    "id": "fresh-votes",
+    "title": "Each turn",
+    "body": "<ol class=\"short\"><li>Reader reads the prompt and every word added so far.</li><li>Everyone writes <strong>one</strong> next word, or STOP, on a slip.</li><li>Fold the slips, put them in the hat and mix.</li><li>Reader draws one slip without looking.</li><li>Add that word to the sheet. STOP ends the sentence.</li><li>Empty the hat. Start the next turn.</li></ol><p class=\"small\">Finish at STOP, or after 8 words.</p>",
+    "notes": "Each turn starts from a fresh hat. Old slips never carry over, because the context has changed. Keep duplicate words as separate slips: if three people wrote “frog”, it has three chances. Punctuation may attach to a word.\n\nThe eight-word cap is a time limit, not something a model learns. Six minutes is an estimate for one run of up to eight turns. If tables are slow, let them stop at five or six words.",
+    "time": "49–53 min",
+    "origin": "Proposed facilitation notes written for the three-exercise structure"
+  },
+  {
+    "id": "hat-again",
+    "title": "Run it again",
+    "bullets": [
+      "New line, same prompt: “At recess, we found a…”",
+      "Same rules, fresh slips every turn",
+      "Don’t plan ahead or try to change the result",
+      "Compare your two sentences"
+    ],
+    "body": "",
+    "notes": "The point is that nothing about the rules changes between runs. Only the random draws differ, and each draw changes what people propose next. Two runs can still match; that is an honest result, not a failure. A third run is worthwhile if a table finishes early.\n\nAsk the reader to keep both sentences for the discussion.",
+    "time": "53–55 min",
+    "origin": "Proposed facilitation notes written for the three-exercise structure"
+  },
+  {
+    "id": "sampling",
+    "title": "Same prompt. Same process.",
+    "body": "<p class=\"small\">The slips in the hat were a probability distribution.</p>",
+    "notes": "Invite two tables to read their outputs. At a particular step count the candidate slips. If four of six slips said “frog”, its draw probability was four sixths in our setup. That is an empirical frequency of these people’s suggestions, not a measurement of a language model. A selected word changes the context, so the next set of proposals can change. STOP is a possible draw, not a majority vote.\n\nThis models sampling during generation. It does not train a neural network. People supply the candidate distribution from their own learning and judgment. A language model calculates a distribution over tokens using learned parameters and the input context; tokens may be parts of words. Generation can sample from that distribution. Some decoding choices are deterministic, so randomness is not the defining difference between a learned model and explicit program logic. Temperature is optional extra detail and is omitted here.",
+    "time": "55–57 min",
+    "origin": "Proposed facilitation notes adapted from previous workshop draft",
+    "bullets": [
+      "Which words appeared on more than one slip?",
+      "Did one drawn word change what you wrote next?",
+      "Why are your two sentences different?"
+    ]
+  },
+  {
+    "id": "learned",
+    "title": "Where do the probabilities come from?",
+    "body": "<p class=\"statement\">Training changes parameters.<br>Generation uses them.</p>",
+    "notes": "Name the two concepts. A probability distribution is the full list of possible next words with the chance of each. Our hat held one: if four of six slips said “frog”, frog had a four-in-six chance. Training is how a model comes to hold such distributions without a hat full of people. Examples supply a prediction task, and a learning procedure changes many numerical parameters to reduce its prediction error. In a neural language model those parameters turn the context into scores for possible next tokens. They are not a readable list of instructions written by an author for every situation. Learned associations can be useful and also reflect accidental regularities or gaps in the examples.\n\nCompare the card proof: we derived an exact destination from the stated rules. The hat made the influence of context and selection visible, but it did not expose how a neural network learns representations. A model can repeat an answer consistently without giving us a comparably simple justification that it is correct on a new input. Explicit programs can also be buggy, complex or undecidable to analyze in general. We choose mechanisms and verification methods appropriate to what we depend on.\n\nClose the loop with the Turk: the slips came from the people at your table; a real model’s likelihoods come from millions of people’s writing and judgments, gathered in ways such as Amazon Mechanical Turk. The people are still there, hidden in the data.",
+    "time": "57–59 min",
+    "origin": "Proposed facilitation notes adapted from previous workshop draft"
+  },
+  {
+    "id": "economics",
+    "title": "Who can build the tool?",
+    "body": "<p class=\"statement\">Data. Computation.<br>People. Infrastructure.</p><p class=\"small\">Using a model ≠ training its foundation</p>",
+    "notes": "Compare what the classroom just needed with producing a large pretrained model: gathered and prepared data, substantial computation, technical work, evaluation and continuing infrastructure. GPT-3’s paper describes a 175-billion-parameter model. That is a historical scale example, not a current price quote or a minimum size for useful machine learning. Training a small model, adapting an existing model and training a frontier-scale foundation model from scratch are very different undertakings. Individuals can do valuable work with smaller and openly available systems, while competing at the largest scale is highly unequal.\n\nRelate this to Chloe. Access to an impressive service is real opportunity, but it can carry conditions that the user cannot change. A downloadable result may not preserve the running system, the ability to edit it, or the right to take it elsewhere. Avoid claiming all subscriptions are bad or all open-source systems solve access. Ask which dependencies can be replaced, inspected, repaired or exited and which cannot. A crayon-making activity has no classroom-scale equivalent for reproducing an entire modern AI stack. That gap is part of the subject.",
+    "time": "59–62 min",
+    "sources": [
+      "gpt"
+    ],
+    "origin": "Proposed facilitation notes adapted from previous workshop draft"
+  },
+  {
+    "id": "ex2-recap",
+    "title": "Exercise 2 · What we saw",
+    "bullets": [
+      "People supplied every possible next word",
+      "Chance picked one, weighted by how many suggested it",
+      "A model learns those chances from millions of people’s words",
+      "The people are still there, hidden in the data"
+    ],
+    "body": "",
+    "notes": "Tell them what you told them, and connect it back to the Turk: the original hid a chess player in a cabinet; a language model hides millions of writers and judges in its training data. The answers can be fluent and useful, but the judgment came from people, and the rules are not a table anyone can read.",
+    "time": "62–63 min",
+    "origin": "Structure: tell them what you will tell them, tell them, tell them what you told them (Jason, 2026-10-21)"
+  },
+  {
+    "id": "demo",
+    "title": "Demonstration · “Interactor”",
+    "body": "<div class=\"demo-cols\"><div class=\"col\"><img src=\"https://ollama.openbeagle.org/mechanical-turk/uv/assets/beaglebadge.png\" alt=\"BeagleBadge on a lanyard: an ePaper screen showing a menu, with a joystick, two seven-segment digits and two buttons below it.\"><h3>BeagleBadge</h3><p class=\"small\">The game board: a $99 Linux computer you wear</p><ul><li>Runs the game and draws it on its ePaper screen</li><li>Sockets for plugging in other boards</li></ul></div><div class=\"col\"><img src=\"https://ollama.openbeagle.org/mechanical-turk/uv/assets/beagleconnect-zepto.jpg\" alt=\"A computer rendering of BeagleConnect Zepto: a one-inch black board with a chip, two buttons and two small white connectors.\"><h3>BeagleConnect Zepto</h3><p class=\"small\">The player: a computer for about $1</p><ul><li>Each student programs one</li><li>Plugged in, its code plays on its own</li></ul></div></div><p class=\"small demo-line\">Code is the controller: once the game starts, nobody touches it.</p>",
+    "notes": "The demonstration is BadgeSnake, the first piece of “The Interactor”: a kit for watching several students’ code interact in real time. It is based on Battlesnake, an online game where “code is the controller”: instead of steering a snake with a joystick, each player writes a program that chooses every move, then watches the snakes play each other.\n\nHere, each student’s program goes onto a BeagleConnect Zepto, the $1 computer. The Zeptos plug into a BeagleBadge, which runs the rules of the game and draws it on its ePaper screen. Nobody touches the game once it starts: everything that happens is what the students wrote beforehand.\n\nA second Zepto with a small screen sits on the same wires as a logger: it shows every message that passes between the badge and the snake. Nothing is hidden. That is the counter machine again: a computer following written rules exactly, where you can read every step. It is also the opposite of the Mechanical Turk: there is no person hidden in the cabinet.\n\nAsk afterwards: what would you have to understand to write a snake that wins? And how is that different from playing a video game?\n\nThe hardware: BeagleBadge has a TI AM62L processor (two Arm Cortex-A53 cores), a 4.2-inch ePaper screen, Wi-Fi and Bluetooth, light, motion, temperature and humidity sensors, and QWIIC, Grove and mikroBUS sockets. BeagleConnect Zepto has a TI MSPM0L1117 microcontroller (Arm Cortex-M0+ at 32 MHz, 128 kB of flash, 16 kB of RAM), mikroBUS holes for about 2,000 add-on boards and two QWIIC connectors; students can program it with MicroBlocks, MicroPython or Arduino.\n\nStatus (Interactor repository, 22 October 2026): the logger firmware builds and passes its host tests but has not yet run on hardware, and the Zepto’s role as a game player over I2C has not yet worked on hardware. Have a fallback ready, such as a video, if it is not working by the session.\n\nThe Zepto picture is a computer rendering; replace it with a photo of a real board when one is available.",
+    "time": "63–67 min",
+    "origin": "Demonstration from the Interactor repository’s BadgeSnake plan (badge-demo/README.md, docs/MechanicalTurkDemo.md); two-column layout per Jason, 2026-10-26",
+    "sources": [
+      "badge",
+      "zepto",
+      "interactor"
+    ]
+  },
+  {
+    "id": "today-recap",
+    "title": "Today, in one slide",
+    "bullets": [
+      "Chloe’s crayon drawings outlasted her animations; Bridget’s alebrije ran out of credits",
+      "Two rules and some crayons can compute anything",
+      "A language model’s words come from people, chosen by chance",
+      "BadgeSnake: students’ code plays the game, with nothing hidden",
+      "Ask of every activity: what can students understand and change?"
+    ],
+    "body": "",
+    "notes": "Tell them what you told them, for the whole hour. One line per part, in the order we did them. Then go straight into the closing discussion on the next slide.",
+    "time": "67–68 min",
+    "origin": "Structure: tell them what you will tell them, tell them, tell them what you told them (Jason, 2026-10-21)"
+  },
+  {
+    "id": "supercar",
+    "title": "Two feet in a supercar",
+    "bullets": [
+      "We sit children in a million-dollar sports car",
+      "They drive it two feet, and we call it a success",
+      "Using a technology is not understanding it"
+    ],
+    "body": "<p class=\"small review-marker\">For review: does this analogy belong in the deck, and if so, here or elsewhere?</p>",
+    "notes": "Placeholder for Jason’s analogy. Most lessons about technology for children are about using it, or about safety: which sites to avoid, what not to share. Safety matters, but it is a list of rules for driving, not an understanding of the machine. Today’s exercises opened the hood instead.\n\nFor review: should this analogy stay, and where does it fit best? Candidates: here, before the closing question; after “What is technology?”; or with the crayon bridge into Exercise 1.",
+    "time": "68–69 min",
+    "origin": "Placeholder for Jason’s supercar analogy, with a review marker (Jason, 2026-10-26)"
+  },
+  {
+    "id": "closing",
+    "title": "Amplifying agency after the activity",
+    "body": "<p class=\"statement\">What can your students<br>understand and change?</p>",
+    "notes": "Return to Bridget’s drawing and Chloe’s uncertainty. Give pairs two minutes: choose an activity they teach, name the mechanism children actually inspect, and name a dependency that remains beyond their control, including the networks their work travels over. Then invite two responses. Leave at least one minute for the last question or an unresolved concern.\n\nRe-state the central commitment: give students opportunities to read logic, predict behavior under stated conditions and make a machine carry out their intentions, even if AI helped produce the code. Successful exposure to a product does not by itself provide that understanding. The mechanisms we examined, an exact procedure and a probabilistic one, are small and comprehensible. The larger barriers include access, cost, ownership, complexity and intimidation, and an hour cannot remove them. Teachers can nevertheless become much more attentive to what opportunity an activity leaves with a child.\n\nThe phone tool and microphone-triggered image reveal remain optional future investigations. This deck contains no listener, recording, live model call or mandatory hardware demonstration.\n\nReturn to RJ’s saying and Jason’s opening stance: find the good in the ideas people bring, including the ideas their students see in others. Ask what opportunities the activity makes available, and what dependence remains. Avoid presenting this hour as a solution to systemic inequality.",
+    "time": "69–73 min",
+    "origin": "Proposed facilitation notes adapted from previous workshop draft"
+  },
+  {
+    "id": "questions",
+    "title": "Questions",
+    "body": "<p class=\"statement\">What would you like to understand, or change?</p>",
+    "notes": "Fifteen minutes for questions and discussion. Good ones to have ready if the room is quiet: which of today’s activities could you run next week, and what would you need? Where in your own teaching do students use a tool without seeing how it works? What would it take to open the hood on it?\n\nPoint people to the take-home materials: the counter machine cards and classroom programs (machine-cards.html), the homework that builds a whole processor from two instructions (homework.html), and the paper activities.",
+    "time": "73–88 min",
+    "origin": "Q&A time requested by Jason, 2026-10-22"
+  }
+]
