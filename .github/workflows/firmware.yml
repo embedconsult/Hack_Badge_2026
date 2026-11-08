@@ -1,0 +1,179 @@
+# Crystal badge firmware: host specs + ESP32-S3 build on an x86_64 runner.
+#
+# Toolchain (crystal/toolchain/README.md), built natively here, no chroot:
+#   - Crystal 1.19.1 + crystal/toolchain/crystal-1.19.1-xtensa.patch,
+#     linked against Espressif's x86_64 libLLVM-22
+#   - Espressif LLVM esp-22.1.4_20260825 (llc for the CRYSTAL_SPLIT step)
+#   - ESP-IDF v5.4.2 (esp32s3 tools)
+# Each piece is cached (actions/cache) on its version, the compiler also on
+# the patch's hash, so a warm build only compiles the firmware.
+#
+# Outputs (workflow artifact badge-firmware-<build>): crystal_blink.bin (the
+# app image, flash at 0x20000), merged-binary.bin (whole flash from 0x0) and
+# badge-version.txt ("<git describe> <build>", build = git rev-list --count HEAD).
+# This workflow never publishes a release; see badge-release.yml.
+name: firmware
+
+on:
+  push:
+    branches: [crystal]
+  pull_request:
+    branches: [crystal]
+  workflow_dispatch:
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CRYSTAL_VERSION: "1.19.1"
+  ESP_LLVM: esp-22.1.4_20260825
+  IDF_VERSION: v5.4.2
+
+jobs:
+  specs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - name: Cache crystal-robots oracle
+        uses: actions/cache@v4
+        with:
+          path: crystal/firmware/test/robots/upstream
+          key: crystal-robots-${{ hashFiles('crystal/firmware/test/robots/upstream.sh') }}
+      - name: Fetch crystal-robots oracle (robots specs)
+        run: crystal/firmware/test/robots/upstream.sh
+      - name: Host specs
+        working-directory: crystal
+        run: crystal spec spec firmware/test/*_spec.cr
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # the build number is git rev-list --count HEAD
+
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libgc-dev libpcre2-dev libevent-dev libffi-dev \
+            libyaml-dev cmake ninja-build python3-venv
+
+      # --- Espressif LLVM ----------------------------------------------------
+      - name: Cache Espressif LLVM
+        id: llvm
+        uses: actions/cache@v4
+        with:
+          path: ~/esp-clang
+          key: esp-clang-${{ env.ESP_LLVM }}-x86_64-linux-gnu
+      - name: Fetch Espressif LLVM
+        if: steps.llvm.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          d=$(mktemp -d)
+          gh release download "$ESP_LLVM" -R espressif/llvm-project -D "$d" \
+            -p "clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz" \
+            -p "libs-clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz"
+          mkdir -p "$d/clang" "$d/libs"
+          tar -xJf "$d/clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz" -C "$d/clang"
+          tar -xJf "$d/libs-clang-$ESP_LLVM-x86_64-linux-gnu.tar.xz" -C "$d/libs"
+          mv "$d/clang/esp-clang" ~/esp-clang
+          # libLLVM*.so come from the libs package (as in toolchain/README.md)
+          find "$d/libs" -name 'libLLVM*' -exec cp -a {} ~/esp-clang/lib/ \;
+          ls ~/esp-clang/lib
+          ~/esp-clang/bin/llc --version | head -20
+          rm -rf "$d"
+
+      # --- Patched Crystal compiler -------------------------------------------
+      - name: Cache Crystal-Xtensa compiler
+        id: crystal
+        uses: actions/cache@v4
+        with:
+          path: ~/crystal-xtensa
+          key: crystal-xtensa-${{ env.CRYSTAL_VERSION }}-${{ env.ESP_LLVM }}-${{ hashFiles('crystal/toolchain/crystal-1.19.1-xtensa.patch') }}-${{ runner.os }}-${{ env.ImageOS }}
+      - uses: crystal-lang/install-crystal@v1
+        if: steps.crystal.outputs.cache-hit != 'true'
+        with:
+          crystal: ${{ env.CRYSTAL_VERSION }}
+      - name: Build Crystal-Xtensa compiler
+        if: steps.crystal.outputs.cache-hit != 'true'
+        run: |
+          d=$(mktemp -d)
+          git clone -q --depth 1 -b "$CRYSTAL_VERSION" https://github.com/crystal-lang/crystal.git "$d/crystal"
+          cd "$d/crystal"
+          git -c user.name=ci -c user.email=ci@localhost am -q "$GITHUB_WORKSPACE/crystal/toolchain/crystal-1.19.1-xtensa.patch"
+          # Espressif ships only the shared libLLVM, so llvm-config can't list
+          # libs: pass the link flags directly (toolchain/README.md).
+          env LLVM_TARGETS="Xtensa RISCV" \
+              LLVM_LDFLAGS="-L$HOME/esp-clang/lib -lLLVM-22 -Wl,-rpath,$HOME/esp-clang/lib" \
+            make crystal LLVM_CONFIG="$HOME/esp-clang/bin/llvm-config" O="$PWD/.build"
+          mkdir -p ~/crystal-xtensa/bin ~/crystal-xtensa/lib
+          cp .build/crystal ~/crystal-xtensa/bin/crystal
+          cp -a src ~/crystal-xtensa/src
+          rm -rf "$d"
+      - name: Check Crystal-Xtensa compiler
+        run: |
+          CRYSTAL_PATH=~/crystal-xtensa/src ~/crystal-xtensa/bin/crystal --version
+          CRYSTAL_PATH=~/crystal-xtensa/src ~/crystal-xtensa/bin/crystal env
+
+      # --- ESP-IDF ---------------------------------------------------------------
+      - name: Cache ESP-IDF
+        id: idf
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/esp/esp-idf
+            ~/.espressif
+          key: esp-idf-${{ env.IDF_VERSION }}-esp32s3-${{ runner.os }}-${{ env.ImageOS }}
+      - name: Install ESP-IDF
+        if: steps.idf.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/esp
+          git clone -q --depth 1 -b "$IDF_VERSION" --recursive --shallow-submodules \
+            https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+          ~/esp/esp-idf/install.sh esp32s3
+
+      # --- Firmware ----------------------------------------------------------------
+      - name: Build firmware
+        run: |
+          export ROOTFS=/ IDF_PATH=~/esp/esp-idf
+          export CRYSTAL_XTENSA=~/crystal-xtensa/bin/crystal CRYSTAL_LLC_BIN=~/esp-clang/bin/llc
+          crystal/firmware/build.sh
+          echo "BUILD_NUM=$(awk '{print $2}' crystal/firmware/build/badge-version.txt)" >> "$GITHUB_ENV"
+      - name: Check outputs
+        run: |
+          cd crystal/firmware/build
+          ls -l crystal_blink.bin merged-binary.bin badge-version.txt
+          # ESP app image magic, and it must fit an OTA slot (partitions.csv: 3 MiB)
+          [ "$(head -c1 crystal_blink.bin | od -An -tx1 | tr -d ' ')" = e9 ]
+          [ "$(wc -c < crystal_blink.bin)" -le $((0x300000)) ]
+          sha256sum crystal_blink.bin merged-binary.bin | tee SHA256SUMS
+          {
+            echo "### Badge firmware build $BUILD_NUM"
+            echo "app image: $(wc -c < crystal_blink.bin) bytes (flash at 0x20000)"
+            echo '```'; cat SHA256SUMS; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: badge-firmware-${{ env.BUILD_NUM }}
+          path: |
+            crystal/firmware/build/crystal_blink.bin
+            crystal/firmware/build/merged-binary.bin
+            crystal/firmware/build/badge-version.txt
+            crystal/firmware/build/SHA256SUMS
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: badge-firmware-${{ env.BUILD_NUM }}-debug
+          path: |
+            crystal/firmware/build/crystal_blink.elf
+            crystal/firmware/build/crystal_blink.map
+            crystal/firmware/build/flash_args

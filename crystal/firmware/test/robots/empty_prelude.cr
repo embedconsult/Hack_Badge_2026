@@ -9,6 +9,9 @@
 # (test/robonet/ and crystal/net/sim_badge.py use it as the battle engine)
 require "../../src/rt"
 
+# battle.cr calls atan, sin, cos, tan and sqrt (LibRM). glibc keeps them in
+# libm, which nothing else links under --prelude=empty (musl has them in libc).
+@[Link("m")]
 lib LibC
   fun calloc(n : UInt64, size : UInt64) : Void*
   fun fopen(path : UInt8*, mode : UInt8*) : Void*

@@ -11,6 +11,7 @@ lib LibIDF
   fun cr_heap_free(caps : UInt32) : Int32
   fun esp_restart : Void
   fun cr_time_set(y : Int32, mo : Int32, d : Int32, h : Int32, mi : Int32) : Void
+  fun cr_idf_verbose(on : Bool) : Void # main/main.c
 end
 
 module Shell
@@ -108,13 +109,14 @@ module Shell
     banner
     say("version status reboot mode press hold knob text\n")
     say("net wifi ota sketch stroke dump upd flag clean\n")
-    say("clock usbflash inkf weather snakes robot\n")
+    say("clock usbflash inkf weather snakes robot debug\n")
     say("help all: details\n")
   end
 
   def self.help : Nil
     say("commands:\n")
     say("  help | version | status | reboot\n")
+    say("  debug [knob|frame|idf|all] <on|off>   (chatty logs, off at boot)\n")
     say("  mode <home|nametag|portrait|sketch|...|any app name>\n")
     say("  weather [<lat> <lon> [c|f] [name]] | weather place <city> | weather units <c|f>\n")
     say("  snakes list | snakes add <name> <url> | snakes rm <name|#> | snakes play   (bot arena)\n")
@@ -298,7 +300,33 @@ module Shell
     say("ok\n")
   end
 
-  def self.execute : Nil
+# `debug [knob|frame|idf|all] <on|off>`: the chatty logs (src/dbg.cr),
+# off at every boot. No category = all. Prints what is on.
+def self.debug : Nil
+  if @@nt >= 2
+    last = @@nt &- 1
+    on = tok_is(last, "on")
+    unless on || tok_is(last, "off")
+      say("usage: debug [knob|frame|idf|all] <on|off>\n")
+      return
+    end
+    cat = last == 1 ? Dbg::ALL : Dbg.category(tok_ptr(1), tok_len(1))
+    if cat == 0 || @@nt > 3
+      say("usage: debug [knob|frame|idf|all] <on|off>\n")
+      return
+    end
+    Dbg.set(cat, on)
+    LibIDF.cr_idf_verbose(Dbg.on?(Dbg::IDF))
+  end
+  say("debug: knob ")
+  say(Dbg.on?(Dbg::KNOB) ? "on" : "off")
+  say(", frame ")
+  say(Dbg.on?(Dbg::FRAME) ? "on" : "off")
+  say(", idf ")
+  say(Dbg.on?(Dbg::IDF) ? "on\n" : "off\n")
+end
+
+def self.execute : Nil
     if RobotShell.capturing? # `robot put`: lines are robot source
       RobotShell.line(@@line, @@len)
       return
@@ -311,6 +339,8 @@ module Shell
       banner
     elsif tok_is(0, "status")
       status
+    elsif tok_is(0, "debug")
+      debug
     elsif tok_is(0, "reboot")
       say("rebooting\n")
       LibIDF.esp_restart

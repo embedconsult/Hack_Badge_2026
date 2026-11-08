@@ -7,6 +7,7 @@
 #   logging the time each phase takes (src/epd.cr).
 
 require "./rt"
+require "./dbg"
 
 lib LibIDF
   # driver/gpio.h (gpio_num_t / gpio_mode_t are C enums -> int)
@@ -161,6 +162,25 @@ module Shared
     @@mv_r = r
     @@held = held
     LibIDF.cr_atomic_or(pointerof(@@latched), held)
+  end
+
+  # Press counts (Games.count_presses): written only by the knob task, one
+  # word, so the main task never misses a press it was too busy to see.
+  @@presses = 0_u32
+  @@presses_seen = 0_u32 # main task: presses already delivered
+
+  def self.count_presses(held : UInt32, prev_held : UInt32) : Nil
+    @@presses = Games.count_presses(@@presses, held, prev_held)
+  end
+
+  # Main task: buttons with a press not yet delivered (one each per call).
+  def self.next_presses : UInt32
+    Games.next_presses(@@presses, pointerof(@@presses_seen))
+  end
+
+  # Main task: forget the presses not yet delivered.
+  def self.drop_presses : Nil
+    @@presses_seen = @@presses
   end
 
   # Buttons held now or at any poll since the last call (atomic swap, so a
@@ -565,6 +585,7 @@ fun crystal_knob_task(arg : Void*) : Void
       end
       menu_both = false
     end
+    Shared.count_presses(btns, prev_btns) # before the wake-up below
     prev_btns = btns
 
     # ONE LED rule for the whole badge: only the bar LED at the current /
@@ -657,11 +678,11 @@ fun crystal_knob_task(arg : Void*) : Void
       on = !on
       LibIDF.gpio_set_level(STATUS_LED, on ? 0_u32 : 1_u32) # active low
     end
-    if now &- last_stack >= 10_000
+    if now &- last_stack >= 10_000 && Dbg.on?(Dbg::KNOB) # shell `debug knob on`
       last_stack = now
       log2("stack: free bytes knob / main", LibIDF.cr_stack_free(false).to_i32!, LibIDF.cr_stack_free(true).to_i32!)
     end
-    if now &- last_log >= 1000
+    if now &- last_log >= 1000 && Dbg.on?(Dbg::KNOB)
       last_log = now
       log2("knob: left GPIO2 raw / mV", raw_l, mv_l)
       log2("knob: right GPIO7 raw / mV", raw_r, mv_r)
@@ -2645,6 +2666,7 @@ fun crystal_app_main : Void
   while true
     Ota.ui(scr) if Ota.ui_now? # OTA (shell, DIAG, or an automatic one installing): no other e-paper work meanwhile
     held = Shared.take_buttons
+    presses = Shared.next_presses # every press, even one made during a refresh
     now = millis
     raw_held = held
     # User A, the same on every screen: a TAP is delivered on release (so a
@@ -2732,6 +2754,13 @@ fun crystal_app_main : Void
     # Menu: the knob task switches apps, unless this app owns the buttons
     held = held & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) unless Apps.owns_menu?(scr)
     inp = Games.input(Shared.mv_l, Shared.mv_r, held, prev)
+    # Presses come from the knob task's counts, not from held vs prev (which
+    # loses a press made while a refresh started by the last one runs). A,
+    # and B in Sketch, stay taps on release (above).
+    taps = scr == SCR_SKETCH ? (Games::BTN_A | Games::BTN_B) : Games::BTN_A
+    presses = presses & (taps ^ 0xFFFFFFFF_u32)
+    presses = presses & ((Games::BTN_PLUS | Games::BTN_MINUS) ^ 0xFFFFFFFF_u32) unless Apps.owns_menu?(scr)
+    inp.pressed = (inp.pressed & taps) | presses
     prev = held
     dl = Shared.mv_l &- pl
     dr = Shared.mv_r &- pr
@@ -2844,7 +2873,7 @@ fun crystal_app_main : Void
           SkState.pen_seen(Sketch.x, Sketch.y)
           last_total = millis &- t
           SkState.last_lat = millis &- last_input
-          log3("sketch: ink upload / panel / latency ms", EPD.upload_ms, EPD.panel_ms, SkState.last_lat)
+          log3("sketch: ink upload / panel / latency ms", EPD.upload_ms, EPD.panel_ms, SkState.last_lat) if Dbg.on?(Dbg::FRAME)
         end
       else
         # Live ink: only where the pen moved since the planes were last
@@ -2927,7 +2956,7 @@ fun crystal_app_main : Void
           end
           last_total = millis &- t
           SkState.last_lat = millis &- last_input
-          log2(retrace ? "sketch: retrace rows / latency ms" : "sketch: ink rows / latency ms", b[1] &- b[0] &+ 1, SkState.last_lat)
+          log2(retrace ? "sketch: retrace rows / latency ms" : "sketch: ink rows / latency ms", b[1] &- b[0] &+ 1, SkState.last_lat) if Dbg.on?(Dbg::FRAME)
         end
       end
     elsif Menu.tick(now, inp)
@@ -2973,12 +3002,12 @@ fun crystal_app_main : Void
               EPD.refresh(true, WIN_LUT)
               EPD.raw = false
             end
-            log2("game: changed rows / panel ms", b[1] &- b[0] &+ 1, EPD.panel_ms)
+            log2("game: changed rows / panel ms", b[1] &- b[0] &+ 1, EPD.panel_ms) if Dbg.on?(Dbg::FRAME)
           end
         end
       end
       last_total = millis &- t
-      log2("main: screen / frame ms", scr, last_total)
+      log2("main: screen / frame ms", scr, last_total) if Dbg.on?(Dbg::FRAME)
     end
     if scr == SCR_SKETCH
       Shared.led_mode = Sketch.dirty? ? LED_YELLOW : LED_GREEN

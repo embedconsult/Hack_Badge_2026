@@ -1183,7 +1183,7 @@ module EPD
     cmd1(0x09_u8, 0xFF_u8)
     delay_ms(101)
     r = wait_busy(true, 10_000) # main.c:238 never trigger into a ramping booster
-    log("EPD: diff dc-dc on, BUSY wait ms (-1 = timeout)", r)
+    log("EPD: diff dc-dc on, BUSY wait ms (-1 = timeout)", r) if r < 0 || Dbg.on?(Dbg::FRAME)
   end
 
   # main.c:352-403 part_open: reset, register sequence, table, DC-DC, whole-
@@ -1265,7 +1265,7 @@ module EPD
     @@diff_open = true
     @@diff_n = 0
     @@restart_ms = millis &- t0
-    log("EPD: diff session open ms", @@restart_ms)
+    log("EPD: diff session open ms", @@restart_ms) if Dbg.on?(Dbg::FRAME)
     true
   end
 
@@ -1408,7 +1408,7 @@ module EPD
     end
     @@diff_n = @@diff_n &+ 1
     @@session_images = @@session_images &+ 1
-    log3("EPD: diff rows scanned / upload ms / panel ms", @@diff_rows, @@upload_ms, rc)
+    log3("EPD: diff rows scanned / upload ms / panel ms", @@diff_rows, @@upload_ms, rc) if Dbg.on?(Dbg::FRAME)
     rc
   end
 
@@ -2072,7 +2072,7 @@ module EPD
       pulls = pulls &+ 1
     end
     @@panel_ms = rc
-    log3("EPD: window y0 / rows (both COGs) / panel ms", a0, rows_total, rc)
+    log3("EPD: window y0 / rows (both COGs) / panel ms", a0, rows_total, rc) if Dbg.on?(Dbg::FRAME)
     if rc < 0 || @@spi_fail
       log("EPD: window refresh failed, COG powered down", rc)
       cog_stop # also clears session_open / lut_latched
@@ -2437,15 +2437,17 @@ module EPD
     end
     t_end = millis
 
-    log2("EPD: refresh fast? / first-of-session?", fast ? 1 : 0, first ? 1 : 0)
-    log2("EPD:   lut kind / pulls", @@lut_kind, pulls)
-    log("EPD:   power-up + reset ms", t_up &- t_init)
-    log("EPD:   upload ms", t_up_end &- t_up)
-    log("EPD:   registers+soft start+waveform (pull 1) ms", t_ref_end &- t_up_end)
-    log2("EPD:   panel busy ms / pulls", rc, pulls)
-    log("EPD:   upload start -> BUSY released ms", t_busy_end &- t_up)
-    log("EPD:   cog_stop ms (0 = session kept)", t_end &- t_busy_end)
-    log("EPD:   total ms", t_end &- t_start)
+    if Dbg.on?(Dbg::FRAME) # shell `debug frame on`
+      log2("EPD: refresh fast? / first-of-session?", fast ? 1 : 0, first ? 1 : 0)
+      log2("EPD:   lut kind / pulls", @@lut_kind, pulls)
+      log("EPD:   power-up + reset ms", t_up &- t_init)
+      log("EPD:   upload ms", t_up_end &- t_up)
+      log("EPD:   registers+soft start+waveform (pull 1) ms", t_ref_end &- t_up_end)
+      log2("EPD:   panel busy ms / pulls", rc, pulls)
+      log("EPD:   upload start -> BUSY released ms", t_busy_end &- t_up)
+      log("EPD:   cog_stop ms (0 = session kept)", t_end &- t_busy_end)
+      log("EPD:   total ms", t_end &- t_start)
+    end
     rc >= 0
   end
 end
