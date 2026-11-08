@@ -58,6 +58,13 @@ extern const uint8_t sched_csv_end[] asm("_binary_schedule_csv_end");
 const uint8_t *cr_schedule_csv(void) { return sched_csv_start; }
 int32_t cr_schedule_csv_size(void) { return (int32_t)(sched_csv_end - sched_csv_start); }
 
+// ---- Slides app (src/apps/slides.cr) ------------------------------------------
+// main/slides.bin, embedded (EMBED_FILES): the packed deck from slides/convert.cr.
+extern const uint8_t slides_bin_start[] asm("_binary_slides_bin_start");
+extern const uint8_t slides_bin_end[] asm("_binary_slides_bin_end");
+const uint8_t *cr_slides_bin(void) { return slides_bin_start; }
+int32_t cr_slides_bin_size(void) { return (int32_t)(slides_bin_end - slides_bin_start); }
+
 bool cr_wifi_connected(void); // main/ota.c
 
 // Local time at Supercon (Pasadena). Starts SNTP once Wi-Fi is up (network
