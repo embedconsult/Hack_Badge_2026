@@ -516,6 +516,11 @@ fun crystal_knob_task(arg : Void*) : Void
   bar_ch = Pointer(Void).null
   bar_enc = Pointer(Void).null
   bar_ok = Pixel.open(BAR_GPIO, pointerof(bar_ch), pointerof(bar_enc))
+  # Every RMT channel shares one interrupt, which is wired to the core that
+  # opened the channel. Open the knob pixel here too, on core 1 with the bar:
+  # opened on core 0, a bar interrupt left core 0 re-entering its ISR during
+  # an OTA flash erase while core 1 (masked) could not clear it: IWDT panic.
+  led_test
   bar_buf = EPD.dma_alloc(24)
   bar_cols = EPD.dma_alloc(32).as(UInt32*)
   bar_scr = -1
@@ -2622,7 +2627,6 @@ def enter_screen(scr : Int32, boot : Bool) : Nil
 end
 
 fun crystal_app_main : Void
-  led_test
   Store.open
   log("main: EPD, SPI Hz", SPI_HZ)
   t = millis
